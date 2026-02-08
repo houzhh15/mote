@@ -1,5 +1,4 @@
 package e2e
-package e2e
 
 import (
 	"net/http"
@@ -7,39 +6,38 @@ import (
 	"time"
 )
 
+// TestEnv holds the test environment configuration.
+type TestEnv struct {
+	BaseURL string
+	Client  *http.Client
+}
 
+var testEnv *TestEnv
 
+// GetTestEnv returns the current test environment.
+func GetTestEnv() *TestEnv {
+	if testEnv == nil {
+		baseURL := os.Getenv("MOTE_TEST_URL")
+		if baseURL == "" {
+			baseURL = "http://localhost:18788"
+		}
 
+		testEnv = &TestEnv{
+			BaseURL: baseURL,
+			Client: &http.Client{
+				Timeout: 10 * time.Second,
+			},
+		}
+	}
+	return testEnv
+}
 
+// SetTestEnv sets the test environment for testing.
+func SetTestEnv(env *TestEnv) {
+	testEnv = env
+}
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-}	testEnv = nilfunc ResetTestEnv() {// ResetTestEnv resets the test environment.}	testEnv = envfunc SetTestEnv(env *TestEnv) {// SetTestEnv sets the test environment for testing.}	return testEnv	}		}			},				Timeout: 10 * time.Second,			Client: &http.Client{			BaseURL: baseURL,		testEnv = &TestEnv{		}			baseURL = "http://localhost:18788"		if baseURL == "" {		baseURL := os.Getenv("MOTE_TEST_URL")	if testEnv == nil {func GetTestEnv() *TestEnv {// GetTestEnv returns the current test environment.var testEnv *TestEnv}	Client  *http.Client	BaseURL stringtype TestEnv struct {// TestEnv holds the test environment configuration.
+// ResetTestEnv resets the test environment.
+func ResetTestEnv() {
+	testEnv = nil
+}

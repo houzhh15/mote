@@ -17,6 +17,7 @@ DIST_DIR := dist
 
 .PHONY: all build build-full clean test lint fmt tidy
 .PHONY: build-ui build-cli dev help
+.PHONY: build-gui build-all package-darwin package-windows gui-dev
 
 # =============================================================================
 # 默认目标
@@ -46,6 +47,13 @@ help:
 # =============================================================================
 # 第一层: CLI + Embed UI
 # =============================================================================
+
+# Alias targets for compatibility
+build-gui: build-gui-frontend
+build-all: build-full
+package-darwin: release-macos
+package-windows: release-windows
+gui-dev: dev
 
 # 构建 UI 组件库和 Web 前端 (输出到 internal/ui/ui/)
 build-ui:

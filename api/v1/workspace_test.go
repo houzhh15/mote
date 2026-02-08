@@ -15,7 +15,10 @@ import (
 func TestHandleListWorkspaces(t *testing.T) {
 	wm := workspace.NewWorkspaceManager()
 	tmpDir := t.TempDir()
-	wm.Bind("session-1", tmpDir, false)
+	err := wm.Bind("session-1", tmpDir, false)
+	if err != nil {
+		t.Fatalf("Failed to bind workspace: %v", err)
+	}
 
 	router := &Router{workspaceManager: wm}
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces", nil)

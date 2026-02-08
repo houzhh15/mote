@@ -9,7 +9,7 @@ import (
 // SetDefaults 设置所有配置项的默认值
 func SetDefaults() {
 	// Gateway 配置
-	viper.SetDefault("gateway.port", 18788)
+	viper.SetDefault("gateway.port", 8080)
 	viper.SetDefault("gateway.host", "127.0.0.1")
 
 	// Log 配置
