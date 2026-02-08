@@ -136,7 +136,7 @@ func TestRouter_HandleGetConfig(t *testing.T) {
 	}
 
 	var config ConfigResponse
-	if err := _ = json.NewDecoder(rr.Body).Decode(&config); err != nil {
+	if err := json.NewDecoder(rr.Body).Decode(&config); err != nil {
 		t.Fatalf("Failed to decode response: %v", err)
 	}
 
@@ -192,7 +192,7 @@ func TestRouter_HandleUIComponents_NoHandler(t *testing.T) {
 	}
 
 	var resp UIComponentsResponse
-	if err := _ = json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
 		t.Fatalf("Failed to decode response: %v", err)
 	}
 

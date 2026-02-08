@@ -86,7 +86,7 @@ func TestAPIClient_CallAPI_WithBody(t *testing.T) {
 		}
 
 		var body map[string]string
-		if err := _ = json.NewDecoder(r.Body).Decode(&body); err != nil {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Fatalf("json.Decode() error = %v", err)
 		}
 		if body["message"] != "hello" {

@@ -25,7 +25,7 @@ func TestOllamaProvider_Chat(t *testing.T) {
 		assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
 
 		var req ollamaRequest
-		err := _ = json.NewDecoder(r.Body).Decode(&req)
+		err := json.NewDecoder(r.Body).Decode(&req)
 		require.NoError(t, err)
 		assert.Equal(t, "test-model", req.Model)
 		assert.False(t, req.Stream)

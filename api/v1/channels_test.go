@@ -27,7 +27,7 @@ func TestHandleListChannels_ReturnsAllSupportedChannels(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rr.Code)
 
 	var statuses []ChannelStatus
-	err := _ = json.NewDecoder(rr.Body).Decode(&statuses)
+	err := json.NewDecoder(rr.Body).Decode(&statuses)
 	require.NoError(t, err)
 
 	// 应该返回所有支持的渠道（即使未启用）
@@ -73,7 +73,7 @@ func TestHandleGetChannelConfig_IMessage(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rr.Code)
 
 	var config IMessageChannelConfigResponse
-	err := _ = json.NewDecoder(rr.Body).Decode(&config)
+	err := json.NewDecoder(rr.Body).Decode(&config)
 	require.NoError(t, err)
 
 	assert.True(t, config.Enabled)
@@ -102,7 +102,7 @@ func TestHandleGetChannelConfig_DefaultValues(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rr.Code)
 
 	var config IMessageChannelConfigResponse
-	err := _ = json.NewDecoder(rr.Body).Decode(&config)
+	err := json.NewDecoder(rr.Body).Decode(&config)
 	require.NoError(t, err)
 
 	// 检查默认值
