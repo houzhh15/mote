@@ -607,7 +607,7 @@ func (m *MemoryIndex) GetByID(ctx context.Context, id string) (*MemoryEntry, err
 		entry.SessionID = sessionID.String
 	}
 	if metadataJSON.Valid {
-		json.Unmarshal([]byte(metadataJSON.String), &entry.Metadata)
+		_ = json.Unmarshal([]byte(metadataJSON.String), &entry.Metadata)
 	}
 	if len(embeddingBlob) > 0 {
 		entry.Embedding = decodeEmbedding(embeddingBlob)

@@ -88,8 +88,8 @@ func registerContext(vm *goja.Runtime, mote *goja.Object, hctx *Context) error {
 	}
 
 	// Set execution info
-	ctxObj.Set("script_name", hctx.ScriptName)
-	ctxObj.Set("execution_id", hctx.ExecutionID)
+	_ = ctxObj.Set("script_name", hctx.ScriptName)
+	_ = ctxObj.Set("execution_id", hctx.ExecutionID)
 
 	_ = mote.Set("context", ctxObj)
 	return nil
