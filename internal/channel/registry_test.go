@@ -71,7 +71,7 @@ func TestRegistry_Register(t *testing.T) {
 	r := NewRegistry()
 	p := newMockPlugin(channel.ChannelTypeIMessage, "iMessage")
 
-	_ = r.Register(p)
+	r.Register(p)
 
 	if r.Count() != 1 {
 		t.Errorf("Count() = %d, want 1", r.Count())
@@ -81,7 +81,7 @@ func TestRegistry_Register(t *testing.T) {
 func TestRegistry_Get(t *testing.T) {
 	r := NewRegistry()
 	p := newMockPlugin(channel.ChannelTypeIMessage, "iMessage")
-	_ = r.Register(p)
+	r.Register(p)
 
 	got, ok := r.Get(channel.ChannelTypeIMessage)
 	if !ok {
@@ -102,8 +102,8 @@ func TestRegistry_All(t *testing.T) {
 	p1 := newMockPlugin(channel.ChannelTypeIMessage, "iMessage")
 	p2 := newMockPlugin(channel.ChannelTypeNotes, "Notes")
 
-	_ = r.Register(p1)
-	_ = r.Register(p2)
+	r.Register(p1)
+	r.Register(p2)
 
 	all := r.All()
 	if len(all) != 2 {
@@ -116,8 +116,8 @@ func TestRegistry_StartAll(t *testing.T) {
 		r := NewRegistry()
 		p1 := newMockPlugin(channel.ChannelTypeIMessage, "iMessage")
 		p2 := newMockPlugin(channel.ChannelTypeNotes, "Notes")
-	_ = r.Register(p1)
-	_ = r.Register(p2)
+	r.Register(p1)
+	r.Register(p2)
 
 		err := r.StartAll(context.Background())
 		if err != nil {
@@ -132,7 +132,7 @@ func TestRegistry_StartAll(t *testing.T) {
 		r := NewRegistry()
 		p := newMockPlugin(channel.ChannelTypeIMessage, "iMessage")
 		p.startErr = errors.New("start failed")
-	_ = r.Register(p)
+	r.Register(p)
 
 		err := r.StartAll(context.Background())
 		if err == nil {
@@ -146,8 +146,8 @@ func TestRegistry_StopAll(t *testing.T) {
 		r := NewRegistry()
 		p1 := newMockPlugin(channel.ChannelTypeIMessage, "iMessage")
 		p2 := newMockPlugin(channel.ChannelTypeNotes, "Notes")
-	_ = r.Register(p1)
-	_ = r.Register(p2)
+	r.Register(p1)
+	r.Register(p2)
 
 		err := r.StopAll(context.Background())
 		if err != nil {
@@ -163,8 +163,8 @@ func TestRegistry_StopAll(t *testing.T) {
 		p1 := newMockPlugin(channel.ChannelTypeIMessage, "iMessage")
 		p1.stopErr = errors.New("stop failed")
 		p2 := newMockPlugin(channel.ChannelTypeNotes, "Notes")
-	_ = r.Register(p1)
-	_ = r.Register(p2)
+	r.Register(p1)
+	r.Register(p2)
 
 		err := r.StopAll(context.Background())
 		if err == nil {

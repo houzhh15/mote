@@ -13,7 +13,7 @@ import (
 func TestRouter_HandleChat_NoRunner(t *testing.T) {
 	router := NewRouter(nil)
 	m := mux.NewRouter()
-	_ = router.RegisterRoutes(m)
+	router.RegisterRoutes(m)
 
 	body := ChatRequest{
 		Message: "Hello",
@@ -34,7 +34,7 @@ func TestRouter_HandleChat_NoRunner(t *testing.T) {
 func TestRouter_HandleChat_EmptyMessage(t *testing.T) {
 	router := NewRouter(nil)
 	m := mux.NewRouter()
-	_ = router.RegisterRoutes(m)
+	router.RegisterRoutes(m)
 
 	body := ChatRequest{
 		Message: "",
@@ -55,7 +55,7 @@ func TestRouter_HandleChat_EmptyMessage(t *testing.T) {
 func TestRouter_HandleChat_InvalidJSON(t *testing.T) {
 	router := NewRouter(nil)
 	m := mux.NewRouter()
-	_ = router.RegisterRoutes(m)
+	router.RegisterRoutes(m)
 
 	req := httptest.NewRequest("POST", "/api/v1/chat", bytes.NewReader([]byte("invalid json")))
 	req.Header.Set("Content-Type", "application/json")
@@ -71,7 +71,7 @@ func TestRouter_HandleChat_InvalidJSON(t *testing.T) {
 func TestRouter_HandleChatStream_NoRunner(t *testing.T) {
 	router := NewRouter(nil)
 	m := mux.NewRouter()
-	_ = router.RegisterRoutes(m)
+	router.RegisterRoutes(m)
 
 	body := ChatRequest{
 		Message: "Hello",
@@ -92,7 +92,7 @@ func TestRouter_HandleChatStream_NoRunner(t *testing.T) {
 func TestRouter_HandleChatStream_EmptyMessage(t *testing.T) {
 	router := NewRouter(nil)
 	m := mux.NewRouter()
-	_ = router.RegisterRoutes(m)
+	router.RegisterRoutes(m)
 
 	body := ChatRequest{
 		SessionID: "test-session",

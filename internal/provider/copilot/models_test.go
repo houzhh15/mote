@@ -27,11 +27,11 @@ func TestGetModelInfo(t *testing.T) {
 			wantFree: false,
 		},
 		{
-			name:     "gemini-2.0-flash",
-			modelID:  "gemini-2.0-flash",
+			name:     "gemini-2.5-pro",
+			modelID:  "gemini-2.5-pro",
 			wantNil:  false,
-			wantID:   "gemini-2.0-flash",
-			wantFree: true,
+			wantID:   "gemini-2.5-pro",
+			wantFree: false, // gemini-2.5-pro is premium 1x
 		},
 		{
 			name:    "unknown model",
@@ -89,7 +89,7 @@ func TestListModels(t *testing.T) {
 	}
 
 	// Check that expected models are present
-	expectedModels := []string{"gpt-4.1", "claude-sonnet-4", "gemini-2.0-flash"}
+	expectedModels := []string{"gpt-4.1", "claude-sonnet-4", "gemini-2.5-pro"}
 	for _, expected := range expectedModels {
 		found := false
 		for _, m := range models {
@@ -202,9 +202,9 @@ func TestGetModelMultiplier(t *testing.T) {
 		want    int
 	}{
 		{"gpt-4.1", 0},         // free
-		{"gpt-5", 5},           // 5x premium
+		{"gpt-5", 1},           // 1x premium (updated from 5x)
 		{"claude-sonnet-4", 1}, // 1x premium
-		{"o1-pro", 50},         // 50x premium
+		{"claude-opus-4.5", 3}, // 3x premium (updated from 50x)
 		{"unknown", -1},        // not found
 	}
 
@@ -225,7 +225,7 @@ func TestIsModelSupported(t *testing.T) {
 	}{
 		{"gpt-4.1", true},
 		{"claude-sonnet-4", true},
-		{"gemini-2.0-flash", true},
+		{"gemini-2.5-pro", true}, // updated from gemini-2.0-flash
 		{"unknown-model", false},
 		{"", false},
 	}

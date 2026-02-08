@@ -114,7 +114,9 @@ func (s *Scheduler) Stop() context.Context {
 
 	// Stop accepting new jobs
 	ctx := s.cron.Stop()
+	s.mu.Lock()
 	s.running = false
+	s.mu.Unlock()
 
 	// Wait for active executions
 	done := make(chan struct{})

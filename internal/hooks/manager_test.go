@@ -151,7 +151,7 @@ func TestManager_TriggerBeforeMessage(t *testing.T) {
 	}
 	_ = m.Register(HookBeforeMessage, handler)
 
-	_ = m.TriggerBeforeMessage(context.Background(), "test content", "user", "user123")
+	_, _ = m.TriggerBeforeMessage(context.Background(), "test content", "user", "user123")
 
 	if capturedCtx == nil {
 		t.Fatal("context was not captured")
@@ -185,7 +185,7 @@ func TestManager_TriggerBeforeToolCall(t *testing.T) {
 	_ = m.Register(HookBeforeToolCall, handler)
 
 	params := map[string]any{"arg1": "value1"}
-	_ = m.TriggerBeforeToolCall(context.Background(), "tool-id-1", "test_tool", params)
+	_, _ = m.TriggerBeforeToolCall(context.Background(), "tool-id-1", "test_tool", params)
 
 	if capturedCtx == nil {
 		t.Fatal("context was not captured")
@@ -216,7 +216,7 @@ func TestManager_TriggerAfterToolCall(t *testing.T) {
 	_ = m.Register(HookAfterToolCall, handler)
 
 	params := map[string]any{"arg1": "value1"}
-	_ = m.TriggerAfterToolCall(context.Background(), "tool-id-1", "test_tool", params, "result", "", 100*time.Millisecond)
+	_, _ = m.TriggerAfterToolCall(context.Background(), "tool-id-1", "test_tool", params, "result", "", 100*time.Millisecond)
 
 	if capturedCtx == nil {
 		t.Fatal("context was not captured")
@@ -245,7 +245,7 @@ func TestManager_TriggerSessionCreate(t *testing.T) {
 
 	now := time.Now()
 	metadata := map[string]any{"key": "value"}
-	_ = m.TriggerSessionCreate(context.Background(), "session-1", now, metadata)
+	_, _ = m.TriggerSessionCreate(context.Background(), "session-1", now, metadata)
 
 	if capturedCtx == nil {
 		t.Fatal("context was not captured")

@@ -13,7 +13,7 @@ import (
 func TestRouter_HandleListTools_NoRegistry(t *testing.T) {
 	router := NewRouter(nil)
 	m := mux.NewRouter()
-	_ = router.RegisterRoutes(m)
+	router.RegisterRoutes(m)
 
 	req := httptest.NewRequest("GET", "/api/v1/tools", nil)
 	rr := httptest.NewRecorder()
@@ -40,7 +40,7 @@ func TestRouter_HandleListTools_NoRegistry(t *testing.T) {
 func TestRouter_HandleGetTool_NoRegistry(t *testing.T) {
 	router := NewRouter(nil)
 	m := mux.NewRouter()
-	_ = router.RegisterRoutes(m)
+	router.RegisterRoutes(m)
 
 	req := httptest.NewRequest("GET", "/api/v1/tools/test_tool", nil)
 	rr := httptest.NewRecorder()
@@ -55,7 +55,7 @@ func TestRouter_HandleGetTool_NoRegistry(t *testing.T) {
 func TestRouter_HandleExecuteTool_NoRegistry(t *testing.T) {
 	router := NewRouter(nil)
 	m := mux.NewRouter()
-	_ = router.RegisterRoutes(m)
+	router.RegisterRoutes(m)
 
 	body := ToolExecuteRequest{
 		Params: map[string]any{"key": "value"},
@@ -76,7 +76,7 @@ func TestRouter_HandleExecuteTool_NoRegistry(t *testing.T) {
 func TestRouter_HandleExecuteTool_InvalidJSON(t *testing.T) {
 	router := NewRouter(nil)
 	m := mux.NewRouter()
-	_ = router.RegisterRoutes(m)
+	router.RegisterRoutes(m)
 
 	// First we need to handle the case where tools is nil
 	req := httptest.NewRequest("POST", "/api/v1/tools/test_tool/execute", bytes.NewReader([]byte("invalid")))

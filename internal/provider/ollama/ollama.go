@@ -172,9 +172,8 @@ func (p *OllamaProvider) buildRequest(req provider.ChatRequest, stream bool) *ol
 		model = model[7:]
 	}
 
-	// For now, Ollama models don't support tools well, so we don't send them
-	// This prevents "does not support tools" errors from Ollama
-	hasTools := false // Disabled: len(req.Tools) > 0
+	// Enable tools if provided
+	hasTools := len(req.Tools) > 0
 
 	ollamaReq := &ollamaRequest{
 		Model:     model,
@@ -242,11 +241,19 @@ func (p *OllamaProvider) buildRequest(req provider.ChatRequest, stream bool) *ol
 		ollamaReq.Messages = append(ollamaReq.Messages, ollamaMsg)
 	}
 
-	// Don't send tools to Ollama for now - most models don't support them
-	// When Ollama tool support improves, we can enable this:
-	// for _, tool := range req.Tools {
-	// 	ollamaReq.Tools = append(ollamaReq.Tools, ollamaTool{...})
-	// }
+	// Convert tools if provided
+	if hasTools {
+		for _, tool := range req.Tools {
+			ollamaReq.Tools = append(ollamaReq.Tools, ollamaTool{
+				Type: tool.Type,
+				Function: ollamaToolFunction{
+					Name:        tool.Function.Name,
+					Description: tool.Function.Description,
+					Parameters:  tool.Function.Parameters,
+				},
+			})
+		}
+	}
 
 	// Set options if temperature or max_tokens specified
 	if req.Temperature > 0 || req.MaxTokens > 0 {

@@ -16,7 +16,7 @@ import (
 func TestRouter_RegisterRoutes(t *testing.T) {
 	router := NewRouter(nil)
 	m := mux.NewRouter()
-	_ = router.RegisterRoutes(m)
+	router.RegisterRoutes(m)
 
 	// Verify key routes are registered
 	routes := []struct {
@@ -49,7 +49,7 @@ func TestRouter_RegisterRoutes(t *testing.T) {
 func TestRouter_HandleHealth_NoDeps(t *testing.T) {
 	router := NewRouter(nil)
 	m := mux.NewRouter()
-	_ = router.RegisterRoutes(m)
+	router.RegisterRoutes(m)
 
 	req := httptest.NewRequest("GET", "/api/v1/health", nil)
 	// Add request_time to context for handler
@@ -109,7 +109,7 @@ func TestSetupLegacyRedirects(t *testing.T) {
 func TestRouter_HandleListSessions_NoDatabase(t *testing.T) {
 	router := NewRouter(nil)
 	m := mux.NewRouter()
-	_ = router.RegisterRoutes(m)
+	router.RegisterRoutes(m)
 
 	req := httptest.NewRequest("GET", "/api/v1/sessions", nil)
 	rr := httptest.NewRecorder()
@@ -124,7 +124,7 @@ func TestRouter_HandleListSessions_NoDatabase(t *testing.T) {
 func TestRouter_HandleGetConfig(t *testing.T) {
 	router := NewRouter(nil)
 	m := mux.NewRouter()
-	_ = router.RegisterRoutes(m)
+	router.RegisterRoutes(m)
 
 	req := httptest.NewRequest("GET", "/api/v1/config", nil)
 	rr := httptest.NewRecorder()
@@ -180,7 +180,7 @@ func TestGenerateSessionID(t *testing.T) {
 func TestRouter_HandleUIComponents_NoHandler(t *testing.T) {
 	router := NewRouter(nil)
 	m := mux.NewRouter()
-	_ = router.RegisterRoutes(m)
+	router.RegisterRoutes(m)
 
 	req := httptest.NewRequest("GET", "/api/v1/ui/components", nil)
 	rr := httptest.NewRecorder()
@@ -214,7 +214,7 @@ func TestRouter_HandleUpdateConfig_ProviderChange(t *testing.T) {
 
 	router := NewRouter(nil)
 	m := mux.NewRouter()
-	_ = router.RegisterRoutes(m)
+	router.RegisterRoutes(m)
 
 	// Test updating provider to ollama
 	body := bytes.NewBufferString(`{"provider":{"default":"ollama"}}`)
@@ -241,7 +241,7 @@ func TestRouter_HandleUpdateConfig_ProviderChange(t *testing.T) {
 func TestRouter_HandleUpdateConfig_InvalidProvider(t *testing.T) {
 	router := NewRouter(nil)
 	m := mux.NewRouter()
-	_ = router.RegisterRoutes(m)
+	router.RegisterRoutes(m)
 
 	// Test with invalid provider
 	body := bytes.NewBufferString(`{"provider":{"default":"invalid_provider"}}`)
