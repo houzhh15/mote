@@ -1,0 +1,194 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+env:
+  GO_VERSION: "1.22"
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Run tests
+        run: go test -v -race ./...
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    needs: test
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+          - goos: windows
+            goarch: amd64
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Get version
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          OUTPUT=mote-${{ matrix.goos }}-${{ matrix.goarch }}
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            OUTPUT="${OUTPUT}.exe"
+          fi
+          go build -ldflags="-s -w -X mote/internal/version.Version=${{ steps.version.outputs.VERSION }}" -o ${OUTPUT} ./cmd/mote
+
+      - name: Compress binary (Unix)
+        if: matrix.goos != 'windows'
+        run: |
+          tar -czvf mote-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz mote-${{ matrix.goos }}-${{ matrix.goarch }}
+
+      - name: Compress binary (Windows)
+        if: matrix.goos == 'windows'
+        run: |
+          zip mote-${{ matrix.goos }}-${{ matrix.goarch }}.zip mote-${{ matrix.goos }}-${{ matrix.goarch }}.exe
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mote-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: mote-${{ matrix.goos }}-${{ matrix.goarch }}.*
+
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare release files
+        run: |
+          mkdir -p release
+          find artifacts -type f \( -name "*.tar.gz" -o -name "*.zip" \) -exec mv {} release/ \;
+          cd release
+          sha256sum * > checksums.txt
+
+      - name: Get version
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: Release ${{ steps.version.outputs.VERSION }}
+          body: |
+            ## Mote ${{ steps.version.outputs.VERSION }}
+
+            ### Installation
+
+            #### macOS / Linux
+            ```bash
+            curl -fsSL https://mote.dev/install.sh | bash
+            ```
+
+            #### Windows
+            ```powershell
+            iwr -useb https://mote.dev/install.ps1 | iex
+            ```
+
+            #### Go Install
+            ```bash
+            go install github.com/mote-agent/mote@${{ steps.version.outputs.VERSION }}
+            ```
+
+            ### Docker
+            ```bash
+            docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.VERSION }}
+            ```
+
+            ### Checksums
+            See `checksums.txt` for SHA256 checksums of all binaries.
+
+            ### Changelog
+            See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for details.
+          files: |
+            release/*
+          draft: false
+          prerelease: ${{ contains(steps.version.outputs.VERSION, '-') }}
+
+  docker:
+    name: Build and Push Docker Image
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=sha
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

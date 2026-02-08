@@ -1,0 +1,21 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "Mote",
+  "outputfilename": "Mote",
+  "frontend:install": "npm install",
+  "frontend:build": "npm run build",
+  "frontend:dev:watcher": "npm run dev",
+  "frontend:dev:serverUrl": "auto",
+  "assetdir": "build",
+  "author": {
+    "name": "Mote Team",
+    "email": "mote@example.com"
+  },
+  "info": {
+    "companyName": "Mote",
+    "productName": "Mote",
+    "productVersion": "1.0.0",
+    "copyright": "Copyright 2026",
+    "comments": "AI Agent Desktop Application"
+  }
+}

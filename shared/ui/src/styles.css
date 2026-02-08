@@ -1,0 +1,257 @@
+/* Global styles for shared UI */
+
+/* ============================================
+   Dark Mode Global Styles
+   ============================================ */
+:root {
+  --app-bg: #ffffff;
+  --content-bg: #fafafa;
+  --content-bg-secondary: #f5f5f5;
+  --card-bg: #ffffff;
+  --text-color: #262626;
+  --text-secondary: #8c8c8c;
+  --border-color: #f0f0f0;
+  --hover-bg: #f5f5f5;
+  --input-bg: #ffffff;
+}
+
+/* Dark mode via data-theme attribute */
+:root[data-theme="dark"],
+html.dark {
+  --app-bg: #141414;
+  --content-bg: #1f1f1f;
+  --content-bg-secondary: #262626;
+  --card-bg: #1f1f1f;
+  --text-color: #e6e6e6;
+  --text-secondary: #8c8c8c;
+  --border-color: #303030;
+  --hover-bg: #2a2a2a;
+  --input-bg: #262626;
+}
+
+/* Apply background to body and main app */
+body {
+  background-color: var(--app-bg);
+  color: var(--text-color);
+  transition: background-color 0.2s, color 0.2s;
+}
+
+/* Main content area background */
+:root[data-theme="dark"] .ant-layout,
+html.dark .ant-layout {
+  background-color: var(--content-bg) !important;
+}
+
+:root[data-theme="dark"] .ant-layout-content,
+html.dark .ant-layout-content {
+  background-color: var(--content-bg) !important;
+}
+
+/* Dark mode for common page patterns */
+:root[data-theme="dark"] .page-header,
+html.dark .page-header {
+  background-color: var(--content-bg) !important;
+  border-color: var(--border-color) !important;
+}
+
+/* Dark mode for new-chat-page specifically */
+:root[data-theme="dark"] .new-chat-page,
+html.dark .new-chat-page {
+  background-color: var(--content-bg) !important;
+}
+
+/* Dark mode for Ant Design components */
+:root[data-theme="dark"] .ant-input,
+:root[data-theme="dark"] .ant-input-textarea textarea,
+:root[data-theme="dark"] .ant-select-selector,
+html.dark .ant-input,
+html.dark .ant-input-textarea textarea,
+html.dark .ant-select-selector {
+  background-color: var(--input-bg) !important;
+  border-color: var(--border-color) !important;
+  color: var(--text-color) !important;
+}
+
+:root[data-theme="dark"] .ant-input::placeholder,
+:root[data-theme="dark"] .ant-input-textarea textarea::placeholder,
+html.dark .ant-input::placeholder,
+html.dark .ant-input-textarea textarea::placeholder {
+  color: var(--text-secondary) !important;
+}
+
+:root[data-theme="dark"] .ant-card,
+html.dark .ant-card {
+  background-color: var(--card-bg) !important;
+  border-color: var(--border-color) !important;
+}
+
+:root[data-theme="dark"] .ant-card-head,
+html.dark .ant-card-head {
+  border-color: var(--border-color) !important;
+}
+
+:root[data-theme="dark"] .ant-btn-default,
+html.dark .ant-btn-default {
+  background-color: var(--input-bg) !important;
+  border-color: var(--border-color) !important;
+  color: var(--text-color) !important;
+}
+
+:root[data-theme="dark"] .ant-modal-content,
+:root[data-theme="dark"] .ant-modal-header,
+html.dark .ant-modal-content,
+html.dark .ant-modal-header {
+  background-color: var(--card-bg) !important;
+}
+
+:root[data-theme="dark"] .ant-modal-title,
+html.dark .ant-modal-title {
+  color: var(--text-color) !important;
+}
+
+:root[data-theme="dark"] .ant-typography,
+html.dark .ant-typography {
+  color: var(--text-color) !important;
+}
+
+:root[data-theme="dark"] .ant-typography.ant-typography-secondary,
+html.dark .ant-typography.ant-typography-secondary {
+  color: var(--text-secondary) !important;
+}
+
+:root[data-theme="dark"] .ant-table,
+:root[data-theme="dark"] .ant-table-thead > tr > th,
+:root[data-theme="dark"] .ant-table-tbody > tr > td,
+html.dark .ant-table,
+html.dark .ant-table-thead > tr > th,
+html.dark .ant-table-tbody > tr > td {
+  background-color: var(--card-bg) !important;
+  border-color: var(--border-color) !important;
+  color: var(--text-color) !important;
+}
+
+:root[data-theme="dark"] .ant-table-tbody > tr:hover > td,
+html.dark .ant-table-tbody > tr:hover > td {
+  background-color: var(--hover-bg) !important;
+}
+
+:root[data-theme="dark"] .ant-descriptions-bordered .ant-descriptions-item-label,
+:root[data-theme="dark"] .ant-descriptions-bordered .ant-descriptions-item-content,
+html.dark .ant-descriptions-bordered .ant-descriptions-item-label,
+html.dark .ant-descriptions-bordered .ant-descriptions-item-content {
+  background-color: var(--card-bg) !important;
+  border-color: var(--border-color) !important;
+}
+
+:root[data-theme="dark"] .ant-select-dropdown,
+html.dark .ant-select-dropdown {
+  background-color: var(--card-bg) !important;
+}
+
+:root[data-theme="dark"] .ant-select-item,
+html.dark .ant-select-item {
+  color: var(--text-color) !important;
+}
+
+:root[data-theme="dark"] .ant-select-item-option-active,
+:root[data-theme="dark"] .ant-select-item-option-selected,
+html.dark .ant-select-item-option-active,
+html.dark .ant-select-item-option-selected {
+  background-color: var(--hover-bg) !important;
+}
+
+:root[data-theme="dark"] .ant-dropdown-menu,
+html.dark .ant-dropdown-menu {
+  background-color: var(--card-bg) !important;
+}
+
+:root[data-theme="dark"] .ant-dropdown-menu-item,
+html.dark .ant-dropdown-menu-item {
+  color: var(--text-color) !important;
+}
+
+:root[data-theme="dark"] .ant-dropdown-menu-item:hover,
+html.dark .ant-dropdown-menu-item:hover {
+  background-color: var(--hover-bg) !important;
+}
+
+:root[data-theme="dark"] .ant-message-notice-content,
+html.dark .ant-message-notice-content {
+  background-color: var(--card-bg) !important;
+  color: var(--text-color) !important;
+}
+
+:root[data-theme="dark"] .ant-popover-inner,
+html.dark .ant-popover-inner {
+  background-color: var(--card-bg) !important;
+}
+
+:root[data-theme="dark"] .ant-tooltip-inner,
+html.dark .ant-tooltip-inner {
+  background-color: var(--content-bg-secondary) !important;
+}
+
+.mote-input textarea::placeholder {
+  font-size: 14px;
+}
+
+/* Ant Design TextArea wrapper */
+.mote-input.ant-input-textarea textarea::placeholder {
+  font-size: 14px;
+}
+
+/* Settings page font sizes - reduce overall */
+.settings-page {
+  font-size: 13px;
+}
+
+.settings-page .ant-card-head-title {
+  font-size: 15px;
+}
+
+.settings-page .ant-typography {
+  font-size: 13px;
+}
+
+.settings-page .ant-descriptions-item-label,
+.settings-page .ant-descriptions-item-content {
+  font-size: 13px;
+}
+
+.settings-page .ant-btn {
+  font-size: 13px;
+}
+
+.settings-page .ant-alert {
+  font-size: 13px;
+}
+
+.settings-page .ant-steps-item-title {
+  font-size: 13px;
+}
+
+.settings-page .ant-select-selection-item {
+  font-size: 13px;
+}
+
+.settings-page .ant-input {
+  font-size: 13px;
+}
+
+.settings-page .ant-checkbox-wrapper {
+  font-size: 13px;
+}
+
+/* Page header buttons - small font */
+.page-header-btn {
+  font-size: 13px !important;
+}
+
+.page-header-btn.ant-btn-sm {
+  font-size: 13px !important;
+}
+
+.page-header-btn span {
+  font-size: 13px !important;
+}
+

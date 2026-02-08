@@ -1,0 +1,73 @@
+{
+  "name": "@mote/shared-ui",
+  "version": "1.0.0",
+  "description": "Shared UI components and services for Mote applications",
+  "type": "module",
+  "main": "dist/index.js",
+  "module": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./dist/style.css": "./dist/style.css",
+    "./style.css": "./dist/style.css",
+    "./components": {
+      "types": "./dist/components/index.d.ts",
+      "import": "./dist/components/index.js"
+    },
+    "./pages": {
+      "types": "./dist/pages/index.d.ts",
+      "import": "./dist/pages/index.js"
+    },
+    "./services": {
+      "types": "./dist/services/index.d.ts",
+      "import": "./dist/services/index.js"
+    },
+    "./types": {
+      "types": "./dist/types/index.d.ts",
+      "import": "./dist/types/index.js"
+    },
+    "./context": {
+      "types": "./dist/context/APIContext.d.ts",
+      "import": "./dist/context/APIContext.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "build": "tsc && vite build",
+    "build:types": "tsc --emitDeclarationOnly",
+    "dev": "vite build --watch",
+    "lint": "eslint src --ext ts,tsx",
+    "clean": "rm -rf dist"
+  },
+  "peerDependencies": {
+    "@ant-design/icons": "^6.1.0",
+    "antd": "^5.29.3",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.27",
+    "@types/react-dom": "^18.3.7",
+    "@vitejs/plugin-react": "^4.2.1",
+    "typescript": "^5.4.0",
+    "vite": "^5.2.0",
+    "vite-plugin-dts": "^3.9.0"
+  },
+  "keywords": [
+    "mote",
+    "ui",
+    "components",
+    "pages",
+    "react"
+  ],
+  "author": "Mote Team",
+  "license": "MIT"
+}

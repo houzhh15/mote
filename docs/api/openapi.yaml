@@ -1,0 +1,1002 @@
+openapi: "3.0.3"
+info:
+  title: Mote Agent Runtime API
+  description: |
+    Mote 是一个本地优先的 AI 代理运行时，提供 HTTP API 用于对话、会话管理、工具调用、记忆存储等功能。
+    
+    ## 认证
+    API 使用 Bearer Token 认证，Token 从配置的 Copilot Provider 获取。
+    
+    ## 版本控制
+    所有 API 端点以 `/api/v1` 为前缀，支持版本协商。
+  version: "1.0.0"
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+  contact:
+    name: Mote Team
+    url: https://github.com/mote-agent/mote
+
+servers:
+  - url: http://localhost:18788/api/v1
+    description: 本地开发服务器
+  - url: https://mote.local/api/v1
+    description: 局域网服务器
+
+tags:
+  - name: health
+    description: 健康检查
+  - name: sessions
+    description: 会话管理
+  - name: chat
+    description: 对话接口
+  - name: tools
+    description: 工具管理
+  - name: memory
+    description: 记忆存储
+  - name: mcp
+    description: MCP 服务器管理
+  - name: cron
+    description: 定时任务管理
+  - name: config
+    description: 配置管理
+
+paths:
+  /health:
+    get:
+      tags: [health]
+      summary: 健康检查
+      description: 返回服务运行状态和版本信息
+      operationId: getHealth
+      responses:
+        "200":
+          description: 服务正常
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+
+  /sessions:
+    get:
+      tags: [sessions]
+      summary: 列出所有会话
+      operationId: listSessions
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+      responses:
+        "200":
+          description: 会话列表
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionListResponse"
+    post:
+      tags: [sessions]
+      summary: 创建新会话
+      operationId: createSession
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSessionRequest"
+      responses:
+        "201":
+          description: 会话创建成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Session"
+
+  /sessions/{id}:
+    get:
+      tags: [sessions]
+      summary: 获取会话详情
+      operationId: getSession
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      responses:
+        "200":
+          description: 会话详情
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Session"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      tags: [sessions]
+      summary: 删除会话
+      operationId: deleteSession
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      responses:
+        "204":
+          description: 删除成功
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /sessions/{id}/messages:
+    get:
+      tags: [sessions]
+      summary: 获取会话消息历史
+      operationId: getSessionMessages
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+      responses:
+        "200":
+          description: 消息列表
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageListResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /chat:
+    post:
+      tags: [chat]
+      summary: 发送对话消息
+      description: |
+        发送消息并获取 AI 响应。支持同步和流式两种模式。
+        
+        - 同步模式：等待完整响应后返回
+        - 流式模式：设置 `stream: true` 返回 SSE 流
+      operationId: chat
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChatRequest"
+      responses:
+        "200":
+          description: 对话响应
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatResponse"
+            text/event-stream:
+              schema:
+                type: string
+                description: SSE 事件流
+
+  /tools:
+    get:
+      tags: [tools]
+      summary: 列出所有可用工具
+      operationId: listTools
+      responses:
+        "200":
+          description: 工具列表
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ToolListResponse"
+
+  /tools/{name}:
+    get:
+      tags: [tools]
+      summary: 获取工具详情
+      operationId: getTool
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: 工具详情
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Tool"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /tools/{name}/invoke:
+    post:
+      tags: [tools]
+      summary: 调用工具
+      operationId: invokeTool
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ToolInvokeRequest"
+      responses:
+        "200":
+          description: 调用结果
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ToolInvokeResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /memory:
+    get:
+      tags: [memory]
+      summary: 搜索记忆
+      operationId: searchMemory
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema:
+            type: string
+          description: 搜索查询
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 10
+        - name: threshold
+          in: query
+          schema:
+            type: number
+            format: float
+            default: 0.7
+      responses:
+        "200":
+          description: 搜索结果
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MemorySearchResponse"
+    post:
+      tags: [memory]
+      summary: 添加记忆
+      operationId: addMemory
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AddMemoryRequest"
+      responses:
+        "201":
+          description: 添加成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Memory"
+
+  /memory/{id}:
+    get:
+      tags: [memory]
+      summary: 获取记忆详情
+      operationId: getMemory
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: 记忆详情
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Memory"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      tags: [memory]
+      summary: 删除记忆
+      operationId: deleteMemory
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: 删除成功
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /mcp/servers:
+    get:
+      tags: [mcp]
+      summary: 列出 MCP 服务器
+      operationId: listMCPServers
+      responses:
+        "200":
+          description: 服务器列表
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MCPServerListResponse"
+
+  /mcp/servers/{name}:
+    get:
+      tags: [mcp]
+      summary: 获取 MCP 服务器详情
+      operationId: getMCPServer
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: 服务器详情
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MCPServer"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /mcp/tools:
+    get:
+      tags: [mcp]
+      summary: 列出所有 MCP 工具
+      operationId: listMCPTools
+      responses:
+        "200":
+          description: 工具列表
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MCPToolListResponse"
+
+  /mcp/tools/{name}/call:
+    post:
+      tags: [mcp]
+      summary: 调用 MCP 工具
+      operationId: callMCPTool
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MCPToolCallRequest"
+      responses:
+        "200":
+          description: 调用结果
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MCPToolCallResponse"
+
+  /cron/jobs:
+    get:
+      tags: [cron]
+      summary: 列出定时任务
+      operationId: listCronJobs
+      responses:
+        "200":
+          description: 任务列表
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CronJobListResponse"
+    post:
+      tags: [cron]
+      summary: 创建定时任务
+      operationId: createCronJob
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCronJobRequest"
+      responses:
+        "201":
+          description: 创建成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CronJob"
+
+  /cron/jobs/{name}:
+    get:
+      tags: [cron]
+      summary: 获取定时任务详情
+      operationId: getCronJob
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: 任务详情
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CronJob"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    put:
+      tags: [cron]
+      summary: 更新定时任务
+      operationId: updateCronJob
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateCronJobRequest"
+      responses:
+        "200":
+          description: 更新成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CronJob"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      tags: [cron]
+      summary: 删除定时任务
+      operationId: deleteCronJob
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: 删除成功
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /cron/jobs/{name}/run:
+    post:
+      tags: [cron]
+      summary: 立即执行定时任务
+      operationId: runCronJob
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: 执行结果
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CronJobRunResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /config:
+    get:
+      tags: [config]
+      summary: 获取当前配置
+      operationId: getConfig
+      responses:
+        "200":
+          description: 配置信息
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfigResponse"
+    patch:
+      tags: [config]
+      summary: 更新配置
+      operationId: updateConfig
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateConfigRequest"
+      responses:
+        "200":
+          description: 更新成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfigResponse"
+
+components:
+  parameters:
+    SessionId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+      description: 会话 ID
+
+  responses:
+    NotFound:
+      description: 资源未找到
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+
+  schemas:
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+        code:
+          type: string
+        details:
+          type: object
+          additionalProperties: true
+
+    HealthResponse:
+      type: object
+      required: [status, version]
+      properties:
+        status:
+          type: string
+          enum: [healthy, degraded, unhealthy]
+        version:
+          type: string
+        uptime:
+          type: integer
+          description: 运行时间（秒）
+        components:
+          type: object
+          additionalProperties:
+            type: string
+
+    Session:
+      type: object
+      required: [id, created_at]
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        message_count:
+          type: integer
+        metadata:
+          type: object
+          additionalProperties: true
+
+    SessionListResponse:
+      type: object
+      required: [sessions, total]
+      properties:
+        sessions:
+          type: array
+          items:
+            $ref: "#/components/schemas/Session"
+        total:
+          type: integer
+        limit:
+          type: integer
+        offset:
+          type: integer
+
+    CreateSessionRequest:
+      type: object
+      properties:
+        title:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+
+    Message:
+      type: object
+      required: [id, role, content, created_at]
+      properties:
+        id:
+          type: string
+        role:
+          type: string
+          enum: [user, assistant, system, tool]
+        content:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        tool_calls:
+          type: array
+          items:
+            $ref: "#/components/schemas/ToolCall"
+
+    MessageListResponse:
+      type: object
+      required: [messages]
+      properties:
+        messages:
+          type: array
+          items:
+            $ref: "#/components/schemas/Message"
+
+    ChatRequest:
+      type: object
+      required: [message]
+      properties:
+        message:
+          type: string
+        session_id:
+          type: string
+        stream:
+          type: boolean
+          default: false
+        thinking:
+          type: string
+          enum: [none, low, medium, high]
+          default: none
+        model:
+          type: string
+        max_tokens:
+          type: integer
+        tools:
+          type: array
+          items:
+            type: string
+          description: 允许使用的工具名称列表
+
+    ChatResponse:
+      type: object
+      required: [message, session_id]
+      properties:
+        message:
+          type: string
+        session_id:
+          type: string
+        thinking:
+          type: string
+        tool_calls:
+          type: array
+          items:
+            $ref: "#/components/schemas/ToolCall"
+        usage:
+          $ref: "#/components/schemas/Usage"
+
+    ToolCall:
+      type: object
+      required: [id, name]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        arguments:
+          type: object
+          additionalProperties: true
+        result:
+          type: string
+
+    Usage:
+      type: object
+      properties:
+        prompt_tokens:
+          type: integer
+        completion_tokens:
+          type: integer
+        total_tokens:
+          type: integer
+
+    Tool:
+      type: object
+      required: [name, description]
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        parameters:
+          type: object
+          additionalProperties: true
+        category:
+          type: string
+        enabled:
+          type: boolean
+
+    ToolListResponse:
+      type: object
+      required: [tools]
+      properties:
+        tools:
+          type: array
+          items:
+            $ref: "#/components/schemas/Tool"
+
+    ToolInvokeRequest:
+      type: object
+      properties:
+        arguments:
+          type: object
+          additionalProperties: true
+
+    ToolInvokeResponse:
+      type: object
+      required: [result]
+      properties:
+        result:
+          type: string
+        error:
+          type: string
+
+    Memory:
+      type: object
+      required: [id, content, created_at]
+      properties:
+        id:
+          type: string
+        content:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        metadata:
+          type: object
+          additionalProperties: true
+        score:
+          type: number
+          format: float
+          description: 搜索相关性分数
+
+    MemorySearchResponse:
+      type: object
+      required: [memories]
+      properties:
+        memories:
+          type: array
+          items:
+            $ref: "#/components/schemas/Memory"
+        total:
+          type: integer
+
+    AddMemoryRequest:
+      type: object
+      required: [content]
+      properties:
+        content:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+
+    MCPServer:
+      type: object
+      required: [name, status]
+      properties:
+        name:
+          type: string
+        status:
+          type: string
+          enum: [running, stopped, error]
+        command:
+          type: string
+        args:
+          type: array
+          items:
+            type: string
+        tools_count:
+          type: integer
+        error:
+          type: string
+
+    MCPServerListResponse:
+      type: object
+      required: [servers]
+      properties:
+        servers:
+          type: array
+          items:
+            $ref: "#/components/schemas/MCPServer"
+
+    MCPTool:
+      type: object
+      required: [name, server]
+      properties:
+        name:
+          type: string
+        server:
+          type: string
+        description:
+          type: string
+        input_schema:
+          type: object
+          additionalProperties: true
+
+    MCPToolListResponse:
+      type: object
+      required: [tools]
+      properties:
+        tools:
+          type: array
+          items:
+            $ref: "#/components/schemas/MCPTool"
+
+    MCPToolCallRequest:
+      type: object
+      properties:
+        arguments:
+          type: object
+          additionalProperties: true
+
+    MCPToolCallResponse:
+      type: object
+      required: [result]
+      properties:
+        result:
+          type: string
+        error:
+          type: string
+        is_error:
+          type: boolean
+
+    CronJob:
+      type: object
+      required: [name, schedule, type]
+      properties:
+        name:
+          type: string
+        schedule:
+          type: string
+          description: Cron 表达式
+        type:
+          type: string
+          enum: [chat, tool, webhook]
+        payload:
+          type: object
+          additionalProperties: true
+        enabled:
+          type: boolean
+        last_run:
+          type: string
+          format: date-time
+        next_run:
+          type: string
+          format: date-time
+
+    CronJobListResponse:
+      type: object
+      required: [jobs]
+      properties:
+        jobs:
+          type: array
+          items:
+            $ref: "#/components/schemas/CronJob"
+
+    CreateCronJobRequest:
+      type: object
+      required: [name, schedule, type]
+      properties:
+        name:
+          type: string
+        schedule:
+          type: string
+        type:
+          type: string
+          enum: [chat, tool, webhook]
+        payload:
+          type: object
+          additionalProperties: true
+        enabled:
+          type: boolean
+          default: true
+
+    UpdateCronJobRequest:
+      type: object
+      properties:
+        schedule:
+          type: string
+        type:
+          type: string
+          enum: [chat, tool, webhook]
+        payload:
+          type: object
+          additionalProperties: true
+        enabled:
+          type: boolean
+
+    CronJobRunResponse:
+      type: object
+      required: [success]
+      properties:
+        success:
+          type: boolean
+        result:
+          type: string
+        error:
+          type: string
+        duration_ms:
+          type: integer
+
+    ConfigResponse:
+      type: object
+      properties:
+        version:
+          type: string
+        gateway:
+          type: object
+          properties:
+            host:
+              type: string
+            port:
+              type: integer
+        model:
+          type: object
+          properties:
+            default:
+              type: string
+            thinking:
+              type: string
+        tools:
+          type: object
+          properties:
+            enabled:
+              type: array
+              items:
+                type: string
+            disabled:
+              type: array
+              items:
+                type: string
+
+    UpdateConfigRequest:
+      type: object
+      properties:
+        model:
+          type: object
+          properties:
+            default:
+              type: string
+            thinking:
+              type: string
+        tools:
+          type: object
+          properties:
+            enabled:
+              type: array
+              items:
+                type: string
+            disabled:
+              type: array
+              items:
+                type: string

@@ -1,0 +1,62 @@
+{
+  "id": "example-skill",
+  "name": "Example Skill",
+  "version": "1.0.0",
+  "description": "An example skill for integration testing",
+  "author": "test",
+  "tools": [
+    {
+      "name": "greet",
+      "description": "Greet a user by name",
+      "handler": "tools.js#greet",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The name to greet"
+          }
+        },
+        "required": ["name"]
+      }
+    },
+    {
+      "name": "calculate",
+      "description": "Perform a simple calculation",
+      "handler": "tools.js#calculate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "a": {
+            "type": "number",
+            "description": "First operand"
+          },
+          "b": {
+            "type": "number",
+            "description": "Second operand"
+          },
+          "op": {
+            "type": "string",
+            "enum": ["add", "sub", "mul", "div"],
+            "description": "Operation to perform"
+          }
+        },
+        "required": ["a", "b", "op"]
+      }
+    }
+  ],
+  "prompts": [
+    {
+      "name": "greeting",
+      "description": "A greeting prompt",
+      "content": "You are a friendly assistant that greets users warmly."
+    }
+  ],
+  "hooks": [
+    {
+      "type": "before_message",
+      "handler": "tools.js#beforeMessage",
+      "priority": 100
+    }
+  ]
+}
