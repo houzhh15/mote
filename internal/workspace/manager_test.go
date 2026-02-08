@@ -82,7 +82,7 @@ func TestWorkspaceManager_Unbind(t *testing.T) {
 	manager := NewWorkspaceManager()
 	tmpDir := t.TempDir()
 
-	manager.Bind("session-1", tmpDir, false)
+	_ = manager.Bind("session-1", tmpDir, false)
 
 	err := manager.Unbind("session-1")
 	if err != nil {
@@ -107,7 +107,7 @@ func TestWorkspaceManager_Get(t *testing.T) {
 	manager := NewWorkspaceManager()
 	tmpDir := t.TempDir()
 
-	manager.Bind("session-1", tmpDir, true)
+	_ = manager.Bind("session-1", tmpDir, true)
 
 	binding, exists := manager.Get("session-1")
 	if !exists {
@@ -125,8 +125,8 @@ func TestWorkspaceManager_List(t *testing.T) {
 	manager := NewWorkspaceManager()
 	tmpDir := t.TempDir()
 
-	manager.Bind("session-1", tmpDir, false)
-	manager.Bind("session-2", tmpDir, true)
+	_ = manager.Bind("session-1", tmpDir, false)
+	_ = manager.Bind("session-2", tmpDir, true)
 
 	bindings := manager.List()
 	if len(bindings) != 2 {
@@ -137,7 +137,7 @@ func TestWorkspaceManager_List(t *testing.T) {
 func TestWorkspaceManager_ResolvePath(t *testing.T) {
 	manager := NewWorkspaceManager()
 	tmpDir := t.TempDir()
-	manager.Bind("session-1", tmpDir, false)
+	_ = manager.Bind("session-1", tmpDir, false)
 
 	absPath, err := manager.ResolvePath("session-1", "subdir/file.txt")
 	if err != nil {
@@ -152,7 +152,7 @@ func TestWorkspaceManager_ResolvePath(t *testing.T) {
 func TestWorkspaceManager_ResolvePath_PathTraversal(t *testing.T) {
 	manager := NewWorkspaceManager()
 	tmpDir := t.TempDir()
-	manager.Bind("session-1", tmpDir, false)
+	_ = manager.Bind("session-1", tmpDir, false)
 
 	_, err := manager.ResolvePath("session-1", "../../../etc/passwd")
 	if err == nil {
@@ -163,7 +163,7 @@ func TestWorkspaceManager_ResolvePath_PathTraversal(t *testing.T) {
 func TestWorkspaceManager_ResolvePath_AbsolutePath(t *testing.T) {
 	manager := NewWorkspaceManager()
 	tmpDir := t.TempDir()
-	manager.Bind("session-1", tmpDir, false)
+	_ = manager.Bind("session-1", tmpDir, false)
 
 	_, err := manager.ResolvePath("session-1", "/etc/passwd")
 	if err == nil {
@@ -188,7 +188,7 @@ func TestWorkspaceManager_ListFiles(t *testing.T) {
 	os.WriteFile(filepath.Join(tmpDir, "file2.txt"), []byte("test"), 0644)
 	os.MkdirAll(filepath.Join(tmpDir, "subdir"), 0755)
 
-	manager.Bind("session-1", tmpDir, false)
+	_ = manager.Bind("session-1", tmpDir, false)
 
 	files, err := manager.ListFiles("session-1", ".")
 	if err != nil {
@@ -218,7 +218,7 @@ func TestWorkspaceManager_ReadFile(t *testing.T) {
 	content := "test content"
 	os.WriteFile(filepath.Join(tmpDir, "test.txt"), []byte(content), 0644)
 
-	manager.Bind("session-1", tmpDir, false)
+	_ = manager.Bind("session-1", tmpDir, false)
 
 	data, err := manager.ReadFile("session-1", "test.txt")
 	if err != nil {
@@ -232,7 +232,7 @@ func TestWorkspaceManager_ReadFile(t *testing.T) {
 func TestWorkspaceManager_WriteFile(t *testing.T) {
 	manager := NewWorkspaceManager()
 	tmpDir := t.TempDir()
-	manager.Bind("session-1", tmpDir, false)
+	_ = manager.Bind("session-1", tmpDir, false)
 
 	content := []byte("new content")
 	err := manager.WriteFile("session-1", "newfile.txt", content)
@@ -249,7 +249,7 @@ func TestWorkspaceManager_WriteFile(t *testing.T) {
 func TestWorkspaceManager_WriteFile_ReadOnly(t *testing.T) {
 	manager := NewWorkspaceManager()
 	tmpDir := t.TempDir()
-	manager.Bind("session-1", tmpDir, true)
+	_ = manager.Bind("session-1", tmpDir, true)
 
 	err := manager.WriteFile("session-1", "test.txt", []byte("content"))
 	if err == nil {
@@ -260,7 +260,7 @@ func TestWorkspaceManager_WriteFile_ReadOnly(t *testing.T) {
 func TestWorkspaceManager_WriteFile_CreateSubdir(t *testing.T) {
 	manager := NewWorkspaceManager()
 	tmpDir := t.TempDir()
-	manager.Bind("session-1", tmpDir, false)
+	_ = manager.Bind("session-1", tmpDir, false)
 
 	err := manager.WriteFile("session-1", "subdir/nested/file.txt", []byte("content"))
 	if err != nil {
@@ -284,7 +284,7 @@ func TestWorkspaceManager_Concurrent(t *testing.T) {
 		go func(id int) {
 			defer wg.Done()
 			sessionID := string(rune('a' + id))
-			manager.Bind(sessionID, tmpDir, false)
+	_ = manager.Bind(sessionID, tmpDir, false)
 		}(i)
 	}
 

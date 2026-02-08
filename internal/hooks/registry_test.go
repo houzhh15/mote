@@ -82,7 +82,7 @@ func TestRegistry_Unregister(t *testing.T) {
 	r := NewRegistry()
 
 	handler := &Handler{ID: "test-handler", Priority: 100, Enabled: true}
-	r.Register(HookBeforeMessage, handler)
+	_ = r.Register(HookBeforeMessage, handler)
 
 	err := r.Unregister(HookBeforeMessage, "test-handler")
 	if err != nil {
@@ -147,7 +147,7 @@ func TestRegistry_GetHandlers_ReturnsCopy(t *testing.T) {
 	r := NewRegistry()
 
 	handler := &Handler{ID: "test-handler", Priority: 100, Enabled: true}
-	r.Register(HookBeforeMessage, handler)
+	_ = r.Register(HookBeforeMessage, handler)
 
 	handlers1 := r.GetHandlers(HookBeforeMessage)
 	handlers2 := r.GetHandlers(HookBeforeMessage)
@@ -169,7 +169,7 @@ func TestRegistry_HasHandlers(t *testing.T) {
 	}
 
 	handler := &Handler{ID: "test-handler", Enabled: true}
-	r.Register(HookBeforeMessage, handler)
+	_ = r.Register(HookBeforeMessage, handler)
 
 	if !r.HasHandlers(HookBeforeMessage) {
 		t.Error("expected HasHandlers to return true after registration")
@@ -184,8 +184,8 @@ func TestRegistry_Clear(t *testing.T) {
 	r := NewRegistry()
 
 	handler := &Handler{ID: "test-handler", Enabled: true}
-	r.Register(HookBeforeMessage, handler)
-	r.Register(HookAfterMessage, handler)
+	_ = r.Register(HookBeforeMessage, handler)
+	_ = r.Register(HookAfterMessage, handler)
 
 	r.Clear()
 
@@ -204,9 +204,9 @@ func TestRegistry_Count(t *testing.T) {
 		t.Errorf("expected count 0, got %d", r.Count())
 	}
 
-	r.Register(HookBeforeMessage, &Handler{ID: "handler1", Enabled: true})
-	r.Register(HookAfterMessage, &Handler{ID: "handler2", Enabled: true})
-	r.Register(HookBeforeMessage, &Handler{ID: "handler3", Enabled: true})
+	_ = r.Register(HookBeforeMessage, &Handler{ID: "handler1", Enabled: true})
+	_ = r.Register(HookAfterMessage, &Handler{ID: "handler2", Enabled: true})
+	_ = r.Register(HookBeforeMessage, &Handler{ID: "handler3", Enabled: true})
 
 	if r.Count() != 3 {
 		t.Errorf("expected count 3, got %d", r.Count())
@@ -221,8 +221,8 @@ func TestRegistry_ListTypes(t *testing.T) {
 		t.Errorf("expected 0 types, got %d", len(types))
 	}
 
-	r.Register(HookBeforeMessage, &Handler{ID: "handler1", Enabled: true})
-	r.Register(HookAfterMessage, &Handler{ID: "handler2", Enabled: true})
+	_ = r.Register(HookBeforeMessage, &Handler{ID: "handler1", Enabled: true})
+	_ = r.Register(HookAfterMessage, &Handler{ID: "handler2", Enabled: true})
 
 	types = r.ListTypes()
 	if len(types) != 2 {
@@ -233,8 +233,8 @@ func TestRegistry_ListTypes(t *testing.T) {
 func TestRegistry_GetAllHandlers(t *testing.T) {
 	r := NewRegistry()
 
-	r.Register(HookBeforeMessage, &Handler{ID: "handler1", Enabled: true})
-	r.Register(HookAfterMessage, &Handler{ID: "handler2", Enabled: true})
+	_ = r.Register(HookBeforeMessage, &Handler{ID: "handler1", Enabled: true})
+	_ = r.Register(HookAfterMessage, &Handler{ID: "handler2", Enabled: true})
 
 	all := r.GetAllHandlers()
 	if len(all) != 2 {
@@ -264,7 +264,7 @@ func TestRegistry_ConcurrentAccess(t *testing.T) {
 				Enabled:  true,
 			}
 			// Ignore errors since we expect some duplicates
-			r.Register(HookBeforeMessage, handler)
+	_ = r.Register(HookBeforeMessage, handler)
 		}(i)
 	}
 	wg.Wait()

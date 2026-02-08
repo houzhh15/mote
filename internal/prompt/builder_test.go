@@ -36,7 +36,7 @@ func (m *mockMemorySearcher) Search(ctx context.Context, query string, topK int)
 
 func TestSystemPromptBuilder_Build(t *testing.T) {
 	registry := tools.NewRegistry()
-	registry.Register(&mockTool{
+	_ = registry.Register(&mockTool{
 		name:        "read_file",
 		description: "Read a file from disk",
 		params:      map[string]any{"path": "string"},

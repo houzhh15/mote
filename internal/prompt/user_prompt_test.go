@@ -57,10 +57,10 @@ func TestFileUserPromptStore_Update(t *testing.T) {
 	store := NewFileUserPromptStore(storePath)
 
 	// Create initial prompt
-	store.Set(&UserPrompt{Name: "test", Content: "original"})
+	_ = store.Set(&UserPrompt{Name: "test", Content: "original"})
 
 	// Update
-	store.Set(&UserPrompt{Name: "test", Content: "updated"})
+	_ = store.Set(&UserPrompt{Name: "test", Content: "updated"})
 
 	// Verify update
 	prompt, _ := store.Get("test")
@@ -80,7 +80,7 @@ func TestFileUserPromptStore_Delete(t *testing.T) {
 	storePath := filepath.Join(tmpDir, "prompts.json")
 	store := NewFileUserPromptStore(storePath)
 
-	store.Set(&UserPrompt{Name: "test", Content: "content"})
+	_ = store.Set(&UserPrompt{Name: "test", Content: "content"})
 
 	// Delete
 	if err := store.Delete("test"); err != nil {
@@ -109,9 +109,9 @@ func TestFileUserPromptStore_List(t *testing.T) {
 	}
 
 	// Add some prompts
-	store.Set(&UserPrompt{Name: "a", Content: "content a"})
-	store.Set(&UserPrompt{Name: "b", Content: "content b"})
-	store.Set(&UserPrompt{Name: "c", Content: "content c"})
+	_ = store.Set(&UserPrompt{Name: "a", Content: "content a"})
+	_ = store.Set(&UserPrompt{Name: "b", Content: "content b"})
+	_ = store.Set(&UserPrompt{Name: "c", Content: "content c"})
 
 	// List again
 	prompts, err = store.List()
@@ -129,7 +129,7 @@ func TestFileUserPromptStore_Persistence(t *testing.T) {
 
 	// Create store and add prompt
 	store1 := NewFileUserPromptStore(storePath)
-	store1.Set(&UserPrompt{Name: "persist", Content: "test"})
+	_ = store1.Set(&UserPrompt{Name: "persist", Content: "test"})
 
 	// Create new store instance
 	store2 := NewFileUserPromptStore(storePath)
@@ -270,7 +270,7 @@ func TestExecutePromptCommand_List(t *testing.T) {
 	}
 
 	// Add prompts and list again
-	store.Set(&UserPrompt{Name: "test", Description: "Test prompt"})
+	_ = store.Set(&UserPrompt{Name: "test", Description: "Test prompt"})
 	msg, _ = ExecutePromptCommand(cmd, store)
 	if msg == "No user prompts defined." {
 		t.Error("expected prompts to be listed")
@@ -280,7 +280,7 @@ func TestExecutePromptCommand_List(t *testing.T) {
 func TestExecutePromptCommand_Show(t *testing.T) {
 	tmpDir := t.TempDir()
 	store := NewFileUserPromptStore(filepath.Join(tmpDir, "prompts.json"))
-	store.Set(&UserPrompt{Name: "test", Description: "Test", Content: "Test content"})
+	_ = store.Set(&UserPrompt{Name: "test", Description: "Test", Content: "Test content"})
 
 	// Show existing
 	cmd := &SlashCommand{Name: "prompt", Action: "show", Args: []string{"test"}}
@@ -310,7 +310,7 @@ func TestExecutePromptCommand_Show(t *testing.T) {
 func TestExecutePromptCommand_Delete(t *testing.T) {
 	tmpDir := t.TempDir()
 	store := NewFileUserPromptStore(filepath.Join(tmpDir, "prompts.json"))
-	store.Set(&UserPrompt{Name: "test", Content: "content"})
+	_ = store.Set(&UserPrompt{Name: "test", Content: "content"})
 
 	cmd := &SlashCommand{Name: "prompt", Action: "delete", Args: []string{"test"}}
 	msg, handled := ExecutePromptCommand(cmd, store)

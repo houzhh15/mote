@@ -12,7 +12,7 @@ import (
 func TestRouter_HandleListMCPServers_NoClient(t *testing.T) {
 	router := NewRouter(nil)
 	m := mux.NewRouter()
-	router.RegisterRoutes(m)
+	_ = router.RegisterRoutes(m)
 
 	req := httptest.NewRequest("GET", "/api/v1/mcp/servers", nil)
 	rr := httptest.NewRecorder()
@@ -38,7 +38,7 @@ func TestRouter_HandleListMCPServers_NoClient(t *testing.T) {
 func TestRouter_HandleListMCPTools_NoClient(t *testing.T) {
 	router := NewRouter(nil)
 	m := mux.NewRouter()
-	router.RegisterRoutes(m)
+	_ = router.RegisterRoutes(m)
 
 	req := httptest.NewRequest("GET", "/api/v1/mcp/tools", nil)
 	rr := httptest.NewRecorder()

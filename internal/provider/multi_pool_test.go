@@ -89,8 +89,8 @@ func TestMultiProviderPool_GetProvider(t *testing.T) {
 		return &mockProviderForMultiPool{name: "ollama", model: model}, nil
 	})
 
-	pool.AddProvider("copilot", copilotPool, []string{"gpt-4o"})
-	pool.AddProvider("ollama", ollamaPool, []string{"llama3.2"})
+	_ = pool.AddProvider("copilot", copilotPool, []string{"gpt-4o"})
+	_ = pool.AddProvider("ollama", ollamaPool, []string{"llama3.2"})
 
 	// Test getting Copilot model (no prefix)
 	provider, providerName, err := pool.GetProvider("gpt-4o")
@@ -124,8 +124,8 @@ func TestMultiProviderPool_ListAllModels(t *testing.T) {
 		return &mockProviderForMultiPool{name: "ollama", model: model}, nil
 	})
 
-	pool.AddProvider("copilot", copilotPool, []string{"gpt-4o", "claude-sonnet-4"})
-	pool.AddProvider("ollama", ollamaPool, []string{"llama3.2"})
+	_ = pool.AddProvider("copilot", copilotPool, []string{"gpt-4o", "claude-sonnet-4"})
+	_ = pool.AddProvider("ollama", ollamaPool, []string{"llama3.2"})
 
 	models := pool.ListAllModels()
 	if len(models) != 3 {
@@ -162,7 +162,7 @@ func TestMultiProviderPool_RefreshModels(t *testing.T) {
 		return &mockProviderForMultiPool{name: "ollama", model: model}, nil
 	})
 
-	pool.AddProvider("ollama", ollamaPool, []string{"llama3.2"})
+	_ = pool.AddProvider("ollama", ollamaPool, []string{"llama3.2"})
 
 	// Verify initial count
 	if count := pool.ModelCountByProvider("ollama"); count != 1 {
@@ -194,7 +194,7 @@ func TestMultiProviderPool_GetOrDefault(t *testing.T) {
 		return &mockProviderForMultiPool{name: "copilot", model: model}, nil
 	})
 
-	pool.AddProvider("copilot", copilotPool, []string{"gpt-4o"})
+	_ = pool.AddProvider("copilot", copilotPool, []string{"gpt-4o"})
 	pool.SetDefault("chat", "gpt-4o")
 
 	// Test with explicit model

@@ -120,9 +120,9 @@ func TestUsageTracker_GetQuotaStatus(t *testing.T) {
 	)
 
 	// Record some usage
-	ut.Record("gpt-4.1", 100, 50, ModeAgent) // Free, no multiplier
-	ut.Record("gpt-4.1", 100, 50, ModeAgent) // Free, no multiplier
-	ut.Record("gpt-5", 100, 50, ModeAgent)   // Premium, 5x multiplier
+	_ = ut.Record("gpt-4.1", 100, 50, ModeAgent) // Free, no multiplier
+	_ = ut.Record("gpt-4.1", 100, 50, ModeAgent) // Free, no multiplier
+	_ = ut.Record("gpt-5", 100, 50, ModeAgent)   // Premium, 5x multiplier
 
 	status := ut.GetQuotaStatus()
 
@@ -165,7 +165,7 @@ func TestUsageTracker_GetRecentRecords(t *testing.T) {
 
 	// Record multiple entries
 	for i := 0; i < 5; i++ {
-		ut.Record("gpt-4.1", 100, 50, ModeAgent)
+	_ = ut.Record("gpt-4.1", 100, 50, ModeAgent)
 	}
 
 	records := ut.GetRecentRecords(3)
@@ -193,7 +193,7 @@ func TestUsageTracker_ClearOldRecords(t *testing.T) {
 
 	// Add records
 	for i := 0; i < 3; i++ {
-		ut.Record("gpt-4.1", 100, 50, ModeAgent)
+	_ = ut.Record("gpt-4.1", 100, 50, ModeAgent)
 	}
 
 	// Clear records older than 1 hour (should clear none)
@@ -220,7 +220,7 @@ func TestUsageTracker_Persistence(t *testing.T) {
 
 	// Create tracker and record usage
 	ut1 := NewUsageTracker(WithDataPath(dataPath))
-	ut1.Record("gpt-4.1", 100, 50, ModeAgent)
+	_ = ut1.Record("gpt-4.1", 100, 50, ModeAgent)
 
 	// Create new tracker and verify data was loaded
 	ut2 := NewUsageTracker(WithDataPath(dataPath))
@@ -240,7 +240,7 @@ func TestUsageTracker_Reset(t *testing.T) {
 	ut := NewUsageTracker(WithDataPath(filepath.Join(tmpDir, "usage.json")))
 
 	// Record some usage
-	ut.Record("gpt-4.1", 100, 50, ModeAgent)
+	_ = ut.Record("gpt-4.1", 100, 50, ModeAgent)
 
 	monthly := ut.GetCurrentMonthUsage()
 	if monthly.TotalRequests != 1 {
@@ -270,7 +270,7 @@ func TestUsageTracker_GetMonthlyUsage(t *testing.T) {
 	ut := NewUsageTracker(WithDataPath(filepath.Join(tmpDir, "usage.json")))
 
 	// Record usage
-	ut.Record("gpt-4.1", 100, 50, ModeAgent)
+	_ = ut.Record("gpt-4.1", 100, 50, ModeAgent)
 
 	now := time.Now()
 	monthly := ut.GetMonthlyUsage(now.Year(), int(now.Month()))

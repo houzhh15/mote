@@ -223,7 +223,7 @@ func (c *Client) Send(msg *Message) error {
 
 	msg.Source = c.role
 
-	c.conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	_ = c.conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
 
 	return c.encoder.Encode(msg)
 }

@@ -13,7 +13,7 @@ import (
 func TestRouter_HandleMemorySearch_NoMemory(t *testing.T) {
 	router := NewRouter(nil)
 	m := mux.NewRouter()
-	router.RegisterRoutes(m)
+	_ = router.RegisterRoutes(m)
 
 	body := MemorySearchRequest{
 		Query: "test query",
@@ -35,7 +35,7 @@ func TestRouter_HandleMemorySearch_NoMemory(t *testing.T) {
 func TestRouter_HandleMemorySearch_EmptyQuery(t *testing.T) {
 	router := NewRouter(nil)
 	m := mux.NewRouter()
-	router.RegisterRoutes(m)
+	_ = router.RegisterRoutes(m)
 
 	body := MemorySearchRequest{
 		Query: "",
@@ -58,7 +58,7 @@ func TestRouter_HandleMemorySearch_EmptyQuery(t *testing.T) {
 func TestRouter_HandleMemorySearch_InvalidJSON(t *testing.T) {
 	router := NewRouter(nil)
 	m := mux.NewRouter()
-	router.RegisterRoutes(m)
+	_ = router.RegisterRoutes(m)
 
 	req := httptest.NewRequest("POST", "/api/v1/memory/search", bytes.NewReader([]byte("invalid")))
 	req.Header.Set("Content-Type", "application/json")
@@ -75,7 +75,7 @@ func TestRouter_HandleMemorySearch_InvalidJSON(t *testing.T) {
 func TestRouter_HandleAddMemory_NoMemory(t *testing.T) {
 	router := NewRouter(nil)
 	m := mux.NewRouter()
-	router.RegisterRoutes(m)
+	_ = router.RegisterRoutes(m)
 
 	body := AddMemoryRequest{
 		Content: "Test memory content",
@@ -97,7 +97,7 @@ func TestRouter_HandleAddMemory_NoMemory(t *testing.T) {
 func TestRouter_HandleDeleteMemory_NoMemory(t *testing.T) {
 	router := NewRouter(nil)
 	m := mux.NewRouter()
-	router.RegisterRoutes(m)
+	_ = router.RegisterRoutes(m)
 
 	req := httptest.NewRequest("DELETE", "/api/v1/memory/mem-123", nil)
 	rr := httptest.NewRecorder()
@@ -423,7 +423,7 @@ func TestMemoryStatsResponse_Structure(t *testing.T) {
 func TestRouter_HandleMemoryStats_NoMemory(t *testing.T) {
 	router := NewRouter(nil)
 	m := mux.NewRouter()
-	router.RegisterRoutes(m)
+	_ = router.RegisterRoutes(m)
 
 	req := httptest.NewRequest("GET", "/api/v1/memory/stats", nil)
 	rr := httptest.NewRecorder()

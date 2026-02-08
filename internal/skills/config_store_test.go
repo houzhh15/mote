@@ -86,9 +86,9 @@ func TestFileConfigStore_List(t *testing.T) {
 	}
 
 	// Add some configs
-	store.Set("skill-a", ConfigMap{"a": 1})
-	store.Set("skill-b", ConfigMap{"b": 2})
-	store.Set("skill-c", ConfigMap{"c": 3})
+	_ = store.Set("skill-a", ConfigMap{"a": 1})
+	_ = store.Set("skill-b", ConfigMap{"b": 2})
+	_ = store.Set("skill-c", ConfigMap{"c": 3})
 
 	// List again
 	ids, err = store.List()
@@ -106,7 +106,7 @@ func TestFileConfigStore_Persistence(t *testing.T) {
 
 	// Create store and set config
 	store1 := NewFileConfigStore(storePath)
-	store1.Set("skill-1", ConfigMap{"persist": "test"})
+	_ = store1.Set("skill-1", ConfigMap{"persist": "test"})
 
 	// Create new store instance reading same file
 	store2 := NewFileConfigStore(storePath)
@@ -135,7 +135,7 @@ func TestFileConfigStore_Concurrent(t *testing.T) {
 			defer wg.Done()
 			for j := 0; j < numOps; j++ {
 				skillID := "skill-" + string(rune('a'+id%26))
-				store.Set(skillID, ConfigMap{"iter": j})
+	_ = store.Set(skillID, ConfigMap{"iter": j})
 			}
 		}(i)
 	}

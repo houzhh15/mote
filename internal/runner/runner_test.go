@@ -259,7 +259,7 @@ func TestRunner_SetApprovalManager(t *testing.T) {
 func TestRunner_PolicyBlock(t *testing.T) {
 	// Create a runner with a blocking policy
 	registry := tools.NewRegistry()
-	registry.Register(newMockTool("shell", "Execute shell command"))
+	_ = registry.Register(newMockTool("shell", "Execute shell command"))
 
 	runner := &Runner{
 		registry: registry,
@@ -346,7 +346,7 @@ func TestRunner_PolicyBlock(t *testing.T) {
 func TestRunner_PolicyApproval(t *testing.T) {
 	// Create a runner with approval-required policy
 	registry := tools.NewRegistry()
-	registry.Register(newMockTool("shell", "Execute shell command"))
+	_ = registry.Register(newMockTool("shell", "Execute shell command"))
 
 	runner := &Runner{
 		registry: registry,
@@ -404,7 +404,7 @@ func TestRunner_PolicyApproval(t *testing.T) {
 func TestRunner_PolicyApprovalRejected(t *testing.T) {
 	// Create a runner with approval-required policy
 	registry := tools.NewRegistry()
-	registry.Register(newMockTool("shell", "Execute shell command"))
+	_ = registry.Register(newMockTool("shell", "Execute shell command"))
 
 	runner := &Runner{
 		registry: registry,
@@ -448,7 +448,7 @@ func TestRunner_PolicyApprovalRejected(t *testing.T) {
 func TestRunner_PolicyAllowWithoutApproval(t *testing.T) {
 	// Create a runner with allow policy (no approval needed)
 	registry := tools.NewRegistry()
-	registry.Register(newMockTool("file_read", "Read file"))
+	_ = registry.Register(newMockTool("file_read", "Read file"))
 
 	runner := &Runner{
 		registry: registry,

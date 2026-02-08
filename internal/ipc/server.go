@@ -334,7 +334,7 @@ func (s *Server) sendToClient(client *clientConn, msg *Message) error {
 	client.mu.Lock()
 	defer client.mu.Unlock()
 
-	client.conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	_ = client.conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
 
 	return client.encoder.Encode(msg)
 }

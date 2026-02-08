@@ -45,7 +45,7 @@ func TestManager_Unregister(t *testing.T) {
 		Enabled: true,
 	}
 
-	m.Register(HookBeforeMessage, handler)
+	_ = m.Register(HookBeforeMessage, handler)
 
 	err := m.Unregister(HookBeforeMessage, "test")
 	if err != nil {
@@ -101,7 +101,7 @@ func TestManager_ListHandlers(t *testing.T) {
 	m := NewManager()
 
 	handler := &Handler{ID: "test", Enabled: true}
-	m.Register(HookBeforeMessage, handler)
+	_ = m.Register(HookBeforeMessage, handler)
 
 	handlers := m.ListHandlers(HookBeforeMessage)
 	if len(handlers) != 1 {
@@ -117,7 +117,7 @@ func TestManager_HasHandlers(t *testing.T) {
 	}
 
 	handler := &Handler{ID: "test", Enabled: true}
-	m.Register(HookBeforeMessage, handler)
+	_ = m.Register(HookBeforeMessage, handler)
 
 	if !m.HasHandlers(HookBeforeMessage) {
 		t.Error("expected handlers after registration")
@@ -128,7 +128,7 @@ func TestManager_Clear(t *testing.T) {
 	m := NewManager()
 
 	handler := &Handler{ID: "test", Enabled: true}
-	m.Register(HookBeforeMessage, handler)
+	_ = m.Register(HookBeforeMessage, handler)
 
 	m.Clear()
 
@@ -149,9 +149,9 @@ func TestManager_TriggerBeforeMessage(t *testing.T) {
 			return ContinueResult(), nil
 		},
 	}
-	m.Register(HookBeforeMessage, handler)
+	_ = m.Register(HookBeforeMessage, handler)
 
-	m.TriggerBeforeMessage(context.Background(), "test content", "user", "user123")
+	_ = m.TriggerBeforeMessage(context.Background(), "test content", "user", "user123")
 
 	if capturedCtx == nil {
 		t.Fatal("context was not captured")
@@ -182,10 +182,10 @@ func TestManager_TriggerBeforeToolCall(t *testing.T) {
 			return ContinueResult(), nil
 		},
 	}
-	m.Register(HookBeforeToolCall, handler)
+	_ = m.Register(HookBeforeToolCall, handler)
 
 	params := map[string]any{"arg1": "value1"}
-	m.TriggerBeforeToolCall(context.Background(), "tool-id-1", "test_tool", params)
+	_ = m.TriggerBeforeToolCall(context.Background(), "tool-id-1", "test_tool", params)
 
 	if capturedCtx == nil {
 		t.Fatal("context was not captured")
@@ -213,10 +213,10 @@ func TestManager_TriggerAfterToolCall(t *testing.T) {
 			return ContinueResult(), nil
 		},
 	}
-	m.Register(HookAfterToolCall, handler)
+	_ = m.Register(HookAfterToolCall, handler)
 
 	params := map[string]any{"arg1": "value1"}
-	m.TriggerAfterToolCall(context.Background(), "tool-id-1", "test_tool", params, "result", "", 100*time.Millisecond)
+	_ = m.TriggerAfterToolCall(context.Background(), "tool-id-1", "test_tool", params, "result", "", 100*time.Millisecond)
 
 	if capturedCtx == nil {
 		t.Fatal("context was not captured")
@@ -241,11 +241,11 @@ func TestManager_TriggerSessionCreate(t *testing.T) {
 			return ContinueResult(), nil
 		},
 	}
-	m.Register(HookSessionCreate, handler)
+	_ = m.Register(HookSessionCreate, handler)
 
 	now := time.Now()
 	metadata := map[string]any{"key": "value"}
-	m.TriggerSessionCreate(context.Background(), "session-1", now, metadata)
+	_ = m.TriggerSessionCreate(context.Background(), "session-1", now, metadata)
 
 	if capturedCtx == nil {
 		t.Fatal("context was not captured")
@@ -267,7 +267,7 @@ func TestManager_TriggerBeforeResponse(t *testing.T) {
 			return ContinueResult(), nil
 		},
 	}
-	m.Register(HookBeforeResponse, handler)
+	_ = m.Register(HookBeforeResponse, handler)
 
 	m.TriggerBeforeResponse(context.Background(), "response content", 100, "gpt-4")
 
@@ -291,7 +291,7 @@ func TestManager_TriggerStartupShutdown(t *testing.T) {
 	startupCalled := false
 	shutdownCalled := false
 
-	m.Register(HookStartup, &Handler{
+	_ = m.Register(HookStartup, &Handler{
 		ID:      "startup",
 		Enabled: true,
 		Handler: func(ctx context.Context, hookCtx *Context) (*Result, error) {
@@ -300,7 +300,7 @@ func TestManager_TriggerStartupShutdown(t *testing.T) {
 		},
 	})
 
-	m.Register(HookShutdown, &Handler{
+	_ = m.Register(HookShutdown, &Handler{
 		ID:      "shutdown",
 		Enabled: true,
 		Handler: func(ctx context.Context, hookCtx *Context) (*Result, error) {
@@ -326,7 +326,7 @@ func TestManager_Close(t *testing.T) {
 	m := NewManager()
 
 	handler := &Handler{ID: "test", Enabled: true}
-	m.Register(HookBeforeMessage, handler)
+	_ = m.Register(HookBeforeMessage, handler)
 
 	err := m.Close()
 	if err != nil {

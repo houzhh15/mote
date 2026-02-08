@@ -206,7 +206,7 @@ func TestFactoryRegistry_Concurrent(t *testing.T) {
 		go func(id int) {
 			defer wg.Done()
 			name := string(rune('a' + id))
-			r.Register(name, testFactory)
+	_ = r.Register(name, testFactory)
 		}(i)
 	}
 
