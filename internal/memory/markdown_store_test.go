@@ -395,8 +395,8 @@ func TestMarkdownStore_Stats(t *testing.T) {
 
 	// Create some content
 	_ = store.AppendMemory("Memory content", "Section")
-	store.AppendDailyAt(time.Date(2026, 1, 10, 12, 0, 0, 0, time.UTC), "Day 1", "")
-	store.AppendDailyAt(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC), "Day 2", "")
+	_ = store.AppendDailyAt(time.Date(2026, 1, 10, 12, 0, 0, 0, time.UTC), "Day 1", "")
+	_ = store.AppendDailyAt(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC), "Day 2", "")
 
 	stats, err := store.Stats()
 	if err != nil {

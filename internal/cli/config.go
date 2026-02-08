@@ -570,7 +570,7 @@ func runConfigScenarioSet(scenario, model string) error {
 		var errResp struct {
 			Error string `json:"error"`
 		}
-		json.NewDecoder(resp.Body).Decode(&errResp)
+		_ = json.NewDecoder(resp.Body).Decode(&errResp)
 		if errResp.Error != "" {
 			return fmt.Errorf("server error: %s", errResp.Error)
 		}

@@ -209,7 +209,7 @@ func TestRouter_HandleUpdateConfig_ProviderChange(t *testing.T) {
 
 	// Setup viper to use temp config
 	viper.SetConfigFile(configPath)
-	viper.ReadInConfig()
+	_ = viper.ReadInConfig()
 	defer viper.Reset()
 
 	router := NewRouter(nil)

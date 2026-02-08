@@ -86,7 +86,7 @@ func TestListSessions(t *testing.T) {
 	defer db.Close()
 
 	for i := 0; i < 3; i++ {
-		_ = db.CreateSession(nil)
+		_, _ = db.CreateSession(nil)
 	}
 
 	sessions, err := db.ListSessions(2, 0)

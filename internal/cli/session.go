@@ -211,7 +211,7 @@ func runSessionShow(serverURL, sessionID string) error {
 
 	var messages []messageResponse
 	if msgResp.StatusCode == http.StatusOK {
-		json.NewDecoder(msgResp.Body).Decode(&messages)
+		_ = json.NewDecoder(msgResp.Body).Decode(&messages)
 	}
 
 	// Print session details
@@ -433,7 +433,7 @@ func runSessionModelSet(serverURL, sessionID, model string) error {
 		var errResp struct {
 			Error string `json:"error"`
 		}
-		json.NewDecoder(resp.Body).Decode(&errResp)
+		_ = json.NewDecoder(resp.Body).Decode(&errResp)
 		if errResp.Error != "" {
 			return fmt.Errorf("failed: %s", errResp.Error)
 		}

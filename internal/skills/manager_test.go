@@ -328,7 +328,7 @@ func TestManager_Dependencies(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(depDir, "manifest.json"), depManifest, 0644)
 
 	// Scan
-	m.ScanDirectory(tmpDir)
+	_ = m.ScanDirectory(tmpDir)
 
 	// Try to activate dependent skill without base (should fail)
 	err := m.Activate("dep-skill", nil)
@@ -355,7 +355,7 @@ func TestManager_Dependencies(t *testing.T) {
 	}
 
 	// Deactivate in correct order
-	m.Deactivate("dep-skill")
+	_ = m.Deactivate("dep-skill")
 	err = m.Deactivate("base-skill")
 	if err != nil {
 		t.Fatalf("failed to deactivate base skill: %v", err)
@@ -392,7 +392,7 @@ func TestManager_GetInstance(t *testing.T) {
 
 	// Create a test skill
 	skillDir := filepath.Join(tmpDir, "test-skill")
-	os.MkdirAll(skillDir, 0755)
+	_ = os.MkdirAll(skillDir, 0755)
 	manifest, _ := json.Marshal(map[string]any{
 		"id":      "test-skill",
 		"name":    "Test Skill",
@@ -400,7 +400,7 @@ func TestManager_GetInstance(t *testing.T) {
 	})
 	_ = os.WriteFile(filepath.Join(skillDir, "manifest.json"), manifest, 0644)
 
-	m.LoadSkill(skillDir)
+	_ = m.LoadSkill(skillDir)
 
 	// Should not exist before activation
 	_, exists := m.GetInstance("test-skill")
@@ -409,7 +409,7 @@ func TestManager_GetInstance(t *testing.T) {
 	}
 
 	// Activate
-	m.Activate("test-skill", map[string]any{"key": "value"})
+	_ = m.Activate("test-skill", map[string]any{"key": "value"})
 
 	// Should exist after activation
 	instance, exists := m.GetInstance("test-skill")
@@ -431,7 +431,7 @@ func TestManager_GetActivePromptsAndTools(t *testing.T) {
 
 	// Create a test skill with prompts
 	skillDir := filepath.Join(tmpDir, "test-skill")
-	os.MkdirAll(skillDir, 0755)
+	_ = os.MkdirAll(skillDir, 0755)
 	manifest, _ := json.Marshal(map[string]any{
 		"id":      "test-skill",
 		"name":    "Test Skill",
@@ -442,8 +442,8 @@ func TestManager_GetActivePromptsAndTools(t *testing.T) {
 	})
 	_ = os.WriteFile(filepath.Join(skillDir, "manifest.json"), manifest, 0644)
 
-	m.LoadSkill(skillDir)
-	m.Activate("test-skill", nil)
+	_ = m.LoadSkill(skillDir)
+	_ = m.Activate("test-skill", nil)
 
 	// Check prompts
 	prompts := m.GetActivePrompts()
@@ -471,7 +471,7 @@ func TestManager_ResolvePromptFromFile(t *testing.T) {
 
 	// Create a test skill with prompt file
 	skillDir := filepath.Join(tmpDir, "test-skill")
-	os.MkdirAll(skillDir, 0755)
+	_ = os.MkdirAll(skillDir, 0755)
 
 	// Write prompt file
 	promptContent := "This is a prompt from a file"
@@ -487,8 +487,8 @@ func TestManager_ResolvePromptFromFile(t *testing.T) {
 	})
 	_ = os.WriteFile(filepath.Join(skillDir, "manifest.json"), manifest, 0644)
 
-	m.LoadSkill(skillDir)
-	m.Activate("test-skill", nil)
+	_ = m.LoadSkill(skillDir)
+	_ = m.Activate("test-skill", nil)
 
 	prompts := m.GetActivePrompts()
 	if len(prompts) != 1 {

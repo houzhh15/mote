@@ -74,7 +74,7 @@ func TestRuleEngine_AddRule_EmptyID(t *testing.T) {
 func TestRuleEngine_RemoveRule(t *testing.T) {
 	engine := NewRuleEngine()
 
-	engine.AddRule(&GatingRule{
+	_ = engine.AddRule(&GatingRule{
 		ID:      "rule-1",
 		Name:    "Test Rule",
 		Enabled: true,
@@ -103,9 +103,9 @@ func TestRuleEngine_RemoveRule_NotFound(t *testing.T) {
 func TestRuleEngine_ListRules_SortByPriority(t *testing.T) {
 	engine := NewRuleEngine()
 
-	engine.AddRule(&GatingRule{ID: "low", Name: "Low", Priority: 1, Enabled: true})
-	engine.AddRule(&GatingRule{ID: "high", Name: "High", Priority: 100, Enabled: true})
-	engine.AddRule(&GatingRule{ID: "mid", Name: "Mid", Priority: 50, Enabled: true})
+	_ = engine.AddRule(&GatingRule{ID: "low", Name: "Low", Priority: 1, Enabled: true})
+	_ = engine.AddRule(&GatingRule{ID: "high", Name: "High", Priority: 100, Enabled: true})
+	_ = engine.AddRule(&GatingRule{ID: "mid", Name: "Mid", Priority: 50, Enabled: true})
 
 	rules := engine.ListRules()
 	if len(rules) != 3 {
@@ -126,7 +126,7 @@ func TestRuleEngine_ListRules_SortByPriority(t *testing.T) {
 func TestRuleEngine_Evaluate_Keyword_Allow(t *testing.T) {
 	engine := NewRuleEngine()
 
-	engine.AddRule(&GatingRule{
+	_ = engine.AddRule(&GatingRule{
 		ID:       "allow-test",
 		Name:     "Allow Test",
 		Priority: 10,
@@ -153,7 +153,7 @@ func TestRuleEngine_Evaluate_Keyword_Allow(t *testing.T) {
 func TestRuleEngine_Evaluate_Keyword_Deny(t *testing.T) {
 	engine := NewRuleEngine()
 
-	engine.AddRule(&GatingRule{
+	_ = engine.AddRule(&GatingRule{
 		ID:       "deny-spam",
 		Name:     "Deny Spam",
 		Priority: 10,
@@ -177,7 +177,7 @@ func TestRuleEngine_Evaluate_Keyword_Deny(t *testing.T) {
 func TestRuleEngine_Evaluate_Keyword_Regex(t *testing.T) {
 	engine := NewRuleEngine()
 
-	engine.AddRule(&GatingRule{
+	_ = engine.AddRule(&GatingRule{
 		ID:       "deny-email",
 		Name:     "Deny Email",
 		Priority: 10,
@@ -198,7 +198,7 @@ func TestRuleEngine_Evaluate_Keyword_Regex(t *testing.T) {
 func TestRuleEngine_Evaluate_Length_ExceedsMax(t *testing.T) {
 	engine := NewRuleEngine()
 
-	engine.AddRule(&GatingRule{
+	_ = engine.AddRule(&GatingRule{
 		ID:       "deny-long",
 		Name:     "Deny Long Content",
 		Priority: 10,
@@ -219,7 +219,7 @@ func TestRuleEngine_Evaluate_Length_ExceedsMax(t *testing.T) {
 func TestRuleEngine_Evaluate_Length_WithinBounds(t *testing.T) {
 	engine := NewRuleEngine()
 
-	engine.AddRule(&GatingRule{
+	_ = engine.AddRule(&GatingRule{
 		ID:       "allow-reasonable",
 		Name:     "Allow Reasonable Length",
 		Priority: 10,
@@ -241,7 +241,7 @@ func TestRuleEngine_Evaluate_Length_WithinBounds(t *testing.T) {
 func TestRuleEngine_Evaluate_DisabledRule(t *testing.T) {
 	engine := NewRuleEngine()
 
-	engine.AddRule(&GatingRule{
+	_ = engine.AddRule(&GatingRule{
 		ID:       "disabled-rule",
 		Name:     "Disabled Rule",
 		Priority: 100,
@@ -266,7 +266,7 @@ func TestRuleEngine_Evaluate_PriorityOrder(t *testing.T) {
 	engine := NewRuleEngine()
 
 	// Low priority deny rule
-	engine.AddRule(&GatingRule{
+	_ = engine.AddRule(&GatingRule{
 		ID:       "deny-low",
 		Name:     "Low Priority Deny",
 		Priority: 1,
@@ -279,7 +279,7 @@ func TestRuleEngine_Evaluate_PriorityOrder(t *testing.T) {
 	})
 
 	// High priority allow rule
-	engine.AddRule(&GatingRule{
+	_ = engine.AddRule(&GatingRule{
 		ID:       "allow-high",
 		Name:     "High Priority Allow",
 		Priority: 100,
@@ -303,7 +303,7 @@ func TestRuleEngine_Evaluate_PriorityOrder(t *testing.T) {
 func TestRuleEngine_Evaluate_NoMatchingRules(t *testing.T) {
 	engine := NewRuleEngine()
 
-	engine.AddRule(&GatingRule{
+	_ = engine.AddRule(&GatingRule{
 		ID:       "deny-spam",
 		Name:     "Deny Spam",
 		Priority: 10,
@@ -327,7 +327,7 @@ func TestRuleEngine_Evaluate_NoMatchingRules(t *testing.T) {
 func TestRuleEngine_Evaluate_Transform(t *testing.T) {
 	engine := NewRuleEngine()
 
-	engine.AddRule(&GatingRule{
+	_ = engine.AddRule(&GatingRule{
 		ID:       "transform-rule",
 		Name:     "Transform Rule",
 		Priority: 10,

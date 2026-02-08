@@ -52,7 +52,7 @@ func TestHandleListWorkspaces_NilManager(t *testing.T) {
 func TestHandleGetWorkspace(t *testing.T) {
 	wm := workspace.NewWorkspaceManager()
 	tmpDir := t.TempDir()
-	wm.BindWithAlias("session-1", tmpDir, "myalias", true)
+	_ = wm.BindWithAlias("session-1", tmpDir, "myalias", true)
 
 	router := &Router{workspaceManager: wm}
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces/session-1", nil)
@@ -163,7 +163,7 @@ func TestHandleBindWorkspace_InvalidBody(t *testing.T) {
 func TestHandleUnbindWorkspace(t *testing.T) {
 	wm := workspace.NewWorkspaceManager()
 	tmpDir := t.TempDir()
-	wm.Bind("session-1", tmpDir, false)
+	_ = wm.Bind("session-1", tmpDir, false)
 
 	router := &Router{workspaceManager: wm}
 	req := httptest.NewRequest(http.MethodDelete, "/api/v1/workspaces/session-1", nil)
@@ -194,7 +194,7 @@ func TestHandleUnbindWorkspace_NotFound(t *testing.T) {
 func TestHandleListWorkspaceFiles(t *testing.T) {
 	wm := workspace.NewWorkspaceManager()
 	tmpDir := t.TempDir()
-	wm.Bind("session-1", tmpDir, false)
+	_ = wm.Bind("session-1", tmpDir, false)
 
 	router := &Router{workspaceManager: wm}
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces/session-1/files", nil)

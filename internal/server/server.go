@@ -804,11 +804,11 @@ func (s *Server) initializeMemory(db *storage.DB, agentRunner *runner.Runner, ga
 				Logger:      s.logger,
 			})
 			if recallEngine != nil {
-				hookManager.Register(hooks.HookBeforeMessage, memBridge.BeforeMessageHandler("memory-recall"))
+				_ = hookManager.Register(hooks.HookBeforeMessage, memBridge.BeforeMessageHandler("memory-recall"))
 			}
 			if captureEngine != nil {
-				hookManager.Register(hooks.HookAfterMessage, memBridge.AfterMessageHandler("memory-capture"))
-				hookManager.Register(hooks.HookSessionCreate, memBridge.SessionCreateHandler("memory-session"))
+				_ = hookManager.Register(hooks.HookAfterMessage, memBridge.AfterMessageHandler("memory-capture"))
+				_ = hookManager.Register(hooks.HookSessionCreate, memBridge.SessionCreateHandler("memory-session"))
 			}
 		}
 	}

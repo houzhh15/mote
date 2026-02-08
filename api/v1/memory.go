@@ -353,7 +353,7 @@ func (r *Router) HandleMemorySync(w http.ResponseWriter, req *http.Request) {
 		Force bool `json:"force"`
 	}
 	// Decode body if present (optional)
-	json.NewDecoder(req.Body).Decode(&syncReq)
+	_ = json.NewDecoder(req.Body).Decode(&syncReq)
 
 	ctx := req.Context()
 	count, err := r.memory.SyncFromMarkdown(ctx, syncReq.Force)

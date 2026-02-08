@@ -146,8 +146,8 @@ func TestFileConfigStore_Concurrent(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < numOps; j++ {
-				store.Get("skill-a")
-				store.List()
+				_ = store.Get("skill-a")
+				_ = store.List()
 			}
 		}()
 	}

@@ -139,7 +139,7 @@ func (r *Router) HandleActivateSkill(w http.ResponseWriter, req *http.Request) {
 	// Parse optional config
 	var configReq SkillConfigRequest
 	if req.Body != nil && req.ContentLength > 0 {
-		json.NewDecoder(req.Body).Decode(&configReq)
+		_ = json.NewDecoder(req.Body).Decode(&configReq)
 	}
 
 	if err := r.skillManager.Activate(skillID, configReq.Config); err != nil {

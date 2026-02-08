@@ -85,8 +85,8 @@ func TestCountMessages(t *testing.T) {
 	defer db.Close()
 
 	session, _ := db.CreateSession(nil)
-	_ = db.AppendMessage(session.ID, "user", "msg1", nil, "")
-	_ = db.AppendMessage(session.ID, "user", "msg2", nil, "")
+	_, _ = db.AppendMessage(session.ID, "user", "msg1", nil, "")
+	_, _ = db.AppendMessage(session.ID, "user", "msg2", nil, "")
 
 	count, err := db.CountMessages(session.ID)
 	if err != nil || count != 2 {
