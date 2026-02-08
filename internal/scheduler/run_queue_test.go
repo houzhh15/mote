@@ -35,7 +35,7 @@ func TestRunQueue(t *testing.T) {
 
 	t.Run("Enqueue and execute", func(t *testing.T) {
 		rq := NewRunQueue(10, time.Second)
-		defer rq.Shutdown(context.Background())
+		defer func() { _ = rq.Shutdown(context.Background()); }()
 
 		executed := false
 		result, err := rq.Enqueue("session1", context.Background(), func(ctx context.Context) error {
@@ -57,7 +57,7 @@ func TestRunQueue(t *testing.T) {
 
 	t.Run("Serial execution for same session", func(t *testing.T) {
 		rq := NewRunQueue(10, time.Second)
-		defer rq.Shutdown(context.Background())
+		defer func() { _ = rq.Shutdown(context.Background()); }()
 
 		var order []int
 		var mu sync.Mutex
@@ -91,7 +91,7 @@ func TestRunQueue(t *testing.T) {
 
 	t.Run("Parallel execution for different sessions", func(t *testing.T) {
 		rq := NewRunQueue(10, time.Second)
-		defer rq.Shutdown(context.Background())
+		defer func() { _ = rq.Shutdown(context.Background()); }()
 
 		var running int32
 		var maxRunning int32
@@ -131,7 +131,7 @@ func TestRunQueue(t *testing.T) {
 
 	t.Run("Error propagation", func(t *testing.T) {
 		rq := NewRunQueue(10, time.Second)
-		defer rq.Shutdown(context.Background())
+		defer func() { _ = rq.Shutdown(context.Background()); }()
 
 		expectedErr := errors.New("task error")
 		result, err := rq.Enqueue("session1", context.Background(), func(ctx context.Context) error {
@@ -149,7 +149,7 @@ func TestRunQueue(t *testing.T) {
 
 	t.Run("Context cancellation", func(t *testing.T) {
 		rq := NewRunQueue(10, time.Second)
-		defer rq.Shutdown(context.Background())
+		defer func() { _ = rq.Shutdown(context.Background()); }()
 
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel() // Cancel immediately
@@ -164,7 +164,7 @@ func TestRunQueue(t *testing.T) {
 
 	t.Run("Cancel session", func(t *testing.T) {
 		rq := NewRunQueue(10, time.Second)
-		defer rq.Shutdown(context.Background())
+		defer func() { _ = rq.Shutdown(context.Background()); }()
 
 		// Start a blocking task
 		started := make(chan struct{})
@@ -197,7 +197,7 @@ func TestRunQueue(t *testing.T) {
 
 	t.Run("ActiveSessions", func(t *testing.T) {
 		rq := NewRunQueue(10, time.Second)
-		defer rq.Shutdown(context.Background())
+		defer func() { _ = rq.Shutdown(context.Background()); }()
 
 		if rq.ActiveSessions() != 0 {
 			t.Errorf("expected 0 active sessions, got %d", rq.ActiveSessions())
@@ -231,7 +231,7 @@ func TestRunQueue(t *testing.T) {
 
 	t.Run("Pending", func(t *testing.T) {
 		rq := NewRunQueue(10, time.Second)
-		defer rq.Shutdown(context.Background())
+		defer func() { _ = rq.Shutdown(context.Background()); }()
 
 		// Enqueue a blocking task
 		blockCh := make(chan struct{})
@@ -263,7 +263,7 @@ func TestRunQueue(t *testing.T) {
 
 		var completed int32
 		for i := 0; i < 3; i++ {
-			rq.Enqueue(string(rune('a'+i)), context.Background(), func(ctx context.Context) error {
+			_, _ = rq.Enqueue(string(rune('a'+i)), context.Background(), func(ctx context.Context) error {
 				time.Sleep(50 * time.Millisecond)
 				atomic.AddInt32(&completed, 1)
 				return nil
@@ -281,7 +281,7 @@ func TestRunQueue(t *testing.T) {
 
 	t.Run("Enqueue after shutdown", func(t *testing.T) {
 		rq := NewRunQueue(10, time.Second)
-		rq.Shutdown(context.Background())
+		rq.Shutdown(context.Background()); }()
 
 		_, err := rq.Enqueue("session1", context.Background(), func(ctx context.Context) error {
 			return nil
@@ -294,7 +294,7 @@ func TestRunQueue(t *testing.T) {
 
 func TestRunQueueIdleTimeout(t *testing.T) {
 	rq := NewRunQueue(10, 100*time.Millisecond)
-	defer rq.Shutdown(context.Background())
+	defer func() { _ = rq.Shutdown(context.Background()); }()
 
 	// Enqueue and complete a task
 	result, err := rq.Enqueue("session1", context.Background(), func(ctx context.Context) error {

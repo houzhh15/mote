@@ -11,7 +11,7 @@ func TestAppendMessage(t *testing.T) {
 	db, _ := Open(filepath.Join(tmpDir, "test.db"))
 	defer db.Close()
 
-	session, _ := db.CreateSession(nil)
+	session, _, _ := db.CreateSession(nil)
 	msg, err := db.AppendMessage(session.ID, "user", "Hello", nil, "")
 	if err != nil {
 		t.Fatalf("AppendMessage failed: %v", err)
@@ -26,7 +26,7 @@ func TestAppendMessage_WithToolCalls(t *testing.T) {
 	db, _ := Open(filepath.Join(tmpDir, "test.db"))
 	defer db.Close()
 
-	session, _ := db.CreateSession(nil)
+	session, _, _ := db.CreateSession(nil)
 	toolCalls := []ToolCall{{ID: "call_1", Type: "function", Function: json.RawMessage(`{}`)}}
 	msg, err := db.AppendMessage(session.ID, "assistant", "", toolCalls, "")
 	if err != nil || len(msg.ToolCalls) != 1 {
@@ -39,9 +39,9 @@ func TestGetMessages(t *testing.T) {
 	db, _ := Open(filepath.Join(tmpDir, "test.db"))
 	defer db.Close()
 
-	session, _ := db.CreateSession(nil)
+	session, _, _ := db.CreateSession(nil)
 	for i := 0; i < 3; i++ {
-		db.AppendMessage(session.ID, "user", "msg", nil, "")
+		_, _ = db.AppendMessage(session.ID, "user", "msg", nil, "")
 	}
 
 	messages, err := db.GetMessages(session.ID, 0)
@@ -55,8 +55,8 @@ func TestGetMessage(t *testing.T) {
 	db, _ := Open(filepath.Join(tmpDir, "test.db"))
 	defer db.Close()
 
-	session, _ := db.CreateSession(nil)
-	created, _ := db.AppendMessage(session.ID, "user", "Hello", nil, "")
+	session, _, _ := db.CreateSession(nil)
+	created, _, _ := db.AppendMessage(session.ID, "user", "Hello", nil, "")
 	got, err := db.GetMessage(created.ID)
 	if err != nil || got.ID != created.ID {
 		t.Error("GetMessage failed")
@@ -68,8 +68,8 @@ func TestDeleteMessage(t *testing.T) {
 	db, _ := Open(filepath.Join(tmpDir, "test.db"))
 	defer db.Close()
 
-	session, _ := db.CreateSession(nil)
-	msg, _ := db.AppendMessage(session.ID, "user", "Hello", nil, "")
+	session, _, _ := db.CreateSession(nil)
+	msg, _, _ := db.AppendMessage(session.ID, "user", "Hello", nil, "")
 	if err := db.DeleteMessage(msg.ID); err != nil {
 		t.Fatalf("DeleteMessage failed: %v", err)
 	}
@@ -84,7 +84,7 @@ func TestCountMessages(t *testing.T) {
 	db, _ := Open(filepath.Join(tmpDir, "test.db"))
 	defer db.Close()
 
-	session, _ := db.CreateSession(nil)
+	session, _, _ := db.CreateSession(nil)
 	db.AppendMessage(session.ID, "user", "msg1", nil, "")
 	db.AppendMessage(session.ID, "user", "msg2", nil, "")
 
@@ -99,8 +99,8 @@ func TestCascadeDelete(t *testing.T) {
 	db, _ := Open(filepath.Join(tmpDir, "test.db"))
 	defer db.Close()
 
-	session, _ := db.CreateSession(nil)
-	msg, _ := db.AppendMessage(session.ID, "user", "Hello", nil, "")
+	session, _, _ := db.CreateSession(nil)
+	msg, _, _ := db.AppendMessage(session.ID, "user", "Hello", nil, "")
 	db.DeleteSession(session.ID)
 
 	_, err := db.GetMessage(msg.ID)

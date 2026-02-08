@@ -201,7 +201,7 @@ func TestManager_RequestApproval_MaxPending(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		go func() {
 			call := &policy.ToolCall{Name: "shell", SessionID: "session"}
-			manager.RequestApproval(context.Background(), call, "test")
+			_, _ = manager.RequestApproval(context.Background(), call, "test")
 		}()
 	}
 
@@ -235,7 +235,7 @@ func TestManager_GetPending(t *testing.T) {
 	}
 
 	go func() {
-		manager.RequestApproval(context.Background(), call, "test")
+		_, _ = manager.RequestApproval(context.Background(), call, "test")
 	}()
 
 	time.Sleep(50 * time.Millisecond)

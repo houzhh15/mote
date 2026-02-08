@@ -205,7 +205,7 @@ func TestRouter_HandleUpdateConfig_ProviderChange(t *testing.T) {
 	// Create temp config file for viper
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "config.yaml")
-	os.WriteFile(configPath, []byte("provider:\n  default: copilot\n"), 0644)
+	_ = os.WriteFile(configPath, []byte("provider:\n  default: copilot\n"), 0644)
 
 	// Setup viper to use temp config
 	viper.SetConfigFile(configPath)

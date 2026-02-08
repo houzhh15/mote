@@ -457,15 +457,15 @@ func (r *Router) HandleMemoryExport(w http.ResponseWriter, req *http.Request) {
 		w.Header().Set("Content-Disposition", "attachment; filename=memory-export.md")
 		w.WriteHeader(http.StatusOK)
 
-		w.Write([]byte("# Memory Export\n\n"))
-		w.Write([]byte("Exported at: " + time.Now().Format(time.RFC3339) + "\n\n"))
+		_, _ = w.Write([]byte("# Memory Export\n\n"))
+		_, _ = w.Write([]byte("Exported at: " + time.Now().Format(time.RFC3339) + "\n\n"))
 
 		for _, entry := range entries {
-			w.Write([]byte("---\n\n"))
-			w.Write([]byte("## " + entry.ID + "\n\n"))
-			w.Write([]byte("**Source:** " + entry.Source + "\n"))
-			w.Write([]byte("**Created:** " + entry.CreatedAt.Format(time.RFC3339) + "\n\n"))
-			w.Write([]byte(entry.Content + "\n\n"))
+			_, _ = w.Write([]byte("---\n\n"))
+			_, _ = w.Write([]byte("## " + entry.ID + "\n\n"))
+			_, _ = w.Write([]byte("**Source:** " + entry.Source + "\n"))
+			_, _ = w.Write([]byte("**Created:** " + entry.CreatedAt.Format(time.RFC3339) + "\n\n"))
+			_, _ = w.Write([]byte(entry.Content + "\n\n"))
 		}
 		return
 	}

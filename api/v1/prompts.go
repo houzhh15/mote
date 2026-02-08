@@ -79,7 +79,7 @@ func (r *Router) HandleListPrompts(w http.ResponseWriter, req *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 // HandleGetPrompt returns a specific prompt.
@@ -110,7 +110,7 @@ func (r *Router) HandleGetPrompt(w http.ResponseWriter, req *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(info)
+	_ = json.NewEncoder(w).Encode(info)
 }
 
 // HandleCreatePrompt creates a new prompt.
@@ -165,7 +165,7 @@ func (r *Router) HandleCreatePrompt(w http.ResponseWriter, req *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(info)
+	_ = json.NewEncoder(w).Encode(info)
 }
 
 // HandleUpdatePrompt updates an existing prompt.
@@ -234,7 +234,7 @@ func (r *Router) HandleUpdatePrompt(w http.ResponseWriter, req *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(info)
+	_ = json.NewEncoder(w).Encode(info)
 }
 
 // HandleDeletePrompt deletes a prompt.
@@ -286,7 +286,7 @@ func (r *Router) HandleTogglePrompt(w http.ResponseWriter, req *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"status":  "ok",
 		"enabled": !prompt.Enabled,
 	})

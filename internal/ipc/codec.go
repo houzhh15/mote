@@ -142,7 +142,7 @@ func (fr *FrameReader) ReadMessage() (*Message, error) {
 	}
 
 	frame := make([]byte, totalLen)
-	fr.buf.Read(frame)
+	_, _ = fr.buf.Read(frame)
 
 	var msg Message
 	if err := json.Unmarshal(frame[HeaderSize:], &msg); err != nil {

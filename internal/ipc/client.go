@@ -294,7 +294,7 @@ func (c *Client) readLoop() {
 			c.connMu.Unlock()
 			return
 		}
-		c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		_ = c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 		c.connMu.Unlock()
 
 		msg, err := c.decoder.Decode()

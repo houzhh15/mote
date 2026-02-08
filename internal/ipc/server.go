@@ -255,7 +255,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 		default:
 		}
 
-		conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+		_ = conn.SetReadDeadline(time.Now().Add(30 * time.Second))
 
 		msg, err := decoder.Decode()
 		if err != nil {

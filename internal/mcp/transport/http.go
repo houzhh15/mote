@@ -103,7 +103,7 @@ func (t *HTTPServerTransport) handleMCP(w http.ResponseWriter, r *http.Request) 
 	select {
 	case resp := <-sessionCh:
 		w.Header().Set("Content-Type", "application/json")
-		w.Write(resp)
+		_, _ = w.Write(resp)
 	case <-time.After(30 * time.Second):
 		http.Error(w, "Timeout", http.StatusGatewayTimeout)
 	case <-t.ctx.Done():

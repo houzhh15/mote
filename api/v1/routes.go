@@ -444,7 +444,7 @@ func (r *Router) HandleCreateSession(w http.ResponseWriter, req *http.Request) {
 	// Parse request body for optional scenario
 	var body CreateSessionRequest
 	if req.Body != nil {
-		json.NewDecoder(req.Body).Decode(&body) // Ignore errors, use defaults
+		_ = json.NewDecoder(req.Body).Decode(&body) // Ignore errors, use defaults
 	}
 
 	// Generate a new session ID

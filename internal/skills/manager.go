@@ -347,7 +347,7 @@ func (m *Manager) Deactivate(id string) error {
 	// Unregister tools
 	if m.toolRegistry != nil {
 		for _, tool := range instance.Tools {
-			m.toolRegistry.Unregister(tool.Name())
+			_ = m.toolRegistry.Unregister(tool.Name())
 		}
 	}
 
@@ -455,7 +455,7 @@ func (m *Manager) rollbackTools(instance *SkillInstance) {
 		return
 	}
 	for _, tool := range instance.Tools {
-		m.toolRegistry.Unregister(tool.Name())
+		_ = m.toolRegistry.Unregister(tool.Name())
 	}
 }
 

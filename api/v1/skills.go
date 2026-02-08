@@ -81,7 +81,7 @@ func (r *Router) HandleListSkills(w http.ResponseWriter, req *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 // HandleGetSkill returns a specific skill.
@@ -123,7 +123,7 @@ func (r *Router) HandleGetSkill(w http.ResponseWriter, req *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(info)
+	_ = json.NewEncoder(w).Encode(info)
 }
 
 // HandleActivateSkill activates a skill.
@@ -156,7 +156,7 @@ func (r *Router) HandleActivateSkill(w http.ResponseWriter, req *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
+	_ = json.NewEncoder(w).Encode(map[string]string{
 		"status":  "ok",
 		"message": "skill activated",
 	})
@@ -186,7 +186,7 @@ func (r *Router) HandleDeactivateSkill(w http.ResponseWriter, req *http.Request)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
+	_ = json.NewEncoder(w).Encode(map[string]string{
 		"status":  "ok",
 		"message": "skill deactivated",
 	})
@@ -209,7 +209,7 @@ func (r *Router) HandleGetSkillConfig(w http.ResponseWriter, req *http.Request) 
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"skill_id": skillID,
 		"config":   config,
 	})
@@ -237,7 +237,7 @@ func (r *Router) HandleSetSkillConfig(w http.ResponseWriter, req *http.Request) 
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
+	_ = json.NewEncoder(w).Encode(map[string]string{
 		"status":  "ok",
 		"message": "config updated",
 	})
@@ -257,7 +257,7 @@ func (r *Router) HandleReloadSkills(w http.ResponseWriter, req *http.Request) {
 
 	skillList := r.skillManager.ListSkills()
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"status":  "ok",
 		"message": "skills reloaded",
 		"count":   len(skillList),
@@ -306,7 +306,7 @@ func (r *Router) HandleCreateSkill(w http.ResponseWriter, req *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(CreateSkillResponse{
+	_ = json.NewEncoder(w).Encode(CreateSkillResponse{
 		Status:  "ok",
 		Message: "skill template created",
 		Path:    path,
@@ -362,7 +362,7 @@ func (r *Router) HandleOpenSkillsDir(w http.ResponseWriter, req *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"status":  "ok",
 		"message": "opened skills directory",
 		"path":    dir,

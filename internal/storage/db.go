@@ -87,7 +87,7 @@ func (db *DB) WithTx(fn func(*Tx) error) error {
 	}
 
 	if err := fn(tx); err != nil {
-		tx.Rollback()
+		_ = tx.Rollback()
 		return err
 	}
 

@@ -146,7 +146,7 @@ func (m *Manager) StopAll() error {
 	// Send exit signal via IPC first
 	if m.ipc != nil {
 		exitMsg := ipc.NewMessage(ipc.MsgExit, ipc.RoleMain)
-		m.ipc.Broadcast(exitMsg)
+		_ = m.ipc.Broadcast(exitMsg)
 
 		// Give processes time to exit gracefully
 		time.Sleep(500 * time.Millisecond)
@@ -281,9 +281,9 @@ func (m *Manager) stopProcess(proc *Process) error {
 
 	// Try graceful termination first
 	if runtime.GOOS == "windows" {
-		proc.cmd.Process.Kill()
+		_ = proc.cmd.Process.Kill()
 	} else {
-		proc.cmd.Process.Signal(os.Interrupt)
+		_ = proc.cmd.Process.Signal(os.Interrupt)
 
 		// Wait for graceful exit
 		select {
@@ -292,7 +292,7 @@ func (m *Manager) stopProcess(proc *Process) error {
 			return nil
 		case <-time.After(5 * time.Second):
 			// Force kill
-			proc.cmd.Process.Kill()
+			_ = proc.cmd.Process.Kill()
 		}
 	}
 

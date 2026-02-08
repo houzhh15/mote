@@ -67,7 +67,7 @@ func (r *Router) HandleListWorkspaces(w http.ResponseWriter, req *http.Request) 
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"workspaces": responses,
 	})
 }
@@ -98,7 +98,7 @@ func (r *Router) HandleGetWorkspace(w http.ResponseWriter, req *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 // HandleBindWorkspace binds a workspace to a session.
@@ -138,7 +138,7 @@ func (r *Router) HandleBindWorkspace(w http.ResponseWriter, req *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 // HandleUnbindWorkspace removes a workspace binding.
@@ -192,5 +192,5 @@ func (r *Router) HandleListWorkspaceFiles(w http.ResponseWriter, req *http.Reque
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(responses)
+	_ = json.NewEncoder(w).Encode(responses)
 }

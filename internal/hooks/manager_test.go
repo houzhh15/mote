@@ -269,7 +269,7 @@ func TestManager_TriggerBeforeResponse(t *testing.T) {
 	}
 	_ = m.Register(HookBeforeResponse, handler)
 
-	m.TriggerBeforeResponse(context.Background(), "response content", 100, "gpt-4")
+	_, _ = m.TriggerBeforeResponse(context.Background(), "response content", 100, "gpt-4")
 
 	if capturedCtx == nil {
 		t.Fatal("context was not captured")
@@ -311,12 +311,12 @@ func TestManager_TriggerStartupShutdown(t *testing.T) {
 
 	ctx := context.Background()
 
-	m.TriggerStartup(ctx)
+	_, _ = m.TriggerStartup(ctx)
 	if !startupCalled {
 		t.Error("startup handler was not called")
 	}
 
-	m.TriggerShutdown(ctx)
+	_, _ = m.TriggerShutdown(ctx)
 	if !shutdownCalled {
 		t.Error("shutdown handler was not called")
 	}

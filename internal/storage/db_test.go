@@ -163,7 +163,7 @@ func TestBegin(t *testing.T) {
 
 	_, err = tx.Exec("INSERT INTO kv_store (key, value) VALUES (?, ?)", "manual_key", "manual_value")
 	if err != nil {
-		tx.Rollback()
+		_ = tx.Rollback()
 		t.Fatalf("insert failed: %v", err)
 	}
 
