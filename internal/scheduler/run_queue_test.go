@@ -281,7 +281,7 @@ func TestRunQueue(t *testing.T) {
 
 	t.Run("Enqueue after shutdown", func(t *testing.T) {
 		rq := NewRunQueue(10, time.Second)
-		rq.Shutdown(context.Background()); }()
+		_ = rq.Shutdown(context.Background())
 
 		_, err := rq.Enqueue("session1", context.Background(), func(ctx context.Context) error {
 			return nil
