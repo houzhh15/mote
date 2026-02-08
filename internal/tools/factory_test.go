@@ -12,9 +12,9 @@ type factoryMockTool struct {
 	config map[string]any
 }
 
-func (t *factoryMockTool) Name() string                    { return t.name }
-func (t *factoryMockTool) Description() string             { return "factory mock tool" }
-func (t *factoryMockTool) Parameters() map[string]any      { return map[string]any{"type": "object"} }
+func (t *factoryMockTool) Name() string               { return t.name }
+func (t *factoryMockTool) Description() string        { return "factory mock tool" }
+func (t *factoryMockTool) Parameters() map[string]any { return map[string]any{"type": "object"} }
 func (t *factoryMockTool) Execute(ctx context.Context, args map[string]any) (ToolResult, error) {
 	return NewSuccessResult("mock result"), nil
 }

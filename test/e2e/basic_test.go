@@ -1,10 +1,25 @@
 package e2e
 
 import (
+	"net"
 	"testing"
+	"time"
 )
 
+func isServerRunning() bool {
+	conn, err := net.DialTimeout("tcp", "localhost:18788", 1*time.Second)
+	if err != nil {
+		return false
+	}
+	conn.Close()
+	return true
+}
+
 func TestHealth_Status(t *testing.T) {
+	if !isServerRunning() {
+		t.Skip("Mote service not running, skipping e2e test")
+	}
+
 	health := getHealth(t)
 
 	status, ok := health["status"].(string)
@@ -23,6 +38,10 @@ func TestHealth_Status(t *testing.T) {
 }
 
 func TestSessions_List(t *testing.T) {
+	if !isServerRunning() {
+		t.Skip("Mote service not running, skipping e2e test")
+	}
+
 	// This should return an empty list or existing sessions
 	sessions := listSessions(t)
 
@@ -33,6 +52,10 @@ func TestSessions_List(t *testing.T) {
 }
 
 func TestTools_List(t *testing.T) {
+	if !isServerRunning() {
+		t.Skip("Mote service not running, skipping e2e test")
+	}
+
 	// This should return available tools
 	tools := listTools(t)
 
@@ -43,6 +66,10 @@ func TestTools_List(t *testing.T) {
 }
 
 func TestCronJobs_List(t *testing.T) {
+	if !isServerRunning() {
+		t.Skip("Mote service not running, skipping e2e test")
+	}
+
 	// This should return cron jobs
 	jobs := listCronJobs(t)
 
@@ -53,6 +80,10 @@ func TestCronJobs_List(t *testing.T) {
 }
 
 func TestMCP_Servers_List(t *testing.T) {
+	if !isServerRunning() {
+		t.Skip("Mote service not running, skipping e2e test")
+	}
+
 	// This should return MCP servers
 	servers := listMCPServers(t)
 
@@ -63,6 +94,10 @@ func TestMCP_Servers_List(t *testing.T) {
 }
 
 func TestMCP_Tools_List(t *testing.T) {
+	if !isServerRunning() {
+		t.Skip("Mote service not running, skipping e2e test")
+	}
+
 	// This should return MCP tools
 	tools := listMCPTools(t)
 

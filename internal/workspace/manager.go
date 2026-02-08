@@ -159,8 +159,8 @@ func (m *WorkspaceManager) Unbind(sessionID string) error {
 
 // Get returns the workspace binding for a session.
 func (m *WorkspaceManager) Get(sessionID string) (*WorkspaceBinding, bool) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
 	binding, exists := m.bindings[sessionID]
 	if exists {
