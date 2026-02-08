@@ -39,7 +39,7 @@ func TestParseLevel(t *testing.T) {
 }
 
 func TestInitConsoleFormat(t *testing.T) {
-	defer Close()
+	defer func() { _ = Close() }()
 
 	err := Init(LogConfig{
 		Level:  "debug",
@@ -56,7 +56,7 @@ func TestInitConsoleFormat(t *testing.T) {
 }
 
 func TestInitJSONFormat(t *testing.T) {
-	defer Close()
+	defer func() { _ = Close() }()
 
 	err := Init(LogConfig{
 		Level:  "info",
@@ -76,7 +76,7 @@ func TestInitWithFile(t *testing.T) {
 	tmpDir := t.TempDir()
 	logPath := filepath.Join(tmpDir, "test.log")
 
-	defer Close()
+	defer func() { _ = Close() }()
 
 	err := Init(LogConfig{
 		Level:  "debug",
@@ -104,7 +104,7 @@ func TestInitWithFile(t *testing.T) {
 }
 
 func TestInitWithInvalidFile(t *testing.T) {
-	defer Close()
+	defer func() { _ = Close() }()
 
 	err := Init(LogConfig{
 		Level:  "info",
@@ -117,7 +117,7 @@ func TestInitWithInvalidFile(t *testing.T) {
 }
 
 func TestWith(t *testing.T) {
-	defer Close()
+	defer func() { _ = Close() }()
 
 	err := Init(LogConfig{
 		Level:  "debug",
@@ -161,7 +161,7 @@ func TestLevelFiltering(t *testing.T) {
 }
 
 func TestConvenienceFunctions(t *testing.T) {
-	defer Close()
+	defer func() { _ = Close() }()
 
 	err := Init(LogConfig{
 		Level:  "debug",

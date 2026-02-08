@@ -25,8 +25,8 @@ func TestKVSet_Overwrite(t *testing.T) {
 	db, _ := Open(filepath.Join(tmpDir, "test.db"))
 	defer db.Close()
 
-	db.KVSet("key1", "value1", 0)
-	db.KVSet("key1", "value2", 0)
+	_ = db.KVSet("key1", "value1", 0)
+	_ = db.KVSet("key1", "value2", 0)
 	value, _ := db.KVGet("key1")
 	if value != "value2" {
 		t.Error("KVSet overwrite failed")
@@ -49,7 +49,7 @@ func TestKVGet_Expired(t *testing.T) {
 	db, _ := Open(filepath.Join(tmpDir, "test.db"))
 	defer db.Close()
 
-	db.KVSet("expired", "value", time.Nanosecond)
+	_ = db.KVSet("expired", "value", time.Nanosecond)
 	time.Sleep(time.Millisecond)
 	_, err := db.KVGet("expired")
 	if err != ErrNotFound {
@@ -62,7 +62,7 @@ func TestKVDelete(t *testing.T) {
 	db, _ := Open(filepath.Join(tmpDir, "test.db"))
 	defer db.Close()
 
-	db.KVSet("del_key", "value", 0)
+	_ = db.KVSet("del_key", "value", 0)
 	if err := db.KVDelete("del_key"); err != nil {
 		t.Fatalf("KVDelete failed: %v", err)
 	}
@@ -77,9 +77,9 @@ func TestKVList(t *testing.T) {
 	db, _ := Open(filepath.Join(tmpDir, "test.db"))
 	defer db.Close()
 
-	db.KVSet("prefix:a", "va", 0)
-	db.KVSet("prefix:b", "vb", 0)
-	db.KVSet("other:c", "vc", 0)
+	_ = db.KVSet("prefix:a", "va", 0)
+	_ = db.KVSet("prefix:b", "vb", 0)
+	_ = db.KVSet("other:c", "vc", 0)
 
 	result, err := db.KVList("prefix:")
 	if err != nil || len(result) != 2 {
@@ -92,9 +92,9 @@ func TestKVCleanExpired(t *testing.T) {
 	db, _ := Open(filepath.Join(tmpDir, "test.db"))
 	defer db.Close()
 
-	db.KVSet("valid", "v", 0)
-	db.KVSet("exp1", "v", time.Nanosecond)
-	db.KVSet("exp2", "v", time.Nanosecond)
+	_ = db.KVSet("valid", "v", 0)
+	_ = db.KVSet("exp1", "v", time.Nanosecond)
+	_ = db.KVSet("exp2", "v", time.Nanosecond)
 	time.Sleep(time.Millisecond)
 
 	deleted, err := db.KVCleanExpired()
@@ -113,7 +113,7 @@ func TestKVExists(t *testing.T) {
 		t.Error("nonexistent key should not exist")
 	}
 
-	db.KVSet("exists_key", "v", 0)
+	_ = db.KVSet("exists_key", "v", 0)
 	exists, _ = db.KVExists("exists_key")
 	if !exists {
 		t.Error("exists_key should exist")

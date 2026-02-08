@@ -15,7 +15,7 @@ import (
 func registerFS(vm *goja.Runtime, mote *goja.Object, hctx *Context) error {
 	fsObj := vm.NewObject()
 
-	fsObj.Set("read", func(call goja.FunctionCall) goja.Value {
+	_ = fsObj.Set("read", func(call goja.FunctionCall) goja.Value {
 		if len(call.Arguments) < 1 {
 			panic(vm.NewTypeError("path is required"))
 		}
@@ -38,7 +38,7 @@ func registerFS(vm *goja.Runtime, mote *goja.Object, hctx *Context) error {
 		return vm.ToValue(string(content))
 	})
 
-	fsObj.Set("write", func(call goja.FunctionCall) goja.Value {
+	_ = fsObj.Set("write", func(call goja.FunctionCall) goja.Value {
 		if len(call.Arguments) < 2 {
 			panic(vm.NewTypeError("path and content are required"))
 		}
@@ -69,7 +69,7 @@ func registerFS(vm *goja.Runtime, mote *goja.Object, hctx *Context) error {
 		return goja.Undefined()
 	})
 
-	fsObj.Set("exists", func(call goja.FunctionCall) goja.Value {
+	_ = fsObj.Set("exists", func(call goja.FunctionCall) goja.Value {
 		if len(call.Arguments) < 1 {
 			panic(vm.NewTypeError("path is required"))
 		}
@@ -86,7 +86,7 @@ func registerFS(vm *goja.Runtime, mote *goja.Object, hctx *Context) error {
 		return vm.ToValue(err == nil)
 	})
 
-	fsObj.Set("list", func(call goja.FunctionCall) goja.Value {
+	_ = fsObj.Set("list", func(call goja.FunctionCall) goja.Value {
 		if len(call.Arguments) < 1 {
 			panic(vm.NewTypeError("path is required"))
 		}
@@ -118,7 +118,7 @@ func registerFS(vm *goja.Runtime, mote *goja.Object, hctx *Context) error {
 		return vm.ToValue(names)
 	})
 
-	mote.Set("fs", fsObj)
+	_ = mote.Set("fs", fsObj)
 	return nil
 }
 

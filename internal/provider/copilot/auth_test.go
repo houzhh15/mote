@@ -100,7 +100,7 @@ func TestRequestDeviceCode_Success(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
@@ -138,7 +138,7 @@ func TestRequestDeviceCode_Success(t *testing.T) {
 func TestRequestDeviceCode_Error(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte(`{"error": "invalid_request"}`))
+		_, _ = w.Write([]byte(`{"error": "invalid_request"}`))
 	}))
 	defer server.Close()
 
@@ -183,7 +183,7 @@ func TestPollForAccessToken_Success(t *testing.T) {
 			Scope:       "read:user",
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
@@ -217,7 +217,7 @@ func TestPollForAccessToken_ExpiredToken(t *testing.T) {
 			ErrorDesc: "Device code has expired",
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
@@ -243,7 +243,7 @@ func TestPollForAccessToken_AccessDenied(t *testing.T) {
 			ErrorDesc: "User denied access",
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
@@ -268,7 +268,7 @@ func TestPollForAccessToken_ContextCancelled(t *testing.T) {
 			Error: "authorization_pending",
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
@@ -303,7 +303,7 @@ func TestValidateGitHubToken_Valid(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"login": "testuser", "id": 12345}`))
+		_, _ = w.Write([]byte(`{"login": "testuser", "id": 12345}`))
 	}))
 	defer server.Close()
 
@@ -328,7 +328,7 @@ func TestValidateGitHubToken_Valid(t *testing.T) {
 func TestValidateGitHubToken_Invalid(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
-		w.Write([]byte(`{"message": "Bad credentials"}`))
+		_, _ = w.Write([]byte(`{"message": "Bad credentials"}`))
 	}))
 	defer server.Close()
 

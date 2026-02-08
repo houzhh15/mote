@@ -70,7 +70,7 @@ func Register(vm *goja.Runtime, hctx *Context) error {
 	}
 
 	// Set mote as global object
-	vm.Set("mote", mote)
+	_ = vm.Set("mote", mote)
 
 	return nil
 }
@@ -81,17 +81,17 @@ func registerContext(vm *goja.Runtime, mote *goja.Object, hctx *Context) error {
 
 	// Extract session_id and agent_id from Go context
 	if sessionID, ok := tools.SessionIDFromContext(hctx.Ctx); ok && sessionID != "" {
-		ctxObj.Set("session_id", sessionID)
+		_ = ctxObj.Set("session_id", sessionID)
 	}
 	if agentID, ok := tools.AgentIDFromContext(hctx.Ctx); ok && agentID != "" {
-		ctxObj.Set("agent_id", agentID)
+		_ = ctxObj.Set("agent_id", agentID)
 	}
 
 	// Set execution info
 	ctxObj.Set("script_name", hctx.ScriptName)
 	ctxObj.Set("execution_id", hctx.ExecutionID)
 
-	mote.Set("context", ctxObj)
+	_ = mote.Set("context", ctxObj)
 	return nil
 }
 

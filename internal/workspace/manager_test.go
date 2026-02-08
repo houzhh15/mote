@@ -52,7 +52,7 @@ func TestWorkspaceManager_Bind_NonexistentPath(t *testing.T) {
 func TestWorkspaceManager_Bind_FileNotDir(t *testing.T) {
 	manager := NewWorkspaceManager()
 	tmpFile := filepath.Join(t.TempDir(), "file.txt")
-	os.WriteFile(tmpFile, []byte("test"), 0644)
+	_ = os.WriteFile(tmpFile, []byte("test"), 0644)
 
 	err := manager.Bind("session-1", tmpFile, false)
 	if err == nil {
@@ -184,9 +184,9 @@ func TestWorkspaceManager_ListFiles(t *testing.T) {
 	manager := NewWorkspaceManager()
 	tmpDir := t.TempDir()
 
-	os.WriteFile(filepath.Join(tmpDir, "file1.txt"), []byte("test"), 0644)
-	os.WriteFile(filepath.Join(tmpDir, "file2.txt"), []byte("test"), 0644)
-	os.MkdirAll(filepath.Join(tmpDir, "subdir"), 0755)
+	_ = os.WriteFile(filepath.Join(tmpDir, "file1.txt"), []byte("test"), 0644)
+	_ = os.WriteFile(filepath.Join(tmpDir, "file2.txt"), []byte("test"), 0644)
+	_ = os.MkdirAll(filepath.Join(tmpDir, "subdir"), 0755)
 
 	_ = manager.Bind("session-1", tmpDir, false)
 
@@ -216,7 +216,7 @@ func TestWorkspaceManager_ReadFile(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	content := "test content"
-	os.WriteFile(filepath.Join(tmpDir, "test.txt"), []byte(content), 0644)
+	_ = os.WriteFile(filepath.Join(tmpDir, "test.txt"), []byte(content), 0644)
 
 	_ = manager.Bind("session-1", tmpDir, false)
 

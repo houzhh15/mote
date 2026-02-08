@@ -119,7 +119,7 @@ func TestFSRead(t *testing.T) {
 		t.Fatalf("Register failed: %v", err)
 	}
 
-	vm.Set("testPath", tmpFile)
+	_ = vm.Set("testPath", tmpFile)
 	result, err := vm.RunString(`mote.fs.read(testPath)`)
 	if err != nil {
 		t.Fatalf("fs.read failed: %v", err)
@@ -151,7 +151,7 @@ func TestFSWrite(t *testing.T) {
 		t.Fatalf("Register failed: %v", err)
 	}
 
-	vm.Set("testPath", tmpFile)
+	_ = vm.Set("testPath", tmpFile)
 	_, err = vm.RunString(`mote.fs.write(testPath, "test content")`)
 	if err != nil {
 		t.Fatalf("fs.write failed: %v", err)
@@ -191,7 +191,7 @@ func TestFSExists(t *testing.T) {
 		t.Fatalf("Register failed: %v", err)
 	}
 
-	vm.Set("existsPath", tmpFile)
+	_ = vm.Set("existsPath", tmpFile)
 	result, err := vm.RunString(`mote.fs.exists(existsPath)`)
 	if err != nil {
 		t.Fatalf("fs.exists failed: %v", err)
@@ -200,7 +200,7 @@ func TestFSExists(t *testing.T) {
 		t.Error("expected exists to return true for existing file")
 	}
 
-	vm.Set("noExistsPath", tmpDir+"/noexist.txt")
+	_ = vm.Set("noExistsPath", tmpDir+"/noexist.txt")
 	result, err = vm.RunString(`mote.fs.exists(noExistsPath)`)
 	if err != nil {
 		t.Fatalf("fs.exists failed: %v", err)
@@ -214,7 +214,7 @@ func TestFSList(t *testing.T) {
 	tmpDir := t.TempDir()
 	os.WriteFile(tmpDir+"/file1.txt", []byte(""), 0644)
 	os.WriteFile(tmpDir+"/file2.txt", []byte(""), 0644)
-	os.Mkdir(tmpDir+"/subdir", 0755)
+	_ = os.Mkdir(tmpDir+"/subdir", 0755)
 
 	vm := goja.New()
 	hctx := &Context{
@@ -233,7 +233,7 @@ func TestFSList(t *testing.T) {
 		t.Fatalf("Register failed: %v", err)
 	}
 
-	vm.Set("testDir", tmpDir)
+	_ = vm.Set("testDir", tmpDir)
 	result, err := vm.RunString(`mote.fs.list(testDir)`)
 	if err != nil {
 		t.Fatalf("fs.list failed: %v", err)

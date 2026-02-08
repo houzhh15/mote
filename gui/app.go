@@ -174,7 +174,7 @@ func (a *App) startup(ctx context.Context) {
 		Logger:     a.logger,
 		OnStateChange: func(running bool) {
 			a.logger.Info().Bool("running", running).Msg("Embedded server state changed")
-			a.ipcBridge.BroadcastServiceStatus(running)
+			_ = a.ipcBridge.BroadcastServiceStatus(running)
 		},
 	})
 	if err != nil {
@@ -191,7 +191,7 @@ func (a *App) startup(ctx context.Context) {
 	a.logger.Info().Msg("Embedded mote server started successfully")
 
 	// Broadcast service status via IPC
-	a.ipcBridge.BroadcastServiceStatus(true)
+	_ = a.ipcBridge.BroadcastServiceStatus(true)
 
 	// Start system tray via IPC
 	a.startSystemTray()
@@ -433,7 +433,7 @@ func (a *App) RestartService() error {
 	}
 
 	// Broadcast service stopped via IPC
-	a.ipcBridge.BroadcastServiceStatus(false)
+	_ = a.ipcBridge.BroadcastServiceStatus(false)
 
 	// Restart embedded server
 	if err := a.embeddedServer.Start(); err != nil {
@@ -441,7 +441,7 @@ func (a *App) RestartService() error {
 	}
 
 	// Broadcast service started via IPC
-	a.ipcBridge.BroadcastServiceStatus(true)
+	_ = a.ipcBridge.BroadcastServiceStatus(true)
 
 	a.logger.Info().Msg("Embedded mote server restarted successfully")
 	return nil

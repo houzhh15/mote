@@ -694,9 +694,9 @@ func (r *Runner) runLoopCore(ctx context.Context, cached *scheduler.CachedSessio
 	if r.mcpManager != nil {
 		if result := r.PreprocessMCPInput(ctx, userInput); result != nil && result.Handled {
 			// Save user message
-			_, _ = r.sessions.AddMessage(sessionID, provider.RoleUser, userInput, nil, "")
+			_, _ = _ = r.sessions.AddMessage(sessionID, provider.RoleUser, userInput, nil, "")
 			// Save response as assistant message
-			_, _ = r.sessions.AddMessage(sessionID, provider.RoleAssistant, result.Response, nil, "")
+			_, _ = _ = r.sessions.AddMessage(sessionID, provider.RoleAssistant, result.Response, nil, "")
 			// Send response event
 			events <- Event{
 				Type:    EventTypeContent,
@@ -715,7 +715,7 @@ func (r *Runner) runLoopCore(ctx context.Context, cached *scheduler.CachedSessio
 	}
 
 	// Add user message to session
-	_, err = r.sessions.AddMessage(sessionID, provider.RoleUser, userInput, nil, "")
+	_, err = _ = r.sessions.AddMessage(sessionID, provider.RoleUser, userInput, nil, "")
 	if err != nil {
 		events <- NewErrorEvent(err)
 		return
@@ -843,7 +843,7 @@ func (r *Runner) runLoopCore(ctx context.Context, cached *scheduler.CachedSessio
 
 			if respContent != "" {
 				// Save assistant message
-				r.sessions.AddMessage(sessionID, provider.RoleAssistant, respContent, nil, "")
+				_ = r.sessions.AddMessage(sessionID, provider.RoleAssistant, respContent, nil, "")
 			}
 
 			// M07: Trigger after_response hook
@@ -917,9 +917,9 @@ func (r *Runner) runLoopCore(ctx context.Context, cached *scheduler.CachedSessio
 
 		// Save to session
 		toolCalls := convertToolCalls(resp.ToolCalls)
-		r.sessions.AddMessage(sessionID, provider.RoleAssistant, resp.Content, toolCalls, "")
+		_ = r.sessions.AddMessage(sessionID, provider.RoleAssistant, resp.Content, toolCalls, "")
 		for _, result := range toolResults {
-			r.sessions.AddMessage(sessionID, provider.RoleTool, result.Content, nil, result.ToolCallID)
+			_ = r.sessions.AddMessage(sessionID, provider.RoleTool, result.Content, nil, result.ToolCallID)
 		}
 		slog.Info("runLoopCore: iteration saved, continuing to next", "sessionID", sessionID, "iteration", iteration)
 	}

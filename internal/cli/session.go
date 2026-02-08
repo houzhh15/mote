@@ -279,7 +279,7 @@ func runSessionClear(serverURL string, force bool) error {
 	if !force {
 		fmt.Print("Are you sure you want to delete all sessions? (y/N): ")
 		var response string
-		fmt.Scanln(&response)
+		_ = fmt.Scanln(&response)
 		if response != "y" && response != "Y" && response != "yes" {
 			fmt.Println("Cancelled.")
 			return nil

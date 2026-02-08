@@ -292,7 +292,7 @@ func TestRegistry_ConcurrentAccess(t *testing.T) {
 	for i := 0; i < numGoroutines; i++ {
 		go func(id int) {
 			defer wg.Done()
-			r.Unregister(HookBeforeMessage, fmt.Sprintf("handler-%d", id))
+			_ = r.Unregister(HookBeforeMessage, fmt.Sprintf("handler-%d", id))
 		}(i)
 	}
 	wg.Wait()
