@@ -298,7 +298,7 @@ func TestManager_ConcurrentAccess(t *testing.T) {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 			defer cancel()
-			manager.RequestApproval(ctx, call, "test")
+			_, _ = manager.RequestApproval(ctx, call, "test")
 		}(i)
 	}
 
@@ -306,7 +306,7 @@ func TestManager_ConcurrentAccess(t *testing.T) {
 	pending := manager.ListPending()
 	for _, req := range pending[:len(pending)/2] {
 		go func(id string) {
-			manager.HandleResponse(id, true, "approved")
+			_ = manager.HandleResponse(id, true, "approved")
 		}(req.ID)
 	}
 

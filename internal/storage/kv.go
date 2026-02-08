@@ -41,7 +41,7 @@ func (db *DB) KVGet(key string) (string, error) {
 	// 检查是否过期
 	if expiresAt.Valid && expiresAt.Time.Before(time.Now()) {
 		// 过期了，删除并返回 not found
-		db.Exec("DELETE FROM kv_store WHERE key = ?", key)
+		_, _ = db.Exec("DELETE FROM kv_store WHERE key = ?", key)
 		return "", ErrNotFound
 	}
 

@@ -85,8 +85,8 @@ func TestCountMessages(t *testing.T) {
 	defer db.Close()
 
 	session, _ := db.CreateSession(nil)
-	db.AppendMessage(session.ID, "user", "msg1", nil, "")
-	db.AppendMessage(session.ID, "user", "msg2", nil, "")
+	_ = db.AppendMessage(session.ID, "user", "msg1", nil, "")
+	_ = db.AppendMessage(session.ID, "user", "msg2", nil, "")
 
 	count, err := db.CountMessages(session.ID)
 	if err != nil || count != 2 {
@@ -101,7 +101,7 @@ func TestCascadeDelete(t *testing.T) {
 
 	session, _ := db.CreateSession(nil)
 	msg, _ := db.AppendMessage(session.ID, "user", "Hello", nil, "")
-	db.DeleteSession(session.ID)
+	_ = db.DeleteSession(session.ID)
 
 	_, err := db.GetMessage(msg.ID)
 	if err != ErrNotFound {
