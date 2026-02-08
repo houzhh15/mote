@@ -83,9 +83,9 @@ func TestOllamaProvider_ChatWithTools(t *testing.T) {
 					ID:   "call_123",
 					Type: "function",
 					Function: struct {
-						Name      string `json:"name"`
-						Arguments string `json:"arguments"`
-					}{Name: "get_weather", Arguments: `{"location": "San Francisco"}`},
+						Name      string                 `json:"name"`
+						Arguments map[string]interface{} `json:"arguments"`
+					}{Name: "get_weather", Arguments: map[string]interface{}{"location": "San Francisco"}},
 				}},
 			},
 			Done: true,

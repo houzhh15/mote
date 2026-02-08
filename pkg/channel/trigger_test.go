@@ -1,5 +1,4 @@
 package channel
-package channel
 
 import (
 	"testing"

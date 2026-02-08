@@ -59,7 +59,7 @@ func TestAPIClient_CallAPI_Success(t *testing.T) {
 	defer server.Close()
 
 	client := NewAPIClient(server.URL, 5*time.Second)
-	resp, err := client.CallAPI(http.MethodGet, "/health", nil)
+	resp, err := client.CallAPI(http.MethodGet, "/health", "")
 
 	if err != nil {
 		t.Fatalf("CallAPI() error = %v", err)

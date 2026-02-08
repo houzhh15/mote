@@ -13,6 +13,7 @@ mote-*
 .*
 !.gitignore
 !.github/
+!**/.gitkeep
 
 # Go
 *.test
