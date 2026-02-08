@@ -284,7 +284,7 @@ func TestWorkspaceManager_Concurrent(t *testing.T) {
 		go func(id int) {
 			defer wg.Done()
 			sessionID := string(rune('a' + id))
-	_ = manager.Bind(sessionID, tmpDir, false)
+			_ = manager.Bind(sessionID, tmpDir, false)
 		}(i)
 	}
 

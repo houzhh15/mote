@@ -165,7 +165,7 @@ func TestUsageTracker_GetRecentRecords(t *testing.T) {
 
 	// Record multiple entries
 	for i := 0; i < 5; i++ {
-	_ = ut.Record("gpt-4.1", 100, 50, ModeAgent)
+		_ = ut.Record("gpt-4.1", 100, 50, ModeAgent)
 	}
 
 	records := ut.GetRecentRecords(3)
@@ -193,7 +193,7 @@ func TestUsageTracker_ClearOldRecords(t *testing.T) {
 
 	// Add records
 	for i := 0; i < 3; i++ {
-	_ = ut.Record("gpt-4.1", 100, 50, ModeAgent)
+		_ = ut.Record("gpt-4.1", 100, 50, ModeAgent)
 	}
 
 	// Clear records older than 1 hour (should clear none)

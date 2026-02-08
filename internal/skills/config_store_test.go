@@ -135,7 +135,7 @@ func TestFileConfigStore_Concurrent(t *testing.T) {
 			defer wg.Done()
 			for j := 0; j < numOps; j++ {
 				skillID := "skill-" + string(rune('a'+id%26))
-	_ = store.Set(skillID, ConfigMap{"iter": j})
+				_ = store.Set(skillID, ConfigMap{"iter": j})
 			}
 		}(i)
 	}

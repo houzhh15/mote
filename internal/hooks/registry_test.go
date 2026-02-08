@@ -264,7 +264,7 @@ func TestRegistry_ConcurrentAccess(t *testing.T) {
 				Enabled:  true,
 			}
 			// Ignore errors since we expect some duplicates
-	_ = r.Register(HookBeforeMessage, handler)
+			_ = r.Register(HookBeforeMessage, handler)
 		}(i)
 	}
 	wg.Wait()

@@ -116,8 +116,8 @@ func TestRegistry_StartAll(t *testing.T) {
 		r := NewRegistry()
 		p1 := newMockPlugin(channel.ChannelTypeIMessage, "iMessage")
 		p2 := newMockPlugin(channel.ChannelTypeNotes, "Notes")
-	r.Register(p1)
-	r.Register(p2)
+		r.Register(p1)
+		r.Register(p2)
 
 		err := r.StartAll(context.Background())
 		if err != nil {
@@ -132,7 +132,7 @@ func TestRegistry_StartAll(t *testing.T) {
 		r := NewRegistry()
 		p := newMockPlugin(channel.ChannelTypeIMessage, "iMessage")
 		p.startErr = errors.New("start failed")
-	r.Register(p)
+		r.Register(p)
 
 		err := r.StartAll(context.Background())
 		if err == nil {
@@ -146,8 +146,8 @@ func TestRegistry_StopAll(t *testing.T) {
 		r := NewRegistry()
 		p1 := newMockPlugin(channel.ChannelTypeIMessage, "iMessage")
 		p2 := newMockPlugin(channel.ChannelTypeNotes, "Notes")
-	r.Register(p1)
-	r.Register(p2)
+		r.Register(p1)
+		r.Register(p2)
 
 		err := r.StopAll(context.Background())
 		if err != nil {
@@ -163,8 +163,8 @@ func TestRegistry_StopAll(t *testing.T) {
 		p1 := newMockPlugin(channel.ChannelTypeIMessage, "iMessage")
 		p1.stopErr = errors.New("stop failed")
 		p2 := newMockPlugin(channel.ChannelTypeNotes, "Notes")
-	r.Register(p1)
-	r.Register(p2)
+		r.Register(p1)
+		r.Register(p2)
 
 		err := r.StopAll(context.Background())
 		if err == nil {
