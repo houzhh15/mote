@@ -12,7 +12,7 @@ func TestAppendMessage(t *testing.T) {
 	defer db.Close()
 
 	session, _ := db.CreateSession(nil)
-	msg, _ := db.AppendMessage(session.ID, "user", "Hello", nil, "")
+	msg, err := db.AppendMessage(session.ID, "user", "Hello", nil, "")
 	if err != nil {
 		t.Fatalf("AppendMessage failed: %v", err)
 	}
@@ -41,7 +41,7 @@ func TestGetMessages(t *testing.T) {
 
 	session, _ := db.CreateSession(nil)
 	for i := 0; i < 3; i++ {
-		_ = db.AppendMessage(session.ID, "user", "msg", nil, "")
+		_, _ = db.AppendMessage(session.ID, "user", "msg", nil, "")
 	}
 
 	messages, err := db.GetMessages(session.ID, 0)
