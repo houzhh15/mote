@@ -228,7 +228,7 @@ func runUsageReset(cmd *cobra.Command, force bool) error {
 		fmt.Print("Continue? (y/N): ")
 
 		var response string
-		_ = fmt.Scanln(&response)
+		_, _ = fmt.Scanln(&response)
 
 		if response != "y" && response != "Y" && response != "yes" {
 			fmt.Println("Cancelled.")
