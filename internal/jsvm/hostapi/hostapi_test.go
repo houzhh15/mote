@@ -212,8 +212,8 @@ func TestFSExists(t *testing.T) {
 
 func TestFSList(t *testing.T) {
 	tmpDir := t.TempDir()
-	os.WriteFile(tmpDir+"/file1.txt", []byte(""), 0644)
-	os.WriteFile(tmpDir+"/file2.txt", []byte(""), 0644)
+	_ = os.WriteFile(tmpDir+"/file1.txt", []byte(""), 0644)
+	_ = os.WriteFile(tmpDir+"/file2.txt", []byte(""), 0644)
 	_ = os.Mkdir(tmpDir+"/subdir", 0755)
 
 	vm := goja.New()

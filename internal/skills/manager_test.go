@@ -312,7 +312,7 @@ func TestManager_Dependencies(t *testing.T) {
 		"name":    "Base Skill",
 		"version": "1.0.0",
 	})
-	os.WriteFile(filepath.Join(baseDir, "manifest.json"), baseManifest, 0644)
+	_ = os.WriteFile(filepath.Join(baseDir, "manifest.json"), baseManifest, 0644)
 
 	// Create dependent skill
 	depDir := filepath.Join(tmpDir, "dep-skill")
@@ -325,7 +325,7 @@ func TestManager_Dependencies(t *testing.T) {
 		"version":      "1.0.0",
 		"dependencies": []string{"base-skill"},
 	})
-	os.WriteFile(filepath.Join(depDir, "manifest.json"), depManifest, 0644)
+	_ = os.WriteFile(filepath.Join(depDir, "manifest.json"), depManifest, 0644)
 
 	// Scan
 	m.ScanDirectory(tmpDir)
@@ -398,7 +398,7 @@ func TestManager_GetInstance(t *testing.T) {
 		"name":    "Test Skill",
 		"version": "1.0.0",
 	})
-	os.WriteFile(filepath.Join(skillDir, "manifest.json"), manifest, 0644)
+	_ = os.WriteFile(filepath.Join(skillDir, "manifest.json"), manifest, 0644)
 
 	m.LoadSkill(skillDir)
 
@@ -440,7 +440,7 @@ func TestManager_GetActivePromptsAndTools(t *testing.T) {
 			{"name": "test_prompt", "content": "Test prompt content"},
 		},
 	})
-	os.WriteFile(filepath.Join(skillDir, "manifest.json"), manifest, 0644)
+	_ = os.WriteFile(filepath.Join(skillDir, "manifest.json"), manifest, 0644)
 
 	m.LoadSkill(skillDir)
 	m.Activate("test-skill", nil)
@@ -475,7 +475,7 @@ func TestManager_ResolvePromptFromFile(t *testing.T) {
 
 	// Write prompt file
 	promptContent := "This is a prompt from a file"
-	os.WriteFile(filepath.Join(skillDir, "prompt.txt"), []byte(promptContent), 0644)
+	_ = os.WriteFile(filepath.Join(skillDir, "prompt.txt"), []byte(promptContent), 0644)
 
 	manifest, _ := json.Marshal(map[string]any{
 		"id":      "test-skill",
@@ -485,7 +485,7 @@ func TestManager_ResolvePromptFromFile(t *testing.T) {
 			{"name": "file_prompt", "file": "prompt.txt"},
 		},
 	})
-	os.WriteFile(filepath.Join(skillDir, "manifest.json"), manifest, 0644)
+	_ = os.WriteFile(filepath.Join(skillDir, "manifest.json"), manifest, 0644)
 
 	m.LoadSkill(skillDir)
 	m.Activate("test-skill", nil)

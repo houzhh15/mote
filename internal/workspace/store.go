@@ -181,5 +181,5 @@ func (s *WorkspaceStore) save() {
 		return
 	}
 
-	os.WriteFile(s.configPath, data, 0644)
+	_ = os.WriteFile(s.configPath, data, 0644)
 }
