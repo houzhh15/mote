@@ -16,31 +16,31 @@ func registerLog(vm *goja.Runtime, mote *goja.Object, hctx *Context) error {
 		Str("exec_id", hctx.ExecutionID).
 		Logger()
 
-	logObj.Set("debug", func(call goja.FunctionCall) goja.Value {
+	_ = logObj.Set("debug", func(call goja.FunctionCall) goja.Value {
 		msg := formatLogMessage(call.Arguments)
 		logger.Debug().Msg(msg)
 		return goja.Undefined()
 	})
 
-	logObj.Set("info", func(call goja.FunctionCall) goja.Value {
+	_ = logObj.Set("info", func(call goja.FunctionCall) goja.Value {
 		msg := formatLogMessage(call.Arguments)
 		logger.Info().Msg(msg)
 		return goja.Undefined()
 	})
 
-	logObj.Set("warn", func(call goja.FunctionCall) goja.Value {
+	_ = logObj.Set("warn", func(call goja.FunctionCall) goja.Value {
 		msg := formatLogMessage(call.Arguments)
 		logger.Warn().Msg(msg)
 		return goja.Undefined()
 	})
 
-	logObj.Set("error", func(call goja.FunctionCall) goja.Value {
+	_ = logObj.Set("error", func(call goja.FunctionCall) goja.Value {
 		msg := formatLogMessage(call.Arguments)
 		logger.Error().Msg(msg)
 		return goja.Undefined()
 	})
 
-	mote.Set("log", logObj)
+	_ = mote.Set("log", logObj)
 
 	// Also register console.log for convenience
 	registerConsole(vm, logger)
@@ -92,35 +92,35 @@ func formatValue(v goja.Value) string {
 func registerConsole(vm *goja.Runtime, logger zerolog.Logger) {
 	console := vm.NewObject()
 
-	console.Set("log", func(call goja.FunctionCall) goja.Value {
+	_ = console.Set("log", func(call goja.FunctionCall) goja.Value {
 		msg := formatLogMessage(call.Arguments)
 		logger.Info().Msg(msg)
 		return goja.Undefined()
 	})
 
-	console.Set("debug", func(call goja.FunctionCall) goja.Value {
+	_ = console.Set("debug", func(call goja.FunctionCall) goja.Value {
 		msg := formatLogMessage(call.Arguments)
 		logger.Debug().Msg(msg)
 		return goja.Undefined()
 	})
 
-	console.Set("info", func(call goja.FunctionCall) goja.Value {
+	_ = console.Set("info", func(call goja.FunctionCall) goja.Value {
 		msg := formatLogMessage(call.Arguments)
 		logger.Info().Msg(msg)
 		return goja.Undefined()
 	})
 
-	console.Set("warn", func(call goja.FunctionCall) goja.Value {
+	_ = console.Set("warn", func(call goja.FunctionCall) goja.Value {
 		msg := formatLogMessage(call.Arguments)
 		logger.Warn().Msg(msg)
 		return goja.Undefined()
 	})
 
-	console.Set("error", func(call goja.FunctionCall) goja.Value {
+	_ = console.Set("error", func(call goja.FunctionCall) goja.Value {
 		msg := formatLogMessage(call.Arguments)
 		logger.Error().Msg(msg)
 		return goja.Undefined()
 	})
 
-	vm.Set("console", console)
+	_ = vm.Set("console", console)
 }

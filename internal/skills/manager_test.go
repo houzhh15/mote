@@ -400,7 +400,7 @@ func TestManager_GetInstance(t *testing.T) {
 	})
 	_ = os.WriteFile(filepath.Join(skillDir, "manifest.json"), manifest, 0644)
 
-	_ = m.LoadSkill(skillDir)
+	_, _ = m.LoadSkill(skillDir)
 
 	// Should not exist before activation
 	_, exists := m.GetInstance("test-skill")
@@ -442,7 +442,7 @@ func TestManager_GetActivePromptsAndTools(t *testing.T) {
 	})
 	_ = os.WriteFile(filepath.Join(skillDir, "manifest.json"), manifest, 0644)
 
-	_ = m.LoadSkill(skillDir)
+	_, _ = m.LoadSkill(skillDir)
 	_ = m.Activate("test-skill", nil)
 
 	// Check prompts
@@ -487,7 +487,7 @@ func TestManager_ResolvePromptFromFile(t *testing.T) {
 	})
 	_ = os.WriteFile(filepath.Join(skillDir, "manifest.json"), manifest, 0644)
 
-	_ = m.LoadSkill(skillDir)
+	_, _ = m.LoadSkill(skillDir)
 	_ = m.Activate("test-skill", nil)
 
 	prompts := m.GetActivePrompts()

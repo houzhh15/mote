@@ -16,7 +16,7 @@ const kvPrefix = "jsvm:"
 func registerKV(vm *goja.Runtime, mote *goja.Object, hctx *Context) error {
 	kvObj := vm.NewObject()
 
-	kvObj.Set("get", func(call goja.FunctionCall) goja.Value {
+	_ = kvObj.Set("get", func(call goja.FunctionCall) goja.Value {
 		if len(call.Arguments) < 1 {
 			panic(vm.NewTypeError("key is required"))
 		}
@@ -44,7 +44,7 @@ func registerKV(vm *goja.Runtime, mote *goja.Object, hctx *Context) error {
 		return vm.ToValue(result)
 	})
 
-	kvObj.Set("set", func(call goja.FunctionCall) goja.Value {
+	_ = kvObj.Set("set", func(call goja.FunctionCall) goja.Value {
 		if len(call.Arguments) < 2 {
 			panic(vm.NewTypeError("key and value are required"))
 		}
@@ -84,7 +84,7 @@ func registerKV(vm *goja.Runtime, mote *goja.Object, hctx *Context) error {
 		return goja.Undefined()
 	})
 
-	kvObj.Set("delete", func(call goja.FunctionCall) goja.Value {
+	_ = kvObj.Set("delete", func(call goja.FunctionCall) goja.Value {
 		if len(call.Arguments) < 1 {
 			panic(vm.NewTypeError("key is required"))
 		}
@@ -103,7 +103,7 @@ func registerKV(vm *goja.Runtime, mote *goja.Object, hctx *Context) error {
 		return goja.Undefined()
 	})
 
-	kvObj.Set("keys", func(call goja.FunctionCall) goja.Value {
+	_ = kvObj.Set("keys", func(call goja.FunctionCall) goja.Value {
 		prefix := kvPrefix
 		if len(call.Arguments) > 0 {
 			prefix = kvPrefix + call.Arguments[0].String()
@@ -130,6 +130,6 @@ func registerKV(vm *goja.Runtime, mote *goja.Object, hctx *Context) error {
 		return vm.ToValue(keys)
 	})
 
-	mote.Set("kv", kvObj)
+	_ = mote.Set("kv", kvObj)
 	return nil
 }

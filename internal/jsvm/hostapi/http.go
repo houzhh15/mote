@@ -16,23 +16,23 @@ import (
 func registerHTTP(vm *goja.Runtime, mote *goja.Object, hctx *Context) error {
 	httpObj := vm.NewObject()
 
-	httpObj.Set("get", func(call goja.FunctionCall) goja.Value {
+	_ = httpObj.Set("get", func(call goja.FunctionCall) goja.Value {
 		return doHTTPRequest(vm, hctx, "GET", call)
 	})
 
-	httpObj.Set("post", func(call goja.FunctionCall) goja.Value {
+	_ = httpObj.Set("post", func(call goja.FunctionCall) goja.Value {
 		return doHTTPRequest(vm, hctx, "POST", call)
 	})
 
-	httpObj.Set("put", func(call goja.FunctionCall) goja.Value {
+	_ = httpObj.Set("put", func(call goja.FunctionCall) goja.Value {
 		return doHTTPRequest(vm, hctx, "PUT", call)
 	})
 
-	httpObj.Set("delete", func(call goja.FunctionCall) goja.Value {
+	_ = httpObj.Set("delete", func(call goja.FunctionCall) goja.Value {
 		return doHTTPRequest(vm, hctx, "DELETE", call)
 	})
 
-	mote.Set("http", httpObj)
+	_ = mote.Set("http", httpObj)
 	return nil
 }
 
@@ -132,27 +132,27 @@ func doHTTPRequest(vm *goja.Runtime, hctx *Context, method string, call goja.Fun
 func buildResponse(vm *goja.Runtime, resp *http.Response, body []byte) goja.Value {
 	response := vm.NewObject()
 
-	response.Set("status", resp.StatusCode)
+	_ = response.Set("status", resp.StatusCode)
 
 	// Body as string for convenient access
-	response.Set("body", string(body))
+	_ = response.Set("body", string(body))
 
 	// Headers as object
 	headersObj := vm.NewObject()
 	for k, v := range resp.Header {
 		if len(v) > 0 {
-			headersObj.Set(strings.ToLower(k), v[0])
+			_ = headersObj.Set(strings.ToLower(k), v[0])
 		}
 	}
-	response.Set("headers", headersObj)
+	_ = response.Set("headers", headersObj)
 
 	// text() method
-	response.Set("text", func(call goja.FunctionCall) goja.Value {
+	_ = response.Set("text", func(call goja.FunctionCall) goja.Value {
 		return vm.ToValue(string(body))
 	})
 
 	// json() method
-	response.Set("json", func(call goja.FunctionCall) goja.Value {
+	_ = response.Set("json", func(call goja.FunctionCall) goja.Value {
 		var result interface{}
 		if err := json.Unmarshal(body, &result); err != nil {
 			panic(vm.NewTypeError(fmt.Sprintf("failed to parse JSON: %v", err)))
