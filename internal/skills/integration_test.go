@@ -121,8 +121,8 @@ func TestIntegration_MultipleSkills(t *testing.T) {
 		"version": "1.0.0",
 		"tools": [{"name": "tool1", "description": "Tool 1", "handler": "main.js#tool1"}]
 	}`
-	require.NoError(t, _ = os.WriteFile(filepath.Join(skill1Dir, "manifest.json"), []byte(skill1Manifest), 0644))
-	require.NoError(t, _ = os.WriteFile(filepath.Join(skill1Dir, "main.js"), []byte("function tool1() {}"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(skill1Dir, "manifest.json"), []byte(skill1Manifest), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(skill1Dir, "main.js"), []byte("function tool1() {}"), 0644))
 
 	// Create skill2 manifest
 	skill2Dir := filepath.Join(tmpDir, "skill-2")
@@ -136,8 +136,8 @@ func TestIntegration_MultipleSkills(t *testing.T) {
 			{"name": "tool3", "description": "Tool 3", "handler": "main.js#tool3"}
 		]
 	}`
-	require.NoError(t, _ = os.WriteFile(filepath.Join(skill2Dir, "manifest.json"), []byte(skill2Manifest), 0644))
-	require.NoError(t, _ = os.WriteFile(filepath.Join(skill2Dir, "main.js"), []byte("function tool2() {} function tool3() {}"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(skill2Dir, "manifest.json"), []byte(skill2Manifest), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(skill2Dir, "main.js"), []byte("function tool2() {} function tool3() {}"), 0644))
 
 	manager := NewManager(ManagerConfig{
 		SkillsDir: tmpDir,
@@ -197,7 +197,7 @@ func TestIntegration_SkillDuplicateActivation(t *testing.T) {
 		"name": "Test Skill",
 		"version": "1.0.0"
 	}`
-	require.NoError(t, _ = os.WriteFile(filepath.Join(skillDir, "manifest.json"), []byte(manifest), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(skillDir, "manifest.json"), []byte(manifest), 0644))
 
 	manager := NewManager(ManagerConfig{})
 	_, err := manager.LoadSkill(skillDir)
@@ -222,7 +222,7 @@ func TestIntegration_DeactivateInactiveSkill(t *testing.T) {
 		"name": "Test Skill",
 		"version": "1.0.0"
 	}`
-	require.NoError(t, _ = os.WriteFile(filepath.Join(skillDir, "manifest.json"), []byte(manifest), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(skillDir, "manifest.json"), []byte(manifest), 0644))
 
 	manager := NewManager(ManagerConfig{})
 	_, err := manager.LoadSkill(skillDir)
