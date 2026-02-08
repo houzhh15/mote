@@ -60,23 +60,26 @@ func NewSandbox(cfg SandboxConfig, db *storage.DB, logger zerolog.Logger) *Sandb
 // Setup configures the VM with security restrictions and injects Host APIs.
 func (s *Sandbox) Setup(vm *goja.Runtime, ctx context.Context, scriptName, executionID string) (context.Context, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	// Create timeout context
 	execCtx, cancel := context.WithTimeout(ctx, s.config.Timeout)
 	s.cancelFunc = cancel
 	s.done = make(chan struct{})
+	done := s.done // Copy under lock
+	s.mu.Unlock()
 
 	// Setup interrupt on context cancellation
 	go func() {
 		select {
 		case <-execCtx.Done():
 			vm.Interrupt("execution interrupted: " + execCtx.Err().Error())
-		case <-s.done:
+		case <-done:
 			// Cleanup was called, don't interrupt
 			return
 		}
 	}()
+
+	s.mu.Lock()
 
 	// Configure field name mapper to restrict access
 	vm.SetFieldNameMapper(goja.TagFieldNameMapper("json", true))
@@ -94,6 +97,7 @@ func (s *Sandbox) Setup(vm *goja.Runtime, ctx context.Context, scriptName, execu
 			MaxWriteSize:  s.config.MaxWriteSize,
 		},
 	}
+	s.mu.Unlock()
 
 	if err := hostapi.Register(vm, hctx); err != nil {
 		cancel()

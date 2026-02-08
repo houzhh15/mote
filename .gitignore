@@ -1,6 +1,7 @@
 # Binaries
 build/
 dist/
+!gui/frontend/dist/
 bin/
 *.exe
 *.dll

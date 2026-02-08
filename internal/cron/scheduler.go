@@ -244,6 +244,13 @@ func (s *Scheduler) GetJob(ctx context.Context, name string) (*Job, error) {
 
 // RunNow immediately executes a job.
 func (s *Scheduler) RunNow(ctx context.Context, name string) (*ExecuteResult, error) {
+	s.mu.RLock()
+	if !s.running {
+		s.mu.RUnlock()
+		return nil, fmt.Errorf("scheduler not running")
+	}
+	s.mu.RUnlock()
+
 	job, err := s.store.Get(name)
 	if err != nil {
 		return nil, fmt.Errorf("job not found: %w", err)
