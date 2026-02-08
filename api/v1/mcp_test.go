@@ -24,7 +24,7 @@ func TestRouter_HandleListMCPServers_NoClient(t *testing.T) {
 	}
 
 	var resp MCPServersResponse
-	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+	if err := _ = json.NewDecoder(rr.Body).Decode(&resp); err != nil {
 		t.Fatalf("Failed to decode response: %v", err)
 	}
 
@@ -50,7 +50,7 @@ func TestRouter_HandleListMCPTools_NoClient(t *testing.T) {
 	}
 
 	var resp MCPToolsResponse
-	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+	if err := _ = json.NewDecoder(rr.Body).Decode(&resp); err != nil {
 		t.Fatalf("Failed to decode response: %v", err)
 	}
 

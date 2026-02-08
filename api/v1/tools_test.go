@@ -25,7 +25,7 @@ func TestRouter_HandleListTools_NoRegistry(t *testing.T) {
 	}
 
 	var resp ToolsListResponse
-	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+	if err := _ = json.NewDecoder(rr.Body).Decode(&resp); err != nil {
 		t.Fatalf("Failed to decode response: %v", err)
 	}
 

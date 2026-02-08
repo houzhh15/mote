@@ -107,7 +107,7 @@ func TestCopilotEmbedder_Embed(t *testing.T) {
 				},
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		}))
 		defer server.Close()
 
@@ -143,7 +143,7 @@ func TestCopilotEmbedder_Embed(t *testing.T) {
 					Type:    "rate_limit_error",
 				},
 			}
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		}))
 		defer server.Close()
 
@@ -174,7 +174,7 @@ func TestCopilotEmbedder_Embed(t *testing.T) {
 					Type:    "invalid_request_error",
 				},
 			}
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		}))
 		defer server.Close()
 
@@ -196,7 +196,7 @@ func TestCopilotEmbedder_EmbedBatch(t *testing.T) {
 	t.Run("successful batch embedding", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			var req embeddingRequest
-			json.NewDecoder(r.Body).Decode(&req)
+			_ = json.NewDecoder(r.Body).Decode(&req)
 
 			// Handle batch input
 			inputs, ok := req.Input.([]any)
@@ -220,7 +220,7 @@ func TestCopilotEmbedder_EmbedBatch(t *testing.T) {
 				Data:   data,
 				Usage:  embeddingUsage{PromptTokens: len(inputs) * 5, TotalTokens: len(inputs) * 5},
 			}
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		}))
 		defer server.Close()
 
@@ -248,7 +248,7 @@ func TestCopilotEmbedder_EmbedBatch(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			callCount++
 			var req embeddingRequest
-			json.NewDecoder(r.Body).Decode(&req)
+			_ = json.NewDecoder(r.Body).Decode(&req)
 
 			inputs, _ := req.Input.([]any)
 			data := make([]embeddingData, len(inputs))
@@ -261,7 +261,7 @@ func TestCopilotEmbedder_EmbedBatch(t *testing.T) {
 			}
 
 			resp := embeddingResponse{Object: "list", Data: data}
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		}))
 		defer server.Close()
 

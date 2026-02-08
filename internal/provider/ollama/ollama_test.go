@@ -25,7 +25,7 @@ func TestOllamaProvider_Chat(t *testing.T) {
 		assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
 
 		var req ollamaRequest
-		err := json.NewDecoder(r.Body).Decode(&req)
+		err := _ = json.NewDecoder(r.Body).Decode(&req)
 		require.NoError(t, err)
 		assert.Equal(t, "test-model", req.Model)
 		assert.False(t, req.Stream)
@@ -42,7 +42,7 @@ func TestOllamaProvider_Chat(t *testing.T) {
 			EvalCount:       10,
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
@@ -68,7 +68,7 @@ func TestOllamaProvider_Chat(t *testing.T) {
 func TestOllamaProvider_ChatWithTools(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req ollamaRequest
-		json.NewDecoder(r.Body).Decode(&req)
+		_ = json.NewDecoder(r.Body).Decode(&req)
 
 		assert.Len(t, req.Tools, 1)
 		assert.Equal(t, "function", req.Tools[0].Type)
@@ -90,7 +90,7 @@ func TestOllamaProvider_ChatWithTools(t *testing.T) {
 			},
 			Done: true,
 		}
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
@@ -168,7 +168,7 @@ func TestOllamaProvider_Models(t *testing.T) {
 					{Name: "codellama:7b", Size: 3000000},
 				},
 			}
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)

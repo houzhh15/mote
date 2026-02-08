@@ -159,9 +159,9 @@ func TestMarkdownStore_GetDailyRange(t *testing.T) {
 	day2 := time.Date(2026, 1, 11, 12, 0, 0, 0, time.UTC)
 	day3 := time.Date(2026, 1, 12, 12, 0, 0, 0, time.UTC)
 
-	store.AppendDailyAt(day1, "Day 1 content", "")
-	store.AppendDailyAt(day2, "Day 2 content", "")
-	store.AppendDailyAt(day3, "Day 3 content", "")
+	_ = store.AppendDailyAt(day1, "Day 1 content", "")
+	_ = store.AppendDailyAt(day2, "Day 2 content", "")
+	_ = store.AppendDailyAt(day3, "Day 3 content", "")
 
 	content, err := store.GetDailyRange(day1, day3)
 	if err != nil {
@@ -394,7 +394,7 @@ func TestMarkdownStore_Stats(t *testing.T) {
 	store := newTestStore(t)
 
 	// Create some content
-	store.AppendMemory("Memory content", "Section")
+	_ = store.AppendMemory("Memory content", "Section")
 	store.AppendDailyAt(time.Date(2026, 1, 10, 12, 0, 0, 0, time.UTC), "Day 1", "")
 	store.AppendDailyAt(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC), "Day 2", "")
 

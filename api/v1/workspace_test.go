@@ -31,7 +31,7 @@ func TestHandleListWorkspaces(t *testing.T) {
 	}
 
 	var resp []WorkspaceResponse
-	json.NewDecoder(w.Body).Decode(&resp)
+	_ = json.NewDecoder(w.Body).Decode(&resp)
 	if len(resp) != 1 {
 		t.Errorf("expected 1 workspace, got %d", len(resp))
 	}
@@ -66,7 +66,7 @@ func TestHandleGetWorkspace(t *testing.T) {
 	}
 
 	var resp WorkspaceResponse
-	json.NewDecoder(w.Body).Decode(&resp)
+	_ = json.NewDecoder(w.Body).Decode(&resp)
 	if resp.SessionID != "session-1" {
 		t.Errorf("expected session-1, got %s", resp.SessionID)
 	}
@@ -110,7 +110,7 @@ func TestHandleBindWorkspace(t *testing.T) {
 	}
 
 	var resp WorkspaceResponse
-	json.NewDecoder(w.Body).Decode(&resp)
+	_ = json.NewDecoder(w.Body).Decode(&resp)
 	if resp.SessionID != "session-1" {
 		t.Errorf("expected session-1, got %s", resp.SessionID)
 	}
@@ -138,7 +138,7 @@ func TestHandleBindWorkspace_WithAlias(t *testing.T) {
 	}
 
 	var resp WorkspaceResponse
-	json.NewDecoder(w.Body).Decode(&resp)
+	_ = json.NewDecoder(w.Body).Decode(&resp)
 	if resp.Alias != "myproject" {
 		t.Errorf("expected alias myproject, got %s", resp.Alias)
 	}

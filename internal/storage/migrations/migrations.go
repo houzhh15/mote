@@ -162,7 +162,7 @@ func executeMigration(db *sql.DB, m migration) error {
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	// 执行迁移 SQL
 	if _, err := tx.Exec(m.content); err != nil {
