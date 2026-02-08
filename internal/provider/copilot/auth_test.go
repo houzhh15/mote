@@ -100,7 +100,7 @@ func TestRequestDeviceCode_Success(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		_ = _ = json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
@@ -183,7 +183,7 @@ func TestPollForAccessToken_Success(t *testing.T) {
 			Scope:       "read:user",
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = _ = json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
@@ -217,7 +217,7 @@ func TestPollForAccessToken_ExpiredToken(t *testing.T) {
 			ErrorDesc: "Device code has expired",
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = _ = json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
@@ -243,7 +243,7 @@ func TestPollForAccessToken_AccessDenied(t *testing.T) {
 			ErrorDesc: "User denied access",
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = _ = json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
@@ -268,7 +268,7 @@ func TestPollForAccessToken_ContextCancelled(t *testing.T) {
 			Error: "authorization_pending",
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = _ = json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
