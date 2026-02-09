@@ -16,7 +16,7 @@ func TestNewTokenManager(t *testing.T) {
 		t.Fatal("NewTokenManager returned nil")
 	}
 
-	if tm.githubToken != "test-github-token" {
+	if tm.githubToken != "test-github-token" { //nolint:staticcheck // SA5011: Check above ensures non-nil
 		t.Errorf("githubToken = %s, want test-github-token", tm.githubToken)
 	}
 

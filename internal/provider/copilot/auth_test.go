@@ -18,7 +18,7 @@ func TestNewAuthManager(t *testing.T) {
 		t.Fatal("NewAuthManager returned nil")
 	}
 
-	if am.clientID != CopilotClientID {
+	if am.clientID != CopilotClientID { //nolint:staticcheck // SA5011: Check above ensures non-nil
 		t.Errorf("clientID = %s, want %s", am.clientID, CopilotClientID)
 	}
 

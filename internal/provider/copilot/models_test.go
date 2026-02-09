@@ -64,7 +64,7 @@ func TestGetModelInfo(t *testing.T) {
 			if info == nil {
 				t.Fatalf("GetModelInfo(%q) = nil, want non-nil", tt.modelID)
 			}
-			if info.ID != tt.wantID {
+			if info.ID != tt.wantID { //nolint:staticcheck // SA5011: Check above ensures non-nil
 				t.Errorf("GetModelInfo(%q).ID = %s, want %s", tt.modelID, info.ID, tt.wantID)
 			}
 			if info.IsFree != tt.wantFree {

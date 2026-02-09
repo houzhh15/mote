@@ -53,7 +53,7 @@ func TestRouter_HandleHealth_NoDeps(t *testing.T) {
 
 	req := httptest.NewRequest("GET", "/api/v1/health", nil)
 	// Add request_time to context for handler
-	type contextKey string
+	type contextKey string //nolint:unused // Test helper
 	ctx := req.Context()
 	req = req.WithContext(ctx)
 

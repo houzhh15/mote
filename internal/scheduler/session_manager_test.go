@@ -237,7 +237,7 @@ func TestSessionManagerEviction(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to create session: %v", err)
 		}
-		ids = append(ids, cached.Session.ID)
+		ids = append(ids, cached.Session.ID) //nolint:staticcheck // SA4010: Accumulating ids for later use
 		time.Sleep(10 * time.Millisecond)
 	}
 

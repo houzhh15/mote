@@ -15,7 +15,7 @@ func TestNewHTTPServerTransport(t *testing.T) {
 	if transport == nil {
 		t.Fatal("Transport should not be nil")
 	}
-	if transport.addr != ":0" {
+	if transport.addr != ":0" { //nolint:staticcheck // SA5011: Check above ensures non-nil
 		t.Errorf("addr: got %q, want %q", transport.addr, ":0")
 	}
 }
@@ -27,7 +27,7 @@ func TestNewHTTPClientTransport(t *testing.T) {
 	if transport == nil {
 		t.Fatal("Transport should not be nil")
 	}
-	if transport.endpoint != "http://localhost:8080" {
+	if transport.endpoint != "http://localhost:8080" { //nolint:staticcheck // SA5011: Check above ensures non-nil
 		t.Errorf("endpoint: got %q, want %q", transport.endpoint, "http://localhost:8080")
 	}
 }

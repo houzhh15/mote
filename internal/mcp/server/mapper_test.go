@@ -83,7 +83,7 @@ func TestToolMapper_GetTool_WithPrefix(t *testing.T) {
 	}
 
 	// Should also find tool using internal name (for backward compatibility)
-	tool, ok = mapper.GetTool("echo")
+	_, ok = mapper.GetTool("echo")
 	if !ok {
 		t.Fatal("Tool should be found with internal name")
 	}

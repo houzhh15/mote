@@ -11,6 +11,7 @@ import (
 )
 
 // mockChannelPlugin 用于测试的 mock 渠道插件
+//nolint:unused // Test helper
 type mockChannelPlugin struct {
 	id       channel.ChannelType
 	name     string
@@ -24,6 +25,7 @@ type mockChannelPlugin struct {
 	sendErr  error
 }
 
+//nolint:unused // Test helper
 func newMockChannelPlugin(id channel.ChannelType, name string) *mockChannelPlugin {
 	return &mockChannelPlugin{
 		id:   id,
@@ -31,14 +33,17 @@ func newMockChannelPlugin(id channel.ChannelType, name string) *mockChannelPlugi
 	}
 }
 
+//nolint:unused // Test helper
 func (m *mockChannelPlugin) ID() channel.ChannelType {
 	return m.id
 }
 
+//nolint:unused // Test helper
 func (m *mockChannelPlugin) Name() string {
 	return m.name
 }
 
+//nolint:unused // Test helper
 func (m *mockChannelPlugin) Capabilities() channel.ChannelCapabilities {
 	return channel.ChannelCapabilities{
 		CanSendText: true,
@@ -46,6 +51,7 @@ func (m *mockChannelPlugin) Capabilities() channel.ChannelCapabilities {
 	}
 }
 
+//nolint:unused // Test helper
 func (m *mockChannelPlugin) Start(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -56,6 +62,7 @@ func (m *mockChannelPlugin) Start(ctx context.Context) error {
 	return nil
 }
 
+//nolint:unused // Test helper
 func (m *mockChannelPlugin) Stop(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -66,6 +73,7 @@ func (m *mockChannelPlugin) Stop(ctx context.Context) error {
 	return nil
 }
 
+//nolint:unused // Test helper
 func (m *mockChannelPlugin) SendMessage(ctx context.Context, msg channel.OutboundMessage) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -76,30 +84,35 @@ func (m *mockChannelPlugin) SendMessage(ctx context.Context, msg channel.Outboun
 	return nil
 }
 
+//nolint:unused // Test helper
 func (m *mockChannelPlugin) OnMessage(handler channel.MessageHandler) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.handler = handler
 }
 
+//nolint:unused // Test helper
 func (m *mockChannelPlugin) isStarted() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.started
 }
 
+//nolint:unused // Test helper
 func (m *mockChannelPlugin) isStopped() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.stopped
 }
 
+//nolint:unused // Test helper
 func (m *mockChannelPlugin) getSentMessages() []channel.OutboundMessage {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return append([]channel.OutboundMessage{}, m.sentMsgs...)
 }
 
+//nolint:unused // Test helper
 func (m *mockChannelPlugin) simulateMessage(ctx context.Context, msg channel.InboundMessage) error {
 	m.mu.Lock()
 	handler := m.handler
@@ -304,6 +317,7 @@ func BenchmarkInitChannels(b *testing.B) {
 }
 
 // 辅助函数：等待条件满足
+//nolint:unused // Test helper
 func waitFor(t *testing.T, condition func() bool, timeout time.Duration, msg string) {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {

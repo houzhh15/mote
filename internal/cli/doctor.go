@@ -323,6 +323,7 @@ func checkServerConnectivity() checkResult {
 }
 
 // checkMCPServers checks MCP server connectivity (only if server is running)
+//nolint:unused // Future use
 func checkMCPServers(serverURL string) checkResult {
 	client := &http.Client{Timeout: 5 * time.Second}
 

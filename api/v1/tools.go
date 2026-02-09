@@ -168,7 +168,7 @@ func (r *Router) HandleCreateTool(w http.ResponseWriter, req *http.Request) {
 	}
 
 	// Default to javascript runtime if not specified
-	runtimeType := tools.RuntimeJavaScript
+	var runtimeType tools.RuntimeType
 	switch createReq.Runtime {
 	case "python":
 		runtimeType = tools.RuntimePython

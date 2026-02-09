@@ -11,7 +11,7 @@ func TestNewProcessManager(t *testing.T) {
 	if pm == nil {
 		t.Fatal("NewProcessManager returned nil")
 	}
-	if pm.motePath != "/usr/local/bin/mote" {
+	if pm.motePath != "/usr/local/bin/mote" { //nolint:staticcheck // SA5011: Check above ensures non-nil
 		t.Errorf("motePath = %q, want %q", pm.motePath, "/usr/local/bin/mote")
 	}
 	if pm.port != 18788 {

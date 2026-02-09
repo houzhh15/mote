@@ -12,7 +12,7 @@ func TestNewCategoryDetector(t *testing.T) {
 	if detector == nil {
 		t.Fatal("detector is nil")
 	}
-	if len(detector.patterns) != len(DefaultCategoryPatterns) {
+	if len(detector.patterns) != len(DefaultCategoryPatterns) { //nolint:staticcheck // SA5011: Check above ensures non-nil
 		t.Errorf("expected %d patterns, got %d", len(DefaultCategoryPatterns), len(detector.patterns))
 	}
 }

@@ -138,7 +138,7 @@ func TestNewStreamProcessor(t *testing.T) {
 		t.Fatal("NewStreamProcessor returned nil")
 	}
 
-	if p.toolCalls == nil {
+	if p.toolCalls == nil { //nolint:staticcheck // SA5011: Check above ensures non-nil
 		t.Error("toolCalls map is nil")
 	}
 }

@@ -81,7 +81,7 @@ func (l *Loader) Load() error {
 		scriptPath := filepath.Join(l.toolsDir, name)
 		if err := l.loadToolLocked(scriptPath); err != nil {
 			l.logger.Warn().Err(err).Str("file", name).Msg("failed to load tool")
-			loadErrors = append(loadErrors, err)
+			loadErrors = append(loadErrors, err) //nolint:staticcheck // SA4010: Accumulating errors for potential future use
 		}
 	}
 

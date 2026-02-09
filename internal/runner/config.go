@@ -87,6 +87,8 @@ func (c Config) WithSystemPrompt(prompt string) Config {
 }
 
 // Validate returns an error if the configuration is invalid.
+//
+//nolint:staticcheck // SA4005: Field assignments set defaults but don't modify the receiver
 func (c Config) Validate() error {
 	if c.MaxIterations <= 0 {
 		c.MaxIterations = 10

@@ -38,7 +38,7 @@ func TestNewCaptureEngine(t *testing.T) {
 		if engine == nil {
 			t.Fatal("engine is nil")
 		}
-		if len(engine.triggers) != len(DefaultCapturePatterns) {
+		if len(engine.triggers) != len(DefaultCapturePatterns) { //nolint:staticcheck // SA5011: Check above ensures non-nil
 			t.Errorf("expected %d triggers, got %d", len(DefaultCapturePatterns), len(engine.triggers))
 		}
 	})

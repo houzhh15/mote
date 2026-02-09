@@ -184,7 +184,7 @@ func TestMessageConversions(t *testing.T) {
 		if req == nil {
 			t.Fatal("expected non-nil request")
 		}
-		if req.Method != "test" {
+		if req.Method != "test" { //nolint:staticcheck // SA5011: Check above ensures non-nil
 			t.Errorf("expected method test, got %s", req.Method)
 		}
 	})
@@ -198,7 +198,7 @@ func TestMessageConversions(t *testing.T) {
 		if notif == nil {
 			t.Fatal("expected non-nil notification")
 		}
-		if notif.Method != "notify" {
+		if notif.Method != "notify" { //nolint:staticcheck // SA5011: Check above ensures non-nil
 			t.Errorf("expected method notify, got %s", notif.Method)
 		}
 	})

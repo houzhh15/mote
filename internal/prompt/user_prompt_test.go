@@ -40,7 +40,7 @@ func TestFileUserPromptStore_GetSet(t *testing.T) {
 	if prompt == nil {
 		t.Fatal("expected prompt to exist")
 	}
-	if prompt.Name != "test" {
+	if prompt.Name != "test" { //nolint:staticcheck // SA5011: Check above ensures non-nil
 		t.Errorf("expected name 'test', got '%s'", prompt.Name)
 	}
 	if prompt.Content != "You are helpful." {
@@ -184,7 +184,7 @@ func TestSlashCommandParser_Parse(t *testing.T) {
 			if cmd == nil {
 				t.Fatalf("expected command, got nil")
 			}
-			if cmd.Name != tt.expected.Name {
+			if cmd.Name != tt.expected.Name { //nolint:staticcheck // SA5011: Check above ensures non-nil
 				t.Errorf("expected name '%s', got '%s'", tt.expected.Name, cmd.Name)
 			}
 			if cmd.Action != tt.expected.Action {

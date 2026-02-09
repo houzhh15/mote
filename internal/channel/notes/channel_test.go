@@ -11,6 +11,7 @@ import (
 )
 
 // mockCmdBuilder 用于测试的命令构造器
+//nolint:unused // Test helper
 type mockCmdBuilder struct {
 	output []byte
 	err    error
@@ -18,6 +19,7 @@ type mockCmdBuilder struct {
 	mu     sync.Mutex
 }
 
+//nolint:unused // Test helper
 func (m *mockCmdBuilder) build(ctx context.Context, name string, args ...string) *exec.Cmd {
 	m.mu.Lock()
 	m.calls = append(m.calls, append([]string{name}, args...))
@@ -30,6 +32,7 @@ func (m *mockCmdBuilder) build(ctx context.Context, name string, args ...string)
 	return exec.Command("echo", string(m.output))
 }
 
+//nolint:unused // Test helper
 func (m *mockCmdBuilder) getCalls() [][]string {
 	m.mu.Lock()
 	defer m.mu.Unlock()

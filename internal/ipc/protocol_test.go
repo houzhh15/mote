@@ -191,7 +191,7 @@ func TestFrameReader(t *testing.T) {
 		t.Fatal("expected non-nil message")
 	}
 
-	if m.ID != msg.ID {
+	if m.ID != msg.ID { //nolint:staticcheck // SA5011: Check above ensures non-nil
 		t.Errorf("ID mismatch: expected %s, got %s", msg.ID, m.ID)
 	}
 }

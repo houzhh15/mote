@@ -459,6 +459,8 @@ func (p *OllamaProvider) GetState() provider.ProviderState {
 }
 
 // classifyError converts a generic error to a ProviderError with appropriate code.
+//
+//nolint:unused // Reserved for future error handling enhancement
 func (p *OllamaProvider) classifyError(err error) *provider.ProviderError {
 	if err == nil {
 		return nil

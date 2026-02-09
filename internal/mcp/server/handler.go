@@ -115,7 +115,7 @@ func (h *MethodHandler) handleInitialize(ctx context.Context, params json.RawMes
 // handleToolsList handles the tools/list method.
 func (h *MethodHandler) handleToolsList(ctx context.Context, params json.RawMessage) (any, error) {
 	var listParams protocol.ListToolsParams
-	if params != nil && len(params) > 0 && string(params) != "null" {
+	if len(params) > 0 && string(params) != "null" {
 		if err := json.Unmarshal(params, &listParams); err != nil {
 			return nil, protocol.NewInvalidParamsError(err.Error())
 		}

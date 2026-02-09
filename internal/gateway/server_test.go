@@ -28,24 +28,24 @@ func TestNewServer(t *testing.T) {
 		t.Fatal("NewServer returned nil")
 	}
 
-	if server.router == nil {
+	if server.router == nil { //nolint:staticcheck // SA5011: Check above ensures non-nil
 		t.Error("router is nil")
 	}
 
-	if server.hub != hub {
+	if server.hub != hub { //nolint:staticcheck // SA5011: Check above ensures non-nil
 		t.Error("hub not set correctly")
 	}
 
 	// Check UI components are initialized
-	if server.uiRegistry == nil {
+	if server.uiRegistry == nil { //nolint:staticcheck // SA5011: Check above ensures non-nil
 		t.Error("uiRegistry is nil")
 	}
 
-	if server.uiState == nil {
+	if server.uiState == nil { //nolint:staticcheck // SA5011: server checked above
 		t.Error("uiState is nil")
 	}
 
-	if server.uiHandler == nil {
+	if server.uiHandler == nil { //nolint:staticcheck // SA5011: server checked above
 		t.Error("uiHandler is nil")
 	}
 }

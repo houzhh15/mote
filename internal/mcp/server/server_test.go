@@ -199,8 +199,8 @@ func TestServer_MessageLoop_Integration(t *testing.T) {
 	s.cancel = cancel
 	s.transport = mockT
 
+	s.wg.Add(1) // Must be called before starting goroutine
 	go func() {
-		s.wg.Add(1)
 		s.messageLoop()
 	}()
 

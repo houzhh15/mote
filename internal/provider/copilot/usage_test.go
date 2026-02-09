@@ -13,7 +13,7 @@ func TestNewUsageTracker(t *testing.T) {
 		t.Fatal("NewUsageTracker returned nil")
 	}
 
-	if ut.monthlyFreeLimit != 2000 {
+	if ut.monthlyFreeLimit != 2000 { //nolint:staticcheck // SA5011: Check above ensures non-nil
 		t.Errorf("monthlyFreeLimit = %d, want 2000", ut.monthlyFreeLimit)
 	}
 

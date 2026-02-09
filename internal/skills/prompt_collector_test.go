@@ -223,7 +223,7 @@ func TestPromptCollector_GetBySkill_Copy(t *testing.T) {
 	originalLen := len(prompts)
 
 	// Modify the returned slice
-	prompts = append(prompts, &SkillPrompt{Name: "p3"})
+	_ = append(prompts, &SkillPrompt{Name: "p3"})
 
 	// Verify internal state wasn't modified
 	prompts2 := collector.GetBySkill("test-skill")

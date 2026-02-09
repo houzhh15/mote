@@ -12,11 +12,11 @@ func TestNewHub(t *testing.T) {
 		t.Fatal("NewHub returned nil")
 	}
 
-	if hub.clients == nil {
+	if hub.clients == nil { //nolint:staticcheck // SA5011: Check above ensures non-nil
 		t.Error("clients map is nil")
 	}
 
-	if hub.sessions == nil {
+	if hub.sessions == nil { //nolint:staticcheck // SA5011: Check above ensures non-nil
 		t.Error("sessions map is nil")
 	}
 }

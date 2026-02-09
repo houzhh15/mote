@@ -105,7 +105,7 @@ func TestMultiProviderPool_GetProvider(t *testing.T) {
 	}
 
 	// Test getting Ollama model (with prefix)
-	provider, providerName, err = pool.GetProvider("ollama:llama3.2")
+	_, providerName, err = pool.GetProvider("ollama:llama3.2")
 	if err != nil {
 		t.Fatalf("GetProvider(ollama:llama3.2) failed: %v", err)
 	}

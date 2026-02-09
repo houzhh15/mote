@@ -214,7 +214,7 @@ func TestGetConfig(t *testing.T) {
 	if cfg == nil {
 		t.Fatal("GetConfig returned nil after Load")
 	}
-	if cfg.Gateway.Port != 8080 {
+	if cfg.Gateway.Port != 8080 { //nolint:staticcheck // SA5011: Check above ensures non-nil
 		t.Errorf("gateway.port = %d, want 8080", cfg.Gateway.Port)
 	}
 }

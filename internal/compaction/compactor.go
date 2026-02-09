@@ -245,10 +245,7 @@ func (c *Compactor) SetMemoryIndex(m *memory.MemoryIndex) {
 func (c *Compactor) CompactWithFlush(ctx context.Context, messages []provider.Message) ([]provider.Message, error) {
 	// First, flush important info to memory if configured
 	if c.memoryFlusher != nil && c.config.FlushOnCompact {
-		if err := c.flushToMemory(ctx, messages); err != nil {
-			// Log but don't fail - compaction should still proceed
-			// Just skip the memory flush on error
-		}
+		_ = c.flushToMemory(ctx, messages) // Ignore error - compaction should still proceed
 	}
 
 	// Then do normal compaction

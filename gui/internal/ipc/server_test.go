@@ -12,7 +12,7 @@ func TestNewServer(t *testing.T) {
 	if server == nil {
 		t.Fatal("NewServer returned nil")
 	}
-	if server.handler == nil {
+	if server.handler == nil { //nolint:staticcheck // SA5011: Check above ensures non-nil
 		t.Error("handler is nil")
 	}
 }

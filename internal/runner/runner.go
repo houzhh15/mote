@@ -1020,9 +1020,7 @@ func (r *Runner) buildChatRequest(messages []provider.Message, model string) pro
 	tools, _ := r.registry.ToProviderTools()
 
 	// For Ollama provider, strip the "ollama:" prefix from model name
-	if strings.HasPrefix(model, "ollama:") {
-		model = strings.TrimPrefix(model, "ollama:")
-	}
+	model = strings.TrimPrefix(model, "ollama:")
 
 	req := provider.ChatRequest{
 		Model:       model,
@@ -1037,6 +1035,8 @@ func (r *Runner) buildChatRequest(messages []provider.Message, model string) pro
 
 // callProvider calls the LLM provider and processes the response.
 // Deprecated: Use callProviderWith for multi-model support.
+//
+//nolint:unused // Reserved for backward compatibility
 func (r *Runner) callProvider(ctx context.Context, req provider.ChatRequest, events chan<- Event, iteration int) (*provider.ChatResponse, error) {
 	if r.config.StreamOutput {
 		return r.callProviderStream(ctx, req, events, iteration)
@@ -1054,6 +1054,8 @@ func (r *Runner) callProviderWith(ctx context.Context, prov provider.Provider, r
 
 // callProviderChat calls the provider without streaming.
 // Deprecated: Use callProviderChatWith for multi-model support.
+//
+//nolint:unused // Reserved for backward compatibility
 func (r *Runner) callProviderChat(ctx context.Context, req provider.ChatRequest, events chan<- Event) (*provider.ChatResponse, error) {
 	resp, err := r.provider.Chat(ctx, req)
 	if err != nil {
@@ -1097,6 +1099,8 @@ func (r *Runner) callProviderChatWith(ctx context.Context, prov provider.Provide
 
 // callProviderStream calls the provider with streaming.
 // Deprecated: Use callProviderStreamWith for multi-model support.
+//
+//nolint:unused // Reserved for backward compatibility
 func (r *Runner) callProviderStream(ctx context.Context, req provider.ChatRequest, events chan<- Event, iteration int) (*provider.ChatResponse, error) {
 	streamCh, err := r.provider.Stream(ctx, req)
 	if err != nil {
@@ -1230,6 +1234,9 @@ func (r *Runner) processStreamResponse(ctx context.Context, streamCh <-chan prov
 }
 
 // executeTools executes the tool calls and returns tool result messages.
+// Deprecated: Use executeToolsWithSession for session-aware execution.
+//
+//nolint:unused // Reserved for backward compatibility
 func (r *Runner) executeTools(ctx context.Context, toolCalls []provider.ToolCall, events chan<- Event) []provider.Message {
 	return r.executeToolsWithSession(ctx, toolCalls, events, "", "")
 }

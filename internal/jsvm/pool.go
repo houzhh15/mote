@@ -33,7 +33,7 @@ type vmInstance struct {
 	vm         *goja.Runtime
 	createdAt  time.Time
 	lastUsedAt time.Time
-	execCount  int64
+	execCount  int64 //nolint:unused // Reserved for metrics/monitoring
 }
 
 // isExpired checks if the instance has exceeded the idle timeout.

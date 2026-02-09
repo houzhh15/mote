@@ -293,7 +293,7 @@ func TestRunner_PolicyBlock(t *testing.T) {
 		Args string
 	}
 	for _, tc := range toolCalls {
-		providerToolCalls = append(providerToolCalls, struct {
+		providerToolCalls = append(providerToolCalls, struct { //nolint:staticcheck // SA4010: Building slice for provider response
 			ID   string
 			Name string
 			Args string
@@ -311,7 +311,7 @@ func TestRunner_PolicyBlock(t *testing.T) {
 		}
 	}
 	for _, tc := range toolCalls {
-		ptcs = append(ptcs, struct {
+		ptcs = append(ptcs, struct { //nolint:staticcheck // SA4010: Building response for mock provider
 			ID        string
 			Name      string
 			Arguments string

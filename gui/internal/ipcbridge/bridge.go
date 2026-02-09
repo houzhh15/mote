@@ -19,7 +19,7 @@ type Bridge struct {
 	logger      zerolog.Logger
 	ctx         context.Context
 	cancel      context.CancelFunc
-	mu          sync.RWMutex
+	mu          sync.RWMutex //nolint:unused // Reserved for future concurrent access
 
 	// Callbacks for GUI events
 	onTrayReady      func()

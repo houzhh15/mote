@@ -234,7 +234,7 @@ func runToolInfo(serverURL, toolName string) error {
 	fmt.Printf("Enabled: %v\n", tool.Enabled)
 
 	// Print parameters schema
-	if tool.Parameters != nil && len(tool.Parameters) > 0 {
+	if len(tool.Parameters) > 0 {
 		fmt.Println("\nParameters:")
 		paramsJSON, _ := json.MarshalIndent(tool.Parameters, "", "  ")
 		fmt.Println(string(paramsJSON))

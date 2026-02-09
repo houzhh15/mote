@@ -33,7 +33,7 @@ func TestNewRecallEngine(t *testing.T) {
 		if engine == nil {
 			t.Fatal("engine is nil")
 		}
-		if engine.config.Limit != 3 {
+		if engine.config.Limit != 3 { //nolint:staticcheck // SA5011: Check above ensures non-nil
 			t.Errorf("expected limit 3, got %d", engine.config.Limit)
 		}
 	})

@@ -13,7 +13,7 @@ func TestNewAPIClient(t *testing.T) {
 	if client == nil {
 		t.Fatal("NewAPIClient returned nil")
 	}
-	if client.baseURL != "http://localhost:18788" {
+	if client.baseURL != "http://localhost:18788" { //nolint:staticcheck // SA5011: Check above ensures non-nil
 		t.Errorf("baseURL = %q, want %q", client.baseURL, "http://localhost:18788")
 	}
 	if client.timeout != 30*time.Second {

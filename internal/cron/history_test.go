@@ -164,7 +164,7 @@ func TestHistoryStoreGetLatest(t *testing.T) {
 	if latest == nil {
 		t.Fatal("expected latest entry, got nil")
 	}
-	if latest.Result != "run-2" {
+	if latest.Result != "run-2" { //nolint:staticcheck // SA5011: Check above ensures non-nil
 		t.Errorf("expected latest entry 'run-2', got %s", latest.Result)
 	}
 }

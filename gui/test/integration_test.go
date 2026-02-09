@@ -314,6 +314,7 @@ func findGUIBinary() string {
 	return ""
 }
 
+//nolint:unused // Test helper
 func findMoteBinary() string {
 	root := getProjectRoot()
 	possiblePaths := []string{

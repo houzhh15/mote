@@ -228,7 +228,7 @@ func TestManager_CallTool_ServerNotFound(t *testing.T) {
 
 // mockManagerTransport for manager tests
 type mockManagerTransport struct {
-	mu        sync.Mutex
+	mu        sync.Mutex //nolint:unused // Reserved for concurrent test scenarios
 	sendCh    chan []byte
 	receiveCh chan []byte
 }

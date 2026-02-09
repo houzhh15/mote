@@ -746,7 +746,7 @@ func (m *MemoryIndex) HybridSearch(ctx context.Context, query string, opts Searc
 	}
 
 	// If no embedding, fall back to pure FTS
-	if queryEmbedding == nil || len(queryEmbedding) == 0 {
+	if len(queryEmbedding) == 0 {
 		m.logger.Debug().Msg("HybridSearch: no embedding, fallback to FTS-only")
 		ftsResults, err := m.searchFTSInternal(ctx, query, opts.TopK)
 		if err != nil {
