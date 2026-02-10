@@ -46,6 +46,11 @@ export const PromptSelector: React.FC<PromptSelectorProps> = ({
   const [argsModalVisible, setArgsModalVisible] = useState(false);
   const [pendingPrompt, setPendingPrompt] = useState<PromptItem | null>(null);
   const [form] = Form.useForm();
+  
+  // Log when component visibility changes
+  useEffect(() => {
+    console.log('[PromptSelector] Visibility changed:', visible);
+  }, [visible]);
 
   // Load prompts on mount
   useEffect(() => {
@@ -54,6 +59,7 @@ export const PromptSelector: React.FC<PromptSelectorProps> = ({
       try {
         // Load user prompts
         const userData = await api.getPrompts?.() ?? [];
+        console.log('[PromptSelector] Loaded user prompts:', userData.length);
         const userItems: PromptItem[] = userData
           .filter((p: Prompt) => p.enabled)
           .map((p: Prompt) => ({
@@ -67,6 +73,7 @@ export const PromptSelector: React.FC<PromptSelectorProps> = ({
 
         // Load MCP prompts
         const mcpData = await api.getMCPPrompts?.() ?? [];
+        console.log('[PromptSelector] Loaded MCP prompts:', mcpData.length);
         const mcpItems: PromptItem[] = mcpData.map((p: MCPPrompt) => ({
           id: `mcp_${p.server}_${p.name}`,
           name: p.name,
@@ -78,8 +85,9 @@ export const PromptSelector: React.FC<PromptSelectorProps> = ({
           args: p.arguments,
         }));
         setMCPPrompts(mcpItems);
+        console.log('[PromptSelector] Total prompts loaded:', userItems.length + mcpItems.length);
       } catch (error) {
-        console.error('Failed to load prompts:', error);
+        console.error('[PromptSelector] Failed to load prompts:', error);
         setUserPrompts([]);
         setMCPPrompts([]);
       } finally {
@@ -87,6 +95,7 @@ export const PromptSelector: React.FC<PromptSelectorProps> = ({
       }
     };
     if (visible) {
+      console.log('[PromptSelector] Popup opened, loading prompts...');
       loadPrompts();
     }
   }, [api, visible]);
@@ -112,6 +121,13 @@ export const PromptSelector: React.FC<PromptSelectorProps> = ({
       );
     }
 
+    console.log('[PromptSelector] Filtered prompts:', {
+      activeTab,
+      searchQuery,
+      total: items.length,
+      userCount: userPrompts.length,
+      mcpCount: mcpPrompts.length
+    });
     setFilteredPrompts(items);
   }, [searchQuery, userPrompts, mcpPrompts, activeTab]);
 
@@ -187,7 +203,18 @@ export const PromptSelector: React.FC<PromptSelectorProps> = ({
     form.resetFields();
   };
 
-  if (!visible) return null;
+  if (!visible) {
+    console.log('[PromptSelector] Component hidden, returning null');
+    return null;
+  }
+
+  console.log('[PromptSelector] Rendering with data:', {
+    loading,
+    userCount: userPrompts.length,
+    mcpCount: mcpPrompts.length,
+    filteredCount: filteredPrompts.length,
+    activeTab
+  });
 
   const tabItems = [
     { key: 'all', label: <span style={{ fontSize: 13 }}>{`全部 (${userPrompts.length + mcpPrompts.length})`}</span> },
@@ -240,14 +267,29 @@ export const PromptSelector: React.FC<PromptSelectorProps> = ({
 
       {loading ? (
         <div style={{ padding: 24, textAlign: 'center' }}>
-          <Spin size="small" />
+          <Spin size="small" tip="正在加载提示词..." />
         </div>
       ) : filteredPrompts.length === 0 ? (
-        <Empty
-          description="无匹配的提示词"
-          style={{ padding: 24 }}
-          imageStyle={{ height: 40 }}
-        />
+        <div style={{ padding: 24, textAlign: 'center' }}>
+          <Empty
+            description={
+              <div>
+                <div style={{ marginBottom: 8 }}>无匹配的提示词</div>
+                {userPrompts.length === 0 && mcpPrompts.length === 0 && (
+                  <Text type="secondary" style={{ fontSize: 12 }}>
+                    请在设置页面添加用户提示词，或配置 MCP 服务器
+                  </Text>
+                )}
+                {(userPrompts.length > 0 || mcpPrompts.length > 0) && searchQuery && (
+                  <Text type="secondary" style={{ fontSize: 12 }}>
+                    尝试更改搜索关键词或切换标签页
+                  </Text>
+                )}
+              </div>
+            }
+            imageStyle={{ height: 40 }}
+          />
+        </div>
       ) : (
         <List
           size="small"
