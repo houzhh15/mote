@@ -453,8 +453,23 @@ func (s *Server) run() {
 	s.workspaceManager = workspaceManager
 	s.gatewayServer.SetWorkspaceManager(workspaceManager)
 
-	// Initialize Prompt Manager
-	promptManager := prompts.NewManager()
+	// Initialize Prompt Manager with file loading support
+	promptsDirs := []string{}
+	
+	// Add user-level prompts directory
+	if homeDir != "" {
+		userPromptsDir := filepath.Join(homeDir, ".mote", "prompts")
+		promptsDirs = append(promptsDirs, userPromptsDir)
+	}
+	
+	// Add workspace-level prompts directory
+	workspacePromptsDir := filepath.Join(".", ".mote", "prompts")
+	promptsDirs = append(promptsDirs, workspacePromptsDir)
+	
+	promptManager := prompts.NewManagerWithConfig(prompts.ManagerConfig{
+		PromptsDirs:    promptsDirs,
+		EnableAutoSave: true,
+	})
 	s.gatewayServer.SetPromptManager(promptManager)
 
 	// Initialize Cron system
@@ -928,14 +943,10 @@ func (s *Server) initializeMemory(db *storage.DB, agentRunner *runner.Runner, ga
 		}
 
 		if captureEngine != nil || recallEngine != nil {
-			memHooks := memory.NewMemoryHooks(memory.MemoryHooksOptions{
-				Capture: captureEngine,
-				Recall:  recallEngine,
-				Logger:  s.logger,
-			})
 			memBridge := hooksbuiltin.NewMemoryHookBridge(hooksbuiltin.MemoryHookConfig{
-				MemoryHooks: memHooks,
-				Logger:      s.logger,
+				CaptureEngine: captureEngine,
+				RecallEngine:  recallEngine,
+				Logger:        s.logger,
 			})
 			if recallEngine != nil {
 				_ = hookManager.Register(hooks.HookBeforeMessage, memBridge.BeforeMessageHandler("memory-recall"))

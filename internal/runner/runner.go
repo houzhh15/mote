@@ -147,6 +147,46 @@ func (r *Runner) SetMultiProviderPool(pool *provider.MultiProviderPool) {
 	}())
 }
 
+// ResetSession performs a full resource cleanup for a session.
+// This is called when model/workspace changes require rebuilding all runtime state.
+// It clears: 1) session cache, 2) provider session state (ACP sessions, CLI mappings).
+// The next request will re-read from DB and create fresh provider sessions.
+func (r *Runner) ResetSession(sessionID string) {
+	slog.Info("Runner.ResetSession: starting session resource cleanup",
+		"sessionID", sessionID)
+
+	// 1. Invalidate session cache so next request re-reads from DB
+	if r.sessions != nil {
+		r.sessions.Invalidate(sessionID)
+		slog.Info("Runner.ResetSession: session cache invalidated",
+			"sessionID", sessionID)
+	}
+
+	// 2. Reset provider session state (ACP sessions, CLI process mappings)
+	r.mu.RLock()
+	multiPool := r.multiPool
+	r.mu.RUnlock()
+
+	if multiPool != nil {
+		multiPool.ResetProviderSession(sessionID)
+		slog.Info("Runner.ResetSession: provider sessions reset",
+			"sessionID", sessionID)
+	}
+
+	// 3. Clear token tracking for this session
+	r.tokenMu.Lock()
+	delete(r.sessionTokens, sessionID)
+	r.tokenMu.Unlock()
+
+	// 4. Clear memory flush state
+	r.flushMu.Lock()
+	delete(r.flushStates, sessionID)
+	r.flushMu.Unlock()
+
+	slog.Info("Runner.ResetSession: session resource cleanup completed",
+		"sessionID", sessionID)
+}
+
 // GetProvider returns the provider for the given model.
 // If model is empty, uses the default model.
 // Supports multi-provider pool for Ollama models (with "ollama:" prefix).
@@ -225,6 +265,26 @@ func (r *Runner) SetHookManager(hm *hooks.Manager) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.hookManager = hm
+}
+
+// triggerHook is a helper that safely triggers hooks with nil checks.
+// Returns a default continue result if hookManager is nil.
+func (r *Runner) triggerHook(ctx context.Context, hookCtx *hooks.Context) (*hooks.Result, error) {
+	r.mu.RLock()
+	hm := r.hookManager
+	r.mu.RUnlock()
+
+	if hm == nil {
+		return hooks.ContinueResult(), nil
+	}
+	return hm.Trigger(ctx, hookCtx)
+}
+
+// triggerHookWithContinue is like triggerHook but returns a simple continue boolean.
+// Returns true if the chain should continue, false if interrupted.
+func (r *Runner) triggerHookWithContinue(ctx context.Context, hookCtx *hooks.Context) bool {
+	result, _ := r.triggerHook(ctx, hookCtx)
+	return result != nil && result.Continue
 }
 
 // SetPolicyExecutor sets the optional M08 policy executor.
@@ -658,35 +718,33 @@ func (r *Runner) runLoop(ctx context.Context, sessionID, userInput string, event
 // runLoopCore is the core agent execution loop that takes a resolved provider.
 func (r *Runner) runLoopCore(ctx context.Context, cached *scheduler.CachedSession, sessionID, userInput string, prov provider.Provider, events chan<- Event) {
 	// M07: Trigger session_create hook for new sessions
-	if r.hookManager != nil && len(cached.Messages) == 0 {
+	if len(cached.Messages) == 0 {
 		hookCtx := hooks.NewContext(hooks.HookSessionCreate)
 		hookCtx.Session = &hooks.SessionContext{
 			ID:        sessionID,
 			CreatedAt: time.Now(),
 		}
-		_, _ = r.hookManager.Trigger(ctx, hookCtx)
+		_, _ = r.triggerHook(ctx, hookCtx)
 	}
 
 	// M07: Trigger before_message hook
-	if r.hookManager != nil {
-		hookCtx := hooks.NewContext(hooks.HookBeforeMessage)
-		hookCtx.Message = &hooks.MessageContext{
-			Content: userInput,
-			Role:    string(provider.RoleUser),
-			From:    "user",
-		}
-		hookCtx.Session = &hooks.SessionContext{ID: sessionID}
+	hookCtx := hooks.NewContext(hooks.HookBeforeMessage)
+	hookCtx.Message = &hooks.MessageContext{
+		Content: userInput,
+		Role:    string(provider.RoleUser),
+		From:    "user",
+	}
+	hookCtx.Session = &hooks.SessionContext{ID: sessionID}
 
-		result, _ := r.hookManager.Trigger(ctx, hookCtx)
-		if result != nil && !result.Continue {
-			events <- NewErrorEvent(ErrHookInterrupted)
-			return
-		}
-		// Apply modifications
-		if result != nil && result.Modified {
-			if modified, ok := result.Data["content"].(string); ok {
-				userInput = modified
-			}
+	result, _ := r.triggerHook(ctx, hookCtx)
+	if result != nil && !result.Continue {
+		events <- NewErrorEvent(ErrHookInterrupted)
+		return
+	}
+	// Apply modifications
+	if result != nil && result.Modified {
+		if modified, ok := result.Data["content"].(string); ok {
+			userInput = modified
 		}
 	}
 
@@ -848,7 +906,7 @@ func (r *Runner) runLoopCore(ctx context.Context, cached *scheduler.CachedSessio
 			respContent := resp.Content
 
 			// M07: Trigger before_response hook
-			if r.hookManager != nil && respContent != "" {
+			if respContent != "" {
 				hookCtx := hooks.NewContext(hooks.HookBeforeResponse)
 				hookCtx.Response = &hooks.ResponseContext{
 					Content:    respContent,
@@ -856,7 +914,7 @@ func (r *Runner) runLoopCore(ctx context.Context, cached *scheduler.CachedSessio
 				}
 				hookCtx.Session = &hooks.SessionContext{ID: sessionID}
 
-				result, _ := r.hookManager.Trigger(ctx, hookCtx)
+				result, _ := r.triggerHook(ctx, hookCtx)
 				if result != nil && result.Modified {
 					if modified, ok := result.Data["content"].(string); ok {
 						respContent = modified
@@ -870,14 +928,14 @@ func (r *Runner) runLoopCore(ctx context.Context, cached *scheduler.CachedSessio
 			}
 
 			// M07: Trigger after_response hook
-			if r.hookManager != nil && respContent != "" {
+			if respContent != "" {
 				hookCtx := hooks.NewContext(hooks.HookAfterResponse)
 				hookCtx.Response = &hooks.ResponseContext{
 					Content:    respContent,
 					TokensUsed: int(totalUsage.TotalTokens),
 				}
 				hookCtx.Session = &hooks.SessionContext{ID: sessionID}
-				_, _ = r.hookManager.Trigger(ctx, hookCtx)
+				_, _ = r.triggerHook(ctx, hookCtx)
 			}
 
 			events <- NewDoneEvent(&totalUsage)
@@ -1569,24 +1627,21 @@ func (r *Runner) executeToolsWithSession(ctx context.Context, toolCalls []provid
 		}
 
 		// M07: Trigger before_tool_call hook
-		if r.hookManager != nil {
-			hookCtx := hooks.NewContext(hooks.HookBeforeToolCall)
-			hookCtx.ToolCall = &hooks.ToolCallContext{
-				ID:       tc.ID,
-				ToolName: toolName,
-				Params:   argsMap,
-			}
-			result, _ := r.hookManager.Trigger(ctx, hookCtx)
-			if result != nil && !result.Continue {
-				// Tool call blocked by hook
-				results = append(results, provider.Message{
-					Role:       provider.RoleTool,
-					Content:    "Tool call blocked by policy",
-					ToolCallID: tc.ID,
-				})
-				events <- NewToolResultEvent(tc.ID, toolName, "Tool call blocked by policy", true, 0)
-				continue
-			}
+		hookCtx := hooks.NewContext(hooks.HookBeforeToolCall)
+		hookCtx.ToolCall = &hooks.ToolCallContext{
+			ID:       tc.ID,
+			ToolName: toolName,
+			Params:   argsMap,
+		}
+		if !r.triggerHookWithContinue(ctx, hookCtx) {
+			// Tool call blocked by hook
+			results = append(results, provider.Message{
+				Role:       provider.RoleTool,
+				Content:    "Tool call blocked by policy",
+				ToolCallID: tc.ID,
+			})
+			events <- NewToolResultEvent(tc.ID, toolName, "Tool call blocked by policy", true, 0)
+			continue
 		}
 
 		// Execute tool
@@ -1607,18 +1662,16 @@ func (r *Runner) executeToolsWithSession(ctx context.Context, toolCalls []provid
 		}
 
 		// M07: Trigger after_tool_call hook
-		if r.hookManager != nil {
-			hookCtx := hooks.NewContext(hooks.HookAfterToolCall)
-			hookCtx.ToolCall = &hooks.ToolCallContext{
-				ID:       tc.ID,
-				ToolName: toolName,
-				Params:   argsMap,
-				Result:   output,
-				Error:    toolErr,
-				Duration: duration,
-			}
-			_, _ = r.hookManager.Trigger(ctx, hookCtx)
+		afterHookCtx := hooks.NewContext(hooks.HookAfterToolCall)
+		afterHookCtx.ToolCall = &hooks.ToolCallContext{
+			ID:       tc.ID,
+			ToolName: toolName,
+			Params:   argsMap,
+			Result:   output,
+			Error:    toolErr,
+			Duration: duration,
 		}
+		_, _ = r.triggerHook(ctx, afterHookCtx)
 
 		// Emit tool result event
 		events <- NewToolResultEvent(tc.ID, toolName, output, isError, duration.Milliseconds())

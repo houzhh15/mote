@@ -3,6 +3,7 @@ package provider
 
 import (
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"sync"
@@ -96,6 +97,28 @@ func (m *MultiProviderPool) GetProvider(modelID string) (Provider, string, error
 	}
 
 	return provider, providerName, nil
+}
+
+// ResetProviderSession resets session state for a conversationID across all providers
+// that implement the SessionResettable interface. This is used when model/workspace
+// changes require a full session rebuild.
+func (m *MultiProviderPool) ResetProviderSession(conversationID string) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	for name, pool := range m.pools {
+		// Try all cached providers in this pool
+		for _, modelID := range pool.Models() {
+			if prov, err := pool.Get(modelID); err == nil {
+				if resettable, ok := prov.(SessionResettable); ok {
+					slog.Info("Resetting provider session",
+						"provider", name,
+						"conversationID", conversationID)
+					resettable.ResetSession(conversationID)
+				}
+			}
+		}
+	}
 }
 
 // GetPool returns the Pool for a specific provider.

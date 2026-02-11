@@ -34,6 +34,8 @@ import type {
   Workspace,
   WorkspaceFile,
   BrowseDirectoryResult,
+  ReconfigureSessionRequest,
+  ReconfigureSessionResponse,
 } from '../types';
 
 // Extend window with Wails runtime
@@ -471,6 +473,14 @@ export function createWailsAdapter(app: WailsApp): APIAdapter {
       await callAPI('POST', '/api/v1/prompts/open', { target });
     },
 
+    reloadPrompts: async (): Promise<void> => {
+      await callAPI('POST', '/api/v1/prompts/reload');
+    },
+
+    renderPrompt: async (id: string, variables: Record<string, string>): Promise<{ content: string }> => {
+      return callAPI<{ content: string }>('POST', `/api/v1/prompts/${id}/render`, { variables });
+    },
+
     // ============== Workspace Service ==============
     getWorkspaces: async (): Promise<Workspace[]> => {
       const data = await callAPI<{ workspaces: Workspace[] }>('GET', '/api/v1/workspaces');
@@ -529,6 +539,10 @@ export function createWailsAdapter(app: WailsApp): APIAdapter {
 
     setSessionSkills: async (sessionId: string, skillIds: string[]): Promise<void> => {
       await callAPI('PUT', `/api/v1/sessions/${sessionId}/skills`, { selected_skills: skillIds });
+    },
+
+    reconfigureSession: async (sessionId: string, config: ReconfigureSessionRequest): Promise<ReconfigureSessionResponse> => {
+      return callAPI<ReconfigureSessionResponse>('POST', `/api/v1/sessions/${sessionId}/reconfigure`, config);
     },
 
     getScenarioModels: async (): Promise<{ chat: string; cron: string; channel: string }> => {

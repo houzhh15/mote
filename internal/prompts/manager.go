@@ -3,10 +3,14 @@ package prompts
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
+	"gopkg.in/yaml.v3"
 )
 
 // PromptType represents the type of prompt.
@@ -18,38 +22,97 @@ const (
 	PromptTypeAssistant PromptType = "assistant"
 )
 
+// PromptArgument represents a prompt argument definition (MCP compatible).
+type PromptArgument struct {
+	Name        string `json:"name" yaml:"name"`
+	Description string `json:"description,omitempty" yaml:"description,omitempty"`
+	Required    bool   `json:"required,omitempty" yaml:"required,omitempty"`
+}
+
+// PromptSource indicates where the prompt comes from.
+type PromptSource string
+
+const (
+	PromptSourceMemory    PromptSource = "memory"    // Created via API, in-memory only
+	PromptSourceFile      PromptSource = "file"      // Loaded from .mote/prompts/
+	PromptSourceUserDir   PromptSource = "user_dir"  // Loaded from ~/.mote/prompts/
+	PromptSourceWorkspace PromptSource = "workspace" // Loaded from ./.mote/prompts/
+)
+
 // Prompt represents a prompt entry.
 type Prompt struct {
-	ID        string     `json:"id"`
-	Name      string     `json:"name"`
-	Type      PromptType `json:"type"`
-	Content   string     `json:"content"`
-	Priority  int        `json:"priority"`
-	Enabled   bool       `json:"enabled"`
-	CreatedAt time.Time  `json:"created_at"`
-	UpdatedAt time.Time  `json:"updated_at"`
+	ID          string            `json:"id"`
+	Name        string            `json:"name"`
+	Description string            `json:"description,omitempty"`
+	Type        PromptType        `json:"type"`
+	Content     string            `json:"content"`
+	Arguments   []PromptArgument  `json:"arguments,omitempty"`
+	Priority    int               `json:"priority"`
+	Enabled     bool              `json:"enabled"`
+	Source      PromptSource      `json:"source"`
+	FilePath    string            `json:"file_path,omitempty"` // If loaded from file
+	CreatedAt   time.Time         `json:"created_at"`
+	UpdatedAt   time.Time         `json:"updated_at"`
+}
+
+// PromptFrontmatter represents the YAML frontmatter in a markdown prompt file.
+type PromptFrontmatter struct {
+	Name        string           `yaml:"name"`
+	Description string           `yaml:"description,omitempty"`
+	Type        string           `yaml:"type,omitempty"`
+	Arguments   []PromptArgument `yaml:"arguments,omitempty"`
+	Priority    int              `yaml:"priority,omitempty"`
+	Enabled     *bool            `yaml:"enabled,omitempty"`
 }
 
 // PromptConfig holds configuration for creating a prompt.
 type PromptConfig struct {
-	Name     string
-	Type     PromptType
-	Content  string
-	Priority int
-	Enabled  bool
+	Name        string
+	Description string
+	Type        PromptType
+	Content     string
+	Arguments   []PromptArgument
+	Priority    int
+	Enabled     bool
 }
 
 // Manager manages prompts.
 type Manager struct {
-	mu      sync.RWMutex
-	prompts map[string]*Prompt
+	mu              sync.RWMutex
+	prompts         map[string]*Prompt
+	promptsDirs     []string // Directories to load prompts from
+	enableAutoSave  bool     // Auto-save new prompts to file
+}
+
+// ManagerConfig holds configuration for the prompt manager.
+type ManagerConfig struct {
+	PromptsDirs    []string // Directories to load prompts from
+	EnableAutoSave bool     // Auto-save new prompts to first directory
 }
 
 // NewManager creates a new prompt manager.
 func NewManager() *Manager {
 	return &Manager{
-		prompts: make(map[string]*Prompt),
+		prompts:        make(map[string]*Prompt),
+		promptsDirs:    []string{},
+		enableAutoSave: false,
 	}
+}
+
+// NewManagerWithConfig creates a new prompt manager with configuration.
+func NewManagerWithConfig(cfg ManagerConfig) *Manager {
+	m := &Manager{
+		prompts:        make(map[string]*Prompt),
+		promptsDirs:    cfg.PromptsDirs,
+		enableAutoSave: cfg.EnableAutoSave,
+	}
+	
+	// Load prompts from all configured directories
+	for _, dir := range cfg.PromptsDirs {
+		_ = m.LoadFromDirectory(dir)
+	}
+	
+	return m
 }
 
 // AddPrompt adds a new prompt.
@@ -78,17 +141,26 @@ func (m *Manager) AddPrompt(cfg PromptConfig) (*Prompt, error) {
 
 	now := time.Now()
 	prompt := &Prompt{
-		ID:        uuid.New().String(),
-		Name:      cfg.Name,
-		Type:      promptType,
-		Content:   cfg.Content,
-		Priority:  cfg.Priority,
-		Enabled:   cfg.Enabled,
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:          uuid.New().String(),
+		Name:        cfg.Name,
+		Description: cfg.Description,
+		Type:        promptType,
+		Content:     cfg.Content,
+		Arguments:   cfg.Arguments,
+		Priority:    cfg.Priority,
+		Enabled:     cfg.Enabled,
+		Source:      PromptSourceMemory,
+		CreatedAt:   now,
+		UpdatedAt:   now,
 	}
 
 	m.prompts[prompt.ID] = prompt
+	
+	// Auto-save to file if enabled
+	if m.enableAutoSave && len(m.promptsDirs) > 0 {
+		_ = m.savePromptToFile(prompt, m.promptsDirs[0])
+	}
+	
 	return prompt, nil
 }
 
@@ -109,8 +181,16 @@ func (m *Manager) RemovePrompt(id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if _, exists := m.prompts[id]; !exists {
+	prompt, exists := m.prompts[id]
+	if !exists {
 		return fmt.Errorf("prompt not found: %s", id)
+	}
+
+	// Delete the file if it exists and was loaded from file
+	if prompt.FilePath != "" && (prompt.Source == PromptSourceFile || prompt.Source == PromptSourceUserDir || prompt.Source == PromptSourceWorkspace) {
+		if err := os.Remove(prompt.FilePath); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("failed to delete prompt file %s: %w", prompt.FilePath, err)
+		}
 	}
 
 	delete(m.prompts, id)
@@ -210,5 +290,218 @@ func (m *Manager) SetPriority(id string, priority int) error {
 
 	prompt.Priority = priority
 	prompt.UpdatedAt = time.Now()
+	return nil
+}
+
+// LoadFromDirectory loads prompts from a directory containing markdown files.
+func (m *Manager) LoadFromDirectory(dir string) error {
+	// Ensure directory exists
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		return nil // Silently skip non-existent directories
+	}
+
+	// Read all .md files
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return fmt.Errorf("failed to read directory %s: %w", dir, err)
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
+			continue
+		}
+
+		filePath := filepath.Join(dir, entry.Name())
+		if err := m.loadPromptFromFile(filePath); err != nil {
+			// Log error but continue loading other files
+			continue
+		}
+	}
+
+	return nil
+}
+
+// loadPromptFromFile loads a single prompt from a markdown file.
+func (m *Manager) loadPromptFromFile(filePath string) error {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return fmt.Errorf("failed to read file %s: %w", filePath, err)
+	}
+
+	// Parse frontmatter and content
+	frontmatter, content, err := parseFrontmatter(string(data))
+	if err != nil {
+		return fmt.Errorf("failed to parse frontmatter in %s: %w", filePath, err)
+	}
+
+	// Validate required fields
+	if frontmatter.Name == "" {
+		return fmt.Errorf("prompt name is required in %s", filePath)
+	}
+
+	// Determine source based on file path
+	source := PromptSourceFile
+	if strings.Contains(filePath, "/.mote/prompts") {
+		source = PromptSourceWorkspace
+	}
+	homeDir, _ := os.UserHomeDir()
+	if homeDir != "" && strings.HasPrefix(filePath, filepath.Join(homeDir, ".mote/prompts")) {
+		source = PromptSourceUserDir
+	}
+
+	// Set defaults
+	promptType := PromptType(frontmatter.Type)
+	if promptType == "" {
+		promptType = PromptTypeSystem
+	}
+	
+	enabled := true
+	if frontmatter.Enabled != nil {
+		enabled = *frontmatter.Enabled
+	}
+
+	now := time.Now()
+	prompt := &Prompt{
+		ID:          uuid.New().String(),
+		Name:        frontmatter.Name,
+		Description: frontmatter.Description,
+		Type:        promptType,
+		Content:     content,
+		Arguments:   frontmatter.Arguments,
+		Priority:    frontmatter.Priority,
+		Enabled:     enabled,
+		Source:      source,
+		FilePath:    filePath,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Check for duplicate name
+	for _, p := range m.prompts {
+		if p.Name == frontmatter.Name {
+			// Update existing prompt if it's from the same or lower priority source
+			if p.Source == PromptSourceMemory || p.FilePath == filePath {
+				p.Description = prompt.Description
+				p.Type = prompt.Type
+				p.Content = prompt.Content
+				p.Arguments = prompt.Arguments
+				p.Priority = prompt.Priority
+				p.Enabled = prompt.Enabled
+				p.UpdatedAt = now
+				return nil
+			}
+			return fmt.Errorf("prompt with name '%s' already exists", frontmatter.Name)
+		}
+	}
+
+	m.prompts[prompt.ID] = prompt
+	return nil
+}
+
+// parseFrontmatter extracts YAML frontmatter and content from markdown.
+func parseFrontmatter(data string) (*PromptFrontmatter, string, error) {
+	// Check for frontmatter delimiter
+	if !strings.HasPrefix(data, "---\n") {
+		return &PromptFrontmatter{}, data, nil
+	}
+
+	// Find end of frontmatter
+	parts := strings.SplitN(data[4:], "\n---\n", 2)
+	if len(parts) != 2 {
+		return nil, "", fmt.Errorf("invalid frontmatter format")
+	}
+
+	// Parse YAML frontmatter
+	var fm PromptFrontmatter
+	if err := yaml.Unmarshal([]byte(parts[0]), &fm); err != nil {
+		return nil, "", fmt.Errorf("failed to parse YAML frontmatter: %w", err)
+	}
+
+	// Content is everything after frontmatter
+	content := strings.TrimSpace(parts[1])
+	
+	return &fm, content, nil
+}
+
+// savePromptToFile saves a prompt to a markdown file.
+func (m *Manager) savePromptToFile(prompt *Prompt, dir string) error {
+	// Ensure directory exists
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("failed to create directory %s: %w", dir, err)
+	}
+
+	// Generate filename from name
+	filename := sanitizeFilename(prompt.Name) + ".md"
+	filePath := filepath.Join(dir, filename)
+
+	// Build frontmatter
+	fm := PromptFrontmatter{
+		Name:        prompt.Name,
+		Description: prompt.Description,
+		Type:        string(prompt.Type),
+		Arguments:   prompt.Arguments,
+		Priority:    prompt.Priority,
+		Enabled:     &prompt.Enabled,
+	}
+
+	fmData, err := yaml.Marshal(&fm)
+	if err != nil {
+		return fmt.Errorf("failed to marshal frontmatter: %w", err)
+	}
+
+	// Build markdown content
+	content := fmt.Sprintf("---\n%s---\n\n%s", string(fmData), prompt.Content)
+
+	// Write file
+	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
+		return fmt.Errorf("failed to write file %s: %w", filePath, err)
+	}
+
+	// Update prompt file path
+	prompt.FilePath = filePath
+	prompt.Source = PromptSourceFile
+
+	return nil
+}
+
+// sanitizeFilename converts a prompt name to a safe filename.
+func sanitizeFilename(name string) string {
+	// Replace spaces and special characters
+	name = strings.ToLower(name)
+	name = strings.ReplaceAll(name, " ", "-")
+	
+	// Remove non-alphanumeric characters except dash and underscore
+	var result strings.Builder
+	for _, r := range name {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			result.WriteRune(r)
+		}
+	}
+	
+	return result.String()
+}
+
+// ReloadFromFiles reloads all prompts from configured directories.
+func (m *Manager) ReloadFromFiles() error {
+	m.mu.Lock()
+	
+	// Remove file-based prompts
+	for id, p := range m.prompts {
+		if p.Source != PromptSourceMemory {
+			delete(m.prompts, id)
+		}
+	}
+	m.mu.Unlock()
+
+	// Reload from directories
+	for _, dir := range m.promptsDirs {
+		if err := m.LoadFromDirectory(dir); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }

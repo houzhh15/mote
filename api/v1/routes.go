@@ -166,6 +166,7 @@ func (r *Router) RegisterRoutes(router *mux.Router) {
 	v1.HandleFunc("/sessions/{id}/messages", r.HandleGetMessages).Methods(http.MethodGet)
 	v1.HandleFunc("/sessions/{id}/model", r.HandleUpdateSessionModel).Methods(http.MethodPut)
 	v1.HandleFunc("/sessions/{id}/skills", r.HandleUpdateSessionSkills).Methods(http.MethodPut)
+	v1.HandleFunc("/sessions/{id}/reconfigure", r.HandleReconfigureSession).Methods(http.MethodPost)
 
 	// Tools
 	v1.HandleFunc("/tools", r.HandleListTools).Methods(http.MethodGet)
@@ -278,6 +279,7 @@ func (r *Router) RegisterRoutes(router *mux.Router) {
 	v1.HandleFunc("/prompts/{id}", r.HandleUpdatePrompt).Methods(http.MethodPut)
 	v1.HandleFunc("/prompts/{id}", r.HandleDeletePrompt).Methods(http.MethodDelete)
 	v1.HandleFunc("/prompts/{id}/toggle", r.HandleTogglePrompt).Methods(http.MethodPost)
+	v1.HandleFunc("/prompts/reload", r.HandleReloadPrompts).Methods(http.MethodPost)
 	v1.HandleFunc("/prompts/{id}/render", r.HandleRenderPrompt).Methods(http.MethodPost)
 }
 
@@ -650,6 +652,9 @@ func (r *Router) HandleGetMessages(w http.ResponseWriter, req *http.Request) {
 }
 
 // HandleUpdateSessionModel updates the model for a specific session.
+// Deprecated: Use HandleReconfigureSession for active sessions.
+// This handler only updates the DB without cleaning up runtime resources (caches, ACP sessions).
+// Kept for backward compatibility with initial session setup (NewChatPage).
 func (r *Router) HandleUpdateSessionModel(w http.ResponseWriter, req *http.Request) {
 	if r.db == nil {
 		handlers.SendError(w, http.StatusServiceUnavailable, handlers.ErrCodeServiceUnavailable, "Database not available")
@@ -710,6 +715,9 @@ func (r *Router) HandleUpdateSessionModel(w http.ResponseWriter, req *http.Reque
 }
 
 // HandleUpdateSessionSkills updates the selected skills for a specific session.
+// Deprecated: Use HandleReconfigureSession for active sessions.
+// This handler only updates the DB without cleaning up runtime resources (caches, ACP sessions).
+// Kept for backward compatibility with initial session setup (NewChatPage).
 func (r *Router) HandleUpdateSessionSkills(w http.ResponseWriter, req *http.Request) {
 	if r.db == nil {
 		handlers.SendError(w, http.StatusServiceUnavailable, handlers.ErrCodeServiceUnavailable, "Database not available")
@@ -762,6 +770,168 @@ func parseSkillsJSON(s string) []string {
 		return nil
 	}
 	return skills
+}
+
+// HandleReconfigureSession atomically reconfigures a session's model, workspace,
+// and/or skills. This is a major operation that cleans up all runtime resources.
+//
+// Flow:
+//  1. Validate all parameters upfront
+//  2. Update DB fields (model, skills, workspace)
+//  3. Clean up ALL runtime resources via Runner.ResetSession
+//  4. Return the new session configuration
+//
+// This replaces the old separate model/skills update endpoints for cases where
+// resource cleanup is needed (i.e., during active chat sessions).
+func (r *Router) HandleReconfigureSession(w http.ResponseWriter, req *http.Request) {
+	if r.db == nil {
+		handlers.SendError(w, http.StatusServiceUnavailable, handlers.ErrCodeServiceUnavailable, "Database not available")
+		return
+	}
+
+	vars := mux.Vars(req)
+	sessionID := vars["id"]
+
+	var body ReconfigureSessionRequest
+	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+		handlers.SendError(w, http.StatusBadRequest, handlers.ErrCodeInvalidRequest, "Invalid request body")
+		return
+	}
+
+	// At least one field must be specified
+	if body.Model == nil && body.WorkspacePath == nil && body.SelectedSkills == nil {
+		handlers.SendError(w, http.StatusBadRequest, handlers.ErrCodeInvalidRequest,
+			"At least one of model, workspace_path, or selected_skills must be specified")
+		return
+	}
+
+	log.Info().
+		Str("sessionID", sessionID).
+		Interface("model", body.Model).
+		Interface("workspace_path", body.WorkspacePath).
+		Interface("selected_skills", body.SelectedSkills).
+		Msg("Session reconfigure requested")
+
+	// --- Phase 1: Validate model if specified ---
+	if body.Model != nil && *body.Model != "" {
+		modelValid := false
+		for _, m := range copilot.ListModels() {
+			if m == *body.Model {
+				modelValid = true
+				break
+			}
+		}
+		if !modelValid && strings.HasPrefix(*body.Model, "ollama:") {
+			modelValid = true
+		}
+		if !modelValid && r.multiPool != nil {
+			_, _, err := r.multiPool.GetProvider(*body.Model)
+			modelValid = err == nil
+		}
+		if !modelValid {
+			handlers.SendError(w, http.StatusBadRequest, handlers.ErrCodeInvalidRequest, "Invalid model name: "+*body.Model)
+			return
+		}
+	}
+
+	// --- Phase 2: Verify session exists ---
+	var currentModel, currentSkills sql.NullString
+	err := r.db.QueryRow("SELECT COALESCE(model,''), COALESCE(selected_skills,'') FROM sessions WHERE id = ?", sessionID).
+		Scan(&currentModel, &currentSkills)
+	if err != nil {
+		handlers.SendError(w, http.StatusNotFound, handlers.ErrCodeNotFound, "Session not found")
+		return
+	}
+
+	// --- Phase 3: Update DB fields ---
+	now := time.Now()
+
+	if body.Model != nil {
+		if _, err := r.db.Exec("UPDATE sessions SET model = ?, updated_at = ? WHERE id = ?", *body.Model, now, sessionID); err != nil {
+			handlers.SendError(w, http.StatusInternalServerError, handlers.ErrCodeInternalError, "Failed to update model")
+			return
+		}
+		log.Info().Str("sessionID", sessionID).Str("model", *body.Model).Msg("Session model updated in DB")
+	}
+
+	if body.SelectedSkills != nil {
+		var skillsStr string
+		if len(*body.SelectedSkills) > 0 {
+			data, _ := json.Marshal(*body.SelectedSkills)
+			skillsStr = string(data)
+		}
+		if _, err := r.db.Exec("UPDATE sessions SET selected_skills = ?, updated_at = ? WHERE id = ?", skillsStr, now, sessionID); err != nil {
+			handlers.SendError(w, http.StatusInternalServerError, handlers.ErrCodeInternalError, "Failed to update skills")
+			return
+		}
+		log.Info().Str("sessionID", sessionID).Strs("skills", *body.SelectedSkills).Msg("Session skills updated in DB")
+	}
+
+	// --- Phase 3b: Handle workspace binding ---
+	var workspacePath string
+	if body.WorkspacePath != nil {
+		if *body.WorkspacePath == "" {
+			// Unbind workspace
+			if r.workspaceManager != nil {
+				_ = r.workspaceManager.Unbind(sessionID)
+				log.Info().Str("sessionID", sessionID).Msg("Workspace unbound")
+			}
+		} else {
+			// Bind workspace
+			if r.workspaceManager != nil {
+				alias := ""
+				if body.WorkspaceAlias != nil {
+					alias = *body.WorkspaceAlias
+				}
+				if alias != "" {
+					err = r.workspaceManager.BindWithAlias(sessionID, *body.WorkspacePath, alias, false)
+				} else {
+					err = r.workspaceManager.Bind(sessionID, *body.WorkspacePath, false)
+				}
+				if err != nil {
+					handlers.SendError(w, http.StatusBadRequest, handlers.ErrCodeInvalidRequest, "Failed to bind workspace: "+err.Error())
+					return
+				}
+				workspacePath = *body.WorkspacePath
+				log.Info().Str("sessionID", sessionID).Str("path", workspacePath).Msg("Workspace bound")
+			}
+		}
+	}
+
+	// --- Phase 4: Clean up ALL runtime resources ---
+	if r.runner != nil {
+		r.runner.ResetSession(sessionID)
+		log.Info().Str("sessionID", sessionID).Msg("Runtime resources cleaned up via Runner.ResetSession")
+	}
+
+	// --- Phase 5: Read back final state and return ---
+	var finalModel, finalSkills sql.NullString
+	_ = r.db.QueryRow("SELECT COALESCE(model,''), COALESCE(selected_skills,'') FROM sessions WHERE id = ?", sessionID).
+		Scan(&finalModel, &finalSkills)
+
+	// Get workspace path
+	if workspacePath == "" && r.workspaceManager != nil {
+		if binding, ok := r.workspaceManager.Get(sessionID); ok {
+			workspacePath = binding.Path
+		}
+	}
+
+	resp := ReconfigureSessionResponse{
+		ID:             sessionID,
+		Model:          finalModel.String,
+		WorkspacePath:  workspacePath,
+		SelectedSkills: parseSkillsJSON(finalSkills.String),
+		Message:        "Session reconfigured successfully. All runtime resources have been reset.",
+	}
+
+	log.Info().
+		Str("sessionID", sessionID).
+		Str("model", resp.Model).
+		Str("workspace", resp.WorkspacePath).
+		Strs("skills", resp.SelectedSkills).
+		Msg("Session reconfigure completed successfully")
+
+	handlers.SendJSON(w, http.StatusOK, resp)
 }
 
 // HandleUpdateSession updates the properties of a specific session.

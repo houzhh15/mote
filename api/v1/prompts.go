@@ -17,14 +17,18 @@ import (
 
 // PromptInfo represents prompt information for API response.
 type PromptInfo struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Type      string `json:"type"`
-	Content   string `json:"content"`
-	Priority  int    `json:"priority"`
-	Enabled   bool   `json:"enabled"`
-	CreatedAt string `json:"created_at,omitempty"`
-	UpdatedAt string `json:"updated_at,omitempty"`
+	ID          string                     `json:"id"`
+	Name        string                     `json:"name"`
+	Description string                     `json:"description,omitempty"`
+	Type        string                     `json:"type"`
+	Content     string                     `json:"content"`
+	Arguments   []prompts.PromptArgument   `json:"arguments,omitempty"`
+	Priority    int                        `json:"priority"`
+	Enabled     bool                       `json:"enabled"`
+	Source      string                     `json:"source,omitempty"`
+	FilePath    string                     `json:"file_path,omitempty"`
+	CreatedAt   string                     `json:"created_at,omitempty"`
+	UpdatedAt   string                     `json:"updated_at,omitempty"`
 }
 
 // PromptListResponse is the response for listing prompts.
@@ -35,11 +39,13 @@ type PromptListResponse struct {
 
 // CreatePromptRequest is the request to create a prompt.
 type CreatePromptRequest struct {
-	Name     string `json:"name"`
-	Type     string `json:"type"`
-	Content  string `json:"content"`
-	Priority int    `json:"priority"`
-	Enabled  bool   `json:"enabled"`
+	Name        string                   `json:"name"`
+	Description string                   `json:"description,omitempty"`
+	Type        string                   `json:"type,omitempty"`
+	Content     string                   `json:"content"`
+	Arguments   []prompts.PromptArgument `json:"arguments,omitempty"`
+	Priority    int                      `json:"priority,omitempty"`
+	Enabled     bool                     `json:"enabled"`
 }
 
 // UpdatePromptRequest is the request to update a prompt.
@@ -61,14 +67,18 @@ func (r *Router) HandleListPrompts(w http.ResponseWriter, req *http.Request) {
 
 	for _, p := range promptList {
 		info := &PromptInfo{
-			ID:        p.ID,
-			Name:      p.Name,
-			Type:      string(p.Type),
-			Content:   p.Content,
-			Priority:  p.Priority,
-			Enabled:   p.Enabled,
-			CreatedAt: p.CreatedAt.Format(time.RFC3339),
-			UpdatedAt: p.UpdatedAt.Format(time.RFC3339),
+			ID:          p.ID,
+			Name:        p.Name,
+			Description: p.Description,
+			Type:        string(p.Type),
+			Content:     p.Content,
+			Arguments:   p.Arguments,
+			Priority:    p.Priority,
+			Enabled:     p.Enabled,
+			Source:      string(p.Source),
+			FilePath:    p.FilePath,
+			CreatedAt:   p.CreatedAt.Format(time.RFC3339),
+			UpdatedAt:   p.UpdatedAt.Format(time.RFC3339),
 		}
 		infos = append(infos, info)
 	}
@@ -99,14 +109,18 @@ func (r *Router) HandleGetPrompt(w http.ResponseWriter, req *http.Request) {
 	}
 
 	info := &PromptInfo{
-		ID:        prompt.ID,
-		Name:      prompt.Name,
-		Type:      string(prompt.Type),
-		Content:   prompt.Content,
-		Priority:  prompt.Priority,
-		Enabled:   prompt.Enabled,
-		CreatedAt: prompt.CreatedAt.Format(time.RFC3339),
-		UpdatedAt: prompt.UpdatedAt.Format(time.RFC3339),
+		ID:          prompt.ID,
+		Name:        prompt.Name,
+		Description: prompt.Description,
+		Type:        string(prompt.Type),
+		Content:     prompt.Content,
+		Arguments:   prompt.Arguments,
+		Priority:    prompt.Priority,
+		Enabled:     prompt.Enabled,
+		Source:      string(prompt.Source),
+		FilePath:    prompt.FilePath,
+		CreatedAt:   prompt.CreatedAt.Format(time.RFC3339),
+		UpdatedAt:   prompt.UpdatedAt.Format(time.RFC3339),
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -141,11 +155,13 @@ func (r *Router) HandleCreatePrompt(w http.ResponseWriter, req *http.Request) {
 	}
 
 	prompt, err := r.promptManager.AddPrompt(prompts.PromptConfig{
-		Name:     createReq.Name,
-		Type:     promptType,
-		Content:  createReq.Content,
-		Priority: createReq.Priority,
-		Enabled:  createReq.Enabled,
+		Name:        createReq.Name,
+		Description: createReq.Description,
+		Type:        promptType,
+		Content:     createReq.Content,
+		Arguments:   createReq.Arguments,
+		Priority:    createReq.Priority,
+		Enabled:     createReq.Enabled,
 	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -153,14 +169,18 @@ func (r *Router) HandleCreatePrompt(w http.ResponseWriter, req *http.Request) {
 	}
 
 	info := &PromptInfo{
-		ID:        prompt.ID,
-		Name:      prompt.Name,
-		Type:      string(prompt.Type),
-		Content:   prompt.Content,
-		Priority:  prompt.Priority,
-		Enabled:   prompt.Enabled,
-		CreatedAt: prompt.CreatedAt.Format(time.RFC3339),
-		UpdatedAt: prompt.UpdatedAt.Format(time.RFC3339),
+		ID:          prompt.ID,
+		Name:        prompt.Name,
+		Description: prompt.Description,
+		Type:        string(prompt.Type),
+		Content:     prompt.Content,
+		Arguments:   prompt.Arguments,
+		Priority:    prompt.Priority,
+		Enabled:     prompt.Enabled,
+		Source:      string(prompt.Source),
+		FilePath:    prompt.FilePath,
+		CreatedAt:   prompt.CreatedAt.Format(time.RFC3339),
+		UpdatedAt:   prompt.UpdatedAt.Format(time.RFC3339),
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -223,14 +243,18 @@ func (r *Router) HandleUpdatePrompt(w http.ResponseWriter, req *http.Request) {
 	}
 
 	info := &PromptInfo{
-		ID:        prompt.ID,
-		Name:      prompt.Name,
-		Type:      string(prompt.Type),
-		Content:   prompt.Content,
-		Priority:  prompt.Priority,
-		Enabled:   prompt.Enabled,
-		CreatedAt: prompt.CreatedAt.Format(time.RFC3339),
-		UpdatedAt: prompt.UpdatedAt.Format(time.RFC3339),
+		ID:          prompt.ID,
+		Name:        prompt.Name,
+		Description: prompt.Description,
+		Type:        string(prompt.Type),
+		Content:     prompt.Content,
+		Arguments:   prompt.Arguments,
+		Priority:    prompt.Priority,
+		Enabled:     prompt.Enabled,
+		Source:      string(prompt.Source),
+		FilePath:    prompt.FilePath,
+		CreatedAt:   prompt.CreatedAt.Format(time.RFC3339),
+		UpdatedAt:   prompt.UpdatedAt.Format(time.RFC3339),
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -413,3 +437,24 @@ func indexOf(s, substr string) int {
 	}
 	return -1
 }
+
+// HandleReloadPrompts reloads prompts from configured directories.
+func (r *Router) HandleReloadPrompts(w http.ResponseWriter, req *http.Request) {
+	if r.promptManager == nil {
+		http.Error(w, "prompt manager not initialized", http.StatusServiceUnavailable)
+		return
+	}
+
+	if err := r.promptManager.ReloadFromFiles(); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	promptList := r.promptManager.ListPrompts()
+	
+	handlers.SendJSON(w, http.StatusOK, map[string]any{
+		"status": "ok",
+		"count":  len(promptList),
+	})
+}
+

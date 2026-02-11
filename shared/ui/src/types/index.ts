@@ -387,6 +387,7 @@ export interface Prompt {
   priority?: number;
   enabled: boolean;
   description?: string;
+  arguments?: MCPPromptArgument[]; // Support for prompt parameters
   category?: string;
   tags?: string[];
   created_at?: string;
@@ -422,4 +423,23 @@ export interface MCPPromptMessage {
 export interface MCPPromptContent {
   description?: string;
   messages: MCPPromptMessage[];
+}
+
+// ================================================================
+// Session Reconfigure Types
+// ================================================================
+
+export interface ReconfigureSessionRequest {
+  model?: string;
+  workspace_path?: string;
+  workspace_alias?: string;
+  selected_skills?: string[];
+}
+
+export interface ReconfigureSessionResponse {
+  id: string;
+  model: string;
+  workspace_path: string;
+  selected_skills: string[] | null;
+  message: string;
 }

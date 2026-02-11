@@ -276,6 +276,28 @@ type UpdateSessionSkillsResponse struct {
 	SelectedSkills []string `json:"selected_skills"`
 }
 
+// ReconfigureSessionRequest represents a request to reconfigure a session's model,
+// workspace, and/or skills. This is a major operation that:
+// 1. Aborts any running task for the session
+// 2. Updates the session parameters in DB
+// 3. Cleans up all runtime resources (ACP sessions, cache, token tracking)
+// 4. Forces fresh resource creation on the next request
+type ReconfigureSessionRequest struct {
+	Model          *string   `json:"model,omitempty"`           // New model (nil = no change)
+	WorkspacePath  *string   `json:"workspace_path,omitempty"`  // New workspace path (nil = no change, "" = unbind)
+	WorkspaceAlias *string   `json:"workspace_alias,omitempty"` // Workspace alias
+	SelectedSkills *[]string `json:"selected_skills,omitempty"` // New skills (nil = no change)
+}
+
+// ReconfigureSessionResponse represents the response for session reconfiguration.
+type ReconfigureSessionResponse struct {
+	ID             string   `json:"id"`
+	Model          string   `json:"model"`
+	WorkspacePath  string   `json:"workspace_path,omitempty"`
+	SelectedSkills []string `json:"selected_skills,omitempty"`
+	Message        string   `json:"message"`
+}
+
 // ScenarioModelsResponse represents scenario default models.
 type ScenarioModelsResponse struct {
 	Chat    string `json:"chat"`    // Default model for chat scenario

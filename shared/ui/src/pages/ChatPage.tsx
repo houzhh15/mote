@@ -19,7 +19,7 @@ import { StatusIndicator, ErrorBanner } from '../components';
 import { useConnectionStatus, useHasConnectionIssues } from '../context/ConnectionStatusContext';
 import moteLogo from '../assets/mote_logo.png';
 import userAvatar from '../assets/user.png';
-import type { Message, Model, Workspace, ErrorDetail, Skill } from '../types';
+import type { Message, Model, Workspace, ErrorDetail, Skill, ReconfigureSessionResponse } from '../types';
 
 const { TextArea } = Input;
 const { Text } = Typography;
@@ -1081,28 +1081,66 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
       message.warning('请输入工作区路径');
       return;
     }
-    try {
-      const result = await api.bindWorkspace?.(sessionId, workspacePath.trim());
-      if (result) {
-        setWorkspace(result);
-        message.success('工作区已绑定');
+    const execute = async () => {
+      try {
+        if (api.reconfigureSession) {
+          await doReconfigure({ workspace_path: workspacePath.trim() }, '工作区已绑定，运行时资源已重置');
+        } else {
+          const result = await api.bindWorkspace?.(sessionId, workspacePath.trim());
+          if (result) {
+            setWorkspace(result);
+            message.success('工作区已绑定');
+          }
+        }
+        setWorkspaceModalVisible(false);
+        setWorkspacePath('');
+      } catch (error: any) {
+        message.error(error.message || '绑定工作区失败');
       }
-      setWorkspaceModalVisible(false);
-      setWorkspacePath('');
-    } catch (error: any) {
-      message.error(error.message || '绑定工作区失败');
+    };
+
+    if (streaming) {
+      Modal.confirm({
+        title: '绑定工作区会中止当前任务',
+        content: '当前正在生成回复，绑定工作区将中止进行中的任务并重置会话运行时资源。是否继续？',
+        okText: '继续绑定',
+        cancelText: '取消',
+        okType: 'danger',
+        onOk: execute,
+      });
+    } else {
+      execute();
     }
   };
 
   // Handle workspace unbinding
   const handleUnbindWorkspace = async () => {
     if (!sessionId) return;
-    try {
-      await api.unbindWorkspace?.(sessionId);
-      setWorkspace(null);
-      message.success('工作区已解绑');
-    } catch (error: any) {
-      message.error(error.message || '解绑工作区失败');
+    const execute = async () => {
+      try {
+        if (api.reconfigureSession) {
+          await doReconfigure({ workspace_path: '' }, '工作区已解绑，运行时资源已重置');
+        } else {
+          await api.unbindWorkspace?.(sessionId);
+          setWorkspace(null);
+          message.success('工作区已解绑');
+        }
+      } catch (error: any) {
+        message.error(error.message || '解绑工作区失败');
+      }
+    };
+
+    if (streaming) {
+      Modal.confirm({
+        title: '解绑工作区会中止当前任务',
+        content: '当前正在生成回复，解绑工作区将中止进行中的任务并重置会话运行时资源。是否继续？',
+        okText: '继续解绑',
+        cancelText: '取消',
+        okType: 'danger',
+        onOk: execute,
+      });
+    } else {
+      execute();
     }
   };
 
@@ -1125,48 +1163,109 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
     }
   };
 
+  // ============== Unified Reconfigure Logic ==============
+
+  // Helper: perform reconfigure and update local state
+  const doReconfigure = useCallback(async (
+    config: { model?: string; workspace_path?: string; workspace_alias?: string; selected_skills?: string[] },
+    successMsg: string,
+  ) => {
+    if (!sessionId) return;
+
+    // Abort streaming if active
+    if (streaming) {
+      chatManager.abortChat(sessionId);
+      if (currentResponseRef.current.trim()) {
+        const interruptedMessage: Message = {
+          role: 'assistant',
+          content: currentResponseRef.current + '\n\n*[已停止]*',
+          timestamp: new Date().toISOString(),
+        };
+        setMessages((prev: Message[]) => [...prev, interruptedMessage]);
+      }
+      setLoading(false);
+      setStreaming(false);
+      currentResponseRef.current = '';
+    }
+
+    if (api.reconfigureSession) {
+      const resp: ReconfigureSessionResponse = await api.reconfigureSession(sessionId, config);
+      // Sync local state from response
+      if (config.model !== undefined) {
+        setCurrentModel(resp.model);
+      }
+      if (config.selected_skills !== undefined) {
+        setSelectedSkills(resp.selected_skills || []);
+      }
+      if (config.workspace_path !== undefined) {
+        if (resp.workspace_path) {
+          setWorkspace({ session_id: sessionId, path: resp.workspace_path } as Workspace);
+        } else {
+          setWorkspace(null);
+        }
+      }
+      message.success(successMsg);
+    } else {
+      // Fallback to legacy per-field API
+      if (config.model !== undefined && api.setSessionModel) {
+        await api.setSessionModel(sessionId, config.model);
+        setCurrentModel(config.model);
+      }
+      if (config.selected_skills !== undefined && api.setSessionSkills) {
+        await api.setSessionSkills(sessionId, config.selected_skills);
+        setSelectedSkills(config.selected_skills);
+      }
+      message.success(successMsg);
+    }
+  }, [sessionId, streaming, chatManager, api, message]);
+
+  // Helper: show confirmation if streaming, then reconfigure
+  const confirmAndReconfigure = useCallback((
+    config: { model?: string; workspace_path?: string; workspace_alias?: string; selected_skills?: string[] },
+    successMsg: string,
+    setLoadingFn?: (v: boolean) => void,
+  ) => {
+    const execute = async () => {
+      setLoadingFn?.(true);
+      try {
+        await doReconfigure(config, successMsg);
+      } catch (error: any) {
+        message.error(error.message || '重新配置会话失败');
+      } finally {
+        setLoadingFn?.(false);
+      }
+    };
+
+    if (streaming) {
+      Modal.confirm({
+        title: '切换会中止当前任务',
+        content: '当前正在生成回复，切换配置将中止进行中的任务并重置会话运行时资源。是否继续？',
+        okText: '继续切换',
+        cancelText: '取消',
+        okType: 'danger',
+        onOk: execute,
+      });
+    } else {
+      execute();
+    }
+  }, [streaming, doReconfigure, message]);
+
   // Handle model change (per session only)
-  const handleModelChange = async (modelId: string) => {
+  const handleModelChange = (modelId: string) => {
     if (!sessionId) {
       message.error('无会话可设置模型');
       return;
     }
-    if (!api.setSessionModel) {
-      message.error('当前版本不支持会话级模型切换');
-      return;
-    }
-    setModelLoading(true);
-    try {
-      await api.setSessionModel(sessionId, modelId);
-      setCurrentModel(modelId);
-      message.success('会话模型已切换');
-    } catch (error) {
-      message.error('切换模型失败');
-    } finally {
-      setModelLoading(false);
-    }
+    confirmAndReconfigure({ model: modelId }, '会话模型已切换，运行时资源已重置', setModelLoading);
   };
 
   // Handle skills selection change (per session)
-  const handleSkillsChange = async (skillIds: string[]) => {
+  const handleSkillsChange = (skillIds: string[]) => {
     if (!sessionId) {
       message.error('无会话可设置技能');
       return;
     }
-    if (!api.setSessionSkills) {
-      message.error('当前版本不支持会话级技能选择');
-      return;
-    }
-    setSkillsLoading(true);
-    try {
-      await api.setSessionSkills(sessionId, skillIds);
-      setSelectedSkills(skillIds);
-      message.success('技能选择已更新');
-    } catch (error) {
-      message.error('更新技能选择失败');
-    } finally {
-      setSkillsLoading(false);
-    }
+    confirmAndReconfigure({ selected_skills: skillIds }, '技能选择已更新', setSkillsLoading);
   };
 
   const handleSend = async () => {

@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"mote/internal/hooks"
-	"mote/internal/memory"
 
 	"github.com/rs/zerolog"
 )
@@ -68,7 +67,7 @@ func TestMemoryHookBridge_SessionCreateHandler(t *testing.T) {
 	}
 }
 
-func TestMemoryHookBridge_HandleBeforeMessage_NilHooks(t *testing.T) {
+func TestMemoryHookBridge_HandleBeforeMessage_NilRecallEngine(t *testing.T) {
 	bridge := NewMemoryHookBridge(MemoryHookConfig{
 		Logger: zerolog.Nop(),
 	})
@@ -89,18 +88,13 @@ func TestMemoryHookBridge_HandleBeforeMessage_NilHooks(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if result != nil {
-		t.Error("expected nil result for nil hooks")
+		t.Error("expected nil result for nil recall engine")
 	}
 }
 
 func TestMemoryHookBridge_HandleBeforeMessage_SystemMessage(t *testing.T) {
-	memHooks := memory.NewMemoryHooks(memory.MemoryHooksOptions{
-		Logger: zerolog.Nop(),
-	})
-
 	bridge := NewMemoryHookBridge(MemoryHookConfig{
-		MemoryHooks: memHooks,
-		Logger:      zerolog.Nop(),
+		Logger: zerolog.Nop(),
 	})
 
 	ctx := context.Background()
@@ -123,7 +117,7 @@ func TestMemoryHookBridge_HandleBeforeMessage_SystemMessage(t *testing.T) {
 	}
 }
 
-func TestMemoryHookBridge_HandleAfterMessage_NilHooks(t *testing.T) {
+func TestMemoryHookBridge_HandleAfterMessage_NilCaptureEngine(t *testing.T) {
 	bridge := NewMemoryHookBridge(MemoryHookConfig{
 		Logger: zerolog.Nop(),
 	})
@@ -144,18 +138,13 @@ func TestMemoryHookBridge_HandleAfterMessage_NilHooks(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if result != nil {
-		t.Error("expected nil result for nil hooks")
+		t.Error("expected nil result for nil capture engine")
 	}
 }
 
 func TestMemoryHookBridge_HandleSessionCreate(t *testing.T) {
-	memHooks := memory.NewMemoryHooks(memory.MemoryHooksOptions{
-		Logger: zerolog.Nop(),
-	})
-
 	bridge := NewMemoryHookBridge(MemoryHookConfig{
-		MemoryHooks: memHooks,
-		Logger:      zerolog.Nop(),
+		Logger: zerolog.Nop(),
 	})
 
 	ctx := context.Background()

@@ -26,3 +26,13 @@ type ACPCapable interface {
 	// IsACPProvider returns true if this provider uses ACP protocol.
 	IsACPProvider() bool
 }
+
+// SessionResettable indicates a provider that maintains per-session state
+// (e.g., ACP sessions, CLI processes) and can reset it on demand.
+// This is used when model/workspace changes require a full session rebuild.
+type SessionResettable interface {
+	// ResetSession clears all runtime state for the given conversationID,
+	// including ACP session mappings, cached models, and CLI processes if stuck.
+	// The next request for this conversationID will create fresh resources.
+	ResetSession(conversationID string)
+}

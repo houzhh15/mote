@@ -36,6 +36,9 @@ export const PromptsPage = forwardRef<PromptsPageRef, PromptsPageProps>(({ hideT
   const fetchPrompts = async () => {
     setLoading(true);
     try {
+      // Reload prompts from disk first
+      await api.reloadPrompts?.();
+      // Then fetch the updated list
       const data = await api.getPrompts?.() ?? [];
       setPrompts(data);
     } catch (error) {

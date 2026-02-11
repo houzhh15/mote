@@ -13,24 +13,27 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// MemoryHookBridge bridges the memory.MemoryHooks to the hooks system.
-// It provides before_message and after_message handlers for auto-recall and auto-capture.
+// MemoryHookBridge provides memory integration hooks for auto-recall and auto-capture.
+// It directly integrates with CaptureEngine and RecallEngine without an intermediate layer.
 type MemoryHookBridge struct {
-	memoryHooks *memory.MemoryHooks
-	logger      zerolog.Logger
+	captureEngine *memory.CaptureEngine
+	recallEngine  *memory.RecallEngine
+	logger        zerolog.Logger
 }
 
 // MemoryHookConfig configures the memory hook bridge.
 type MemoryHookConfig struct {
-	MemoryHooks *memory.MemoryHooks
-	Logger      zerolog.Logger
+	CaptureEngine *memory.CaptureEngine
+	RecallEngine  *memory.RecallEngine
+	Logger        zerolog.Logger
 }
 
 // NewMemoryHookBridge creates a new memory hook bridge.
 func NewMemoryHookBridge(cfg MemoryHookConfig) *MemoryHookBridge {
 	return &MemoryHookBridge{
-		memoryHooks: cfg.MemoryHooks,
-		logger:      cfg.Logger,
+		captureEngine: cfg.CaptureEngine,
+		recallEngine:  cfg.RecallEngine,
+		logger:        cfg.Logger,
 	}
 }
 
@@ -62,7 +65,7 @@ func (m *MemoryHookBridge) AfterMessageHandler(id string) *hooks.Handler {
 
 // handleBeforeMessage processes before_message hooks for memory recall.
 func (m *MemoryHookBridge) handleBeforeMessage(ctx context.Context, hookCtx *hooks.Context) (*hooks.Result, error) {
-	if m.memoryHooks == nil || hookCtx.Message == nil {
+	if m.recallEngine == nil || hookCtx.Message == nil {
 		return nil, nil
 	}
 
@@ -71,8 +74,8 @@ func (m *MemoryHookBridge) handleBeforeMessage(ctx context.Context, hookCtx *hoo
 		return nil, nil
 	}
 
-	// Call BeforeRun to get memory context
-	memoryContext, err := m.memoryHooks.BeforeRun(ctx, hookCtx.Message.Content)
+	// Recall relevant memories
+	memoryContext, err := m.recallEngine.Recall(ctx, hookCtx.Message.Content)
 	if err != nil {
 		m.logger.Warn().Err(err).Msg("memory recall failed in hook")
 		return nil, nil // Don't fail the hook
@@ -81,6 +84,11 @@ func (m *MemoryHookBridge) handleBeforeMessage(ctx context.Context, hookCtx *hoo
 	if memoryContext == "" {
 		return nil, nil
 	}
+
+	m.logger.Debug().
+		Str("prompt", truncate(hookCtx.Message.Content, 50)).
+		Int("context_len", len(memoryContext)).
+		Msg("injected memory context")
 
 	// Return the memory context as data for injection
 	return &hooks.Result{
@@ -94,7 +102,7 @@ func (m *MemoryHookBridge) handleBeforeMessage(ctx context.Context, hookCtx *hoo
 
 // handleAfterMessage processes after_message hooks for memory capture.
 func (m *MemoryHookBridge) handleAfterMessage(ctx context.Context, hookCtx *hooks.Context) (*hooks.Result, error) {
-	if m.memoryHooks == nil {
+	if m.captureEngine == nil {
 		return nil, nil
 	}
 
@@ -119,11 +127,15 @@ func (m *MemoryHookBridge) handleAfterMessage(ctx context.Context, hookCtx *hook
 		return nil, nil
 	}
 
-	// Call AfterRun for capture
-	err := m.memoryHooks.AfterRun(ctx, messages, true)
+	// Capture relevant memories
+	captured, err := m.captureEngine.Capture(ctx, messages)
 	if err != nil {
 		m.logger.Warn().Err(err).Msg("memory capture failed in hook")
 		return nil, nil // Don't fail the hook
+	}
+
+	if captured > 0 {
+		m.logger.Info().Int("count", captured).Msg("auto-captured memories")
 	}
 
 	return nil, nil
@@ -143,7 +155,7 @@ func (m *MemoryHookBridge) SessionCreateHandler(id string) *hooks.Handler {
 }
 
 func (m *MemoryHookBridge) handleSessionCreate(_ context.Context, hookCtx *hooks.Context) (*hooks.Result, error) {
-	if m.memoryHooks == nil {
+	if m.captureEngine == nil {
 		return nil, nil
 	}
 
@@ -152,7 +164,8 @@ func (m *MemoryHookBridge) handleSessionCreate(_ context.Context, hookCtx *hooks
 		sessionID = hookCtx.Session.ID
 	}
 
-	m.memoryHooks.SetSessionID(sessionID)
+	m.captureEngine.SetSessionID(sessionID)
+	m.captureEngine.ResetSession()
 	return nil, nil
 }
 
@@ -170,7 +183,7 @@ func (m *MemoryHookBridge) SessionEndHandler(id string) *hooks.Handler {
 }
 
 func (m *MemoryHookBridge) handleSessionEnd(ctx context.Context, hookCtx *hooks.Context) (*hooks.Result, error) {
-	if m.memoryHooks == nil {
+	if m.captureEngine == nil {
 		return nil, nil
 	}
 
@@ -196,8 +209,13 @@ func (m *MemoryHookBridge) handleSessionEnd(ctx context.Context, hookCtx *hooks.
 	content := m.buildSessionSummary(hookCtx.Session, messages)
 	section := "会话结束"
 
-	// Save to daily log via MemoryHooks
-	if err := m.memoryHooks.SaveSessionEnd(ctx, content, section); err != nil {
+	// Save to daily log via CaptureEngine's memory index
+	memoryIndex := m.captureEngine.GetMemoryIndex()
+	if memoryIndex == nil {
+		return nil, nil
+	}
+
+	if err := memoryIndex.AppendDailyLog(ctx, content, section); err != nil {
 		m.logger.Warn().Err(err).Str("session", sessionID).Msg("failed to save session end to memory")
 		return nil, nil // Don't fail the hook
 	}
@@ -244,4 +262,12 @@ func (m *MemoryHookBridge) buildSessionSummary(session *hooks.SessionContext, me
 	}
 
 	return builder.String()
+}
+
+// truncate truncates a string to maxLen characters with "..." suffix.
+func truncate(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }

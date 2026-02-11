@@ -68,6 +68,8 @@ export const PromptSelector: React.FC<PromptSelectorProps> = ({
             content: p.content,
             type: 'user' as const,
             description: p.description,
+            hasArgs: p.arguments && p.arguments.length > 0,
+            args: p.arguments,
           }));
         setUserPrompts(userItems);
 
@@ -179,6 +181,17 @@ export const PromptSelector: React.FC<PromptSelectorProps> = ({
       // No required args, fetch directly
       await fetchMCPPromptContent(prompt, {});
     } else {
+      // User prompt
+      const requiredArgs = prompt.args?.filter(a => a.required) || [];
+      if (requiredArgs.length > 0 || (prompt.args && prompt.args.length > 0)) {
+        // Show dialog to collect arguments (for any args, not just required)
+        setPendingPrompt(prompt);
+        form.resetFields();
+        setArgsModalVisible(true);
+        return;
+      }
+      
+      // No args, use content directly
       onSelect(prompt.content);
       onCancel();
     }
@@ -190,7 +203,27 @@ export const PromptSelector: React.FC<PromptSelectorProps> = ({
     try {
       const values = await form.validateFields();
       setArgsModalVisible(false);
-      await fetchMCPPromptContent(pendingPrompt, values);
+      
+      if (pendingPrompt.type === 'mcp') {
+        await fetchMCPPromptContent(pendingPrompt, values);
+      } else {
+        // User prompt - render with variables
+        setFetchingPrompt(true);
+        try {
+          const result = await api.renderPrompt?.(pendingPrompt.id, values);
+          if (result) {
+            onSelect(result.content);
+          } else {
+            onSelect(pendingPrompt.content);
+          }
+          onCancel();
+        } catch (error: any) {
+          console.error('Failed to render prompt:', error);
+          message.error(`渲染提示词失败: ${error.message || '未知错误'}`);
+        } finally {
+          setFetchingPrompt(false);
+        }
+      }
     } catch (error) {
       // Form validation error
       console.error('Form validation error:', error);

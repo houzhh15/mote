@@ -26,6 +26,8 @@ import type {
   Prompt,
   MCPPrompt,
   MCPPromptContent,
+  ReconfigureSessionRequest,
+  ReconfigureSessionResponse,
 } from '../types';
 
 // Memory search result type from backend
@@ -361,6 +363,13 @@ export const createHttpAdapter = (options: HttpAdapterOptions = {}): APIAdapter 
       });
     },
 
+    reconfigureSession: async (sessionId: string, config: ReconfigureSessionRequest): Promise<ReconfigureSessionResponse> => {
+      return fetchJSON<ReconfigureSessionResponse>(`/api/v1/sessions/${sessionId}/reconfigure`, {
+        method: 'POST',
+        body: JSON.stringify(config),
+      });
+    },
+
     getScenarioModels: async (): Promise<ScenarioModels> => {
       return fetchJSON<ScenarioModels>('/api/v1/settings/models');
     },
@@ -544,6 +553,10 @@ export const createHttpAdapter = (options: HttpAdapterOptions = {}): APIAdapter 
         method: 'POST',
         body: JSON.stringify({ target }),
       });
+    },
+
+    reloadPrompts: async () => {
+      await fetchJSON('/api/v1/prompts/reload', { method: 'POST' });
     },
 
     renderPrompt: async (id: string, variables: Record<string, string>) => {

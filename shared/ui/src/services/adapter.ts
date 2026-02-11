@@ -27,6 +27,8 @@ import type {
   Prompt,
   MCPPrompt,
   MCPPromptContent,
+  ReconfigureSessionRequest,
+  ReconfigureSessionResponse,
 } from '../types';
 
 /**
@@ -110,6 +112,13 @@ export interface APIAdapter {
   setSessionSkills?(sessionId: string, skillIds: string[]): Promise<void>;
   getScenarioModels?(): Promise<ScenarioModels>;
   setScenarioModel?(scenario: string, modelId: string): Promise<void>;
+
+  /**
+   * Atomically reconfigure a session's model, workspace, and/or skills.
+   * This is a major operation that cleans up ALL runtime resources (ACP sessions, caches, etc).
+   * Use this when switching parameters during an active chat session.
+   */
+  reconfigureSession?(sessionId: string, config: ReconfigureSessionRequest): Promise<ReconfigureSessionResponse>;
   
   // ============== Channel Service ==============
   /**
@@ -270,6 +279,11 @@ export interface APIAdapter {
   openPromptsDir?(target: 'user' | 'workspace'): Promise<void>;
   
   /**
+   * Reload prompts from configured directories
+   */
+  reloadPrompts?(): Promise<void>;
+  
+  /**
    * Render a prompt with variables
    */
   renderPrompt?(id: string, variables: Record<string, string>): Promise<{ content: string }>;
@@ -339,6 +353,7 @@ export const createNoopAdapter = (): APIAdapter => ({
   deletePrompt: async () => {},
   togglePrompt: async () => {},
   openPromptsDir: async () => {},
+  reloadPrompts: async () => {},
   renderPrompt: async () => ({ content: '' }),
   isGUIMode: () => false,
 });
