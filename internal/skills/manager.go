@@ -104,11 +104,41 @@ func (m *Manager) SetDiscoveryPaths(paths []string) {
 
 // ScanAllPaths scans all configured discovery paths for skills.
 // It iterates through discoveryPaths and calls ScanDirectory for each.
+// It clears previously scanned entries first to avoid accumulation on refresh,
+// while preserving active skill instances.
 func (m *Manager) ScanAllPaths() error {
-	m.mu.RLock()
+	m.mu.Lock()
 	paths := make([]string, len(m.discoveryPaths))
 	copy(paths, m.discoveryPaths)
-	m.mu.RUnlock()
+	// Preserve active instances but clear scanned registry & skillMDEntries
+	// to avoid duplicates on re-scan.
+	activeIDs := make(map[string]bool, len(m.active))
+	for id := range m.active {
+		activeIDs[id] = true
+	}
+	newRegistry := make(map[string]*SkillStatus, len(m.registry))
+	for id, status := range m.registry {
+		if activeIDs[id] {
+			newRegistry[id] = status
+		}
+	}
+	m.registry = newRegistry
+	m.skillMDEntries = make([]*SkillEntry, 0)
+	m.mu.Unlock()
+
+	// Also include the main skills dir
+	if m.skillsDir != "" {
+		found := false
+		for _, p := range paths {
+			if p == m.skillsDir {
+				found = true
+				break
+			}
+		}
+		if !found {
+			paths = append([]string{m.skillsDir}, paths...)
+		}
+	}
 
 	for _, path := range paths {
 		if err := m.ScanDirectory(path); err != nil {
@@ -171,7 +201,14 @@ func (m *Manager) ScanDirectory(dir string) error {
 	} else {
 		m.skillMDEntries = append(m.skillMDEntries, skillMDEntries...)
 		for _, entry := range skillMDEntries {
+			// Convert SkillEntry to Skill so it can be activated
+			skill := ConvertSkillEntryToSkill(entry)
+			m.registry[skill.ID] = &SkillStatus{
+				Skill: skill,
+				State: SkillStateRegistered,
+			}
 			log.Info().
+				Str("skill_id", skill.ID).
 				Str("skill_name", entry.Name).
 				Str("location", entry.Location).
 				Msg("registered SKILL.md skill")
@@ -518,6 +555,8 @@ func (m *Manager) ReloadSkill(id string) error {
 
 // GetAvailableEntries returns all available skill entries for system prompt injection.
 // It includes skills from both manifest.json and SKILL.md formats, filtered by gating.
+// Note: SKILL.md skills are already converted and registered in the registry by ScanDirectory,
+// so we only collect from registry to avoid double-listing.
 func (m *Manager) GetAvailableEntries() []*SkillEntry {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -525,22 +564,19 @@ func (m *Manager) GetAvailableEntries() []*SkillEntry {
 	gating := &Gating{}
 	var entries []*SkillEntry
 
-	// Collect manifest.json skills
+	// Collect all skills from registry (includes both manifest.json and SKILL.md converted skills)
 	for _, status := range m.registry {
+		source := SourceManifest
+		if strings.HasSuffix(status.Skill.FilePath, "SKILL.md") {
+			source = SourceSkillMD
+		}
 		entry := &SkillEntry{
 			Name:        status.Skill.Name,
 			Description: status.Skill.Description,
 			Location:    status.Skill.FilePath,
-			Source:      SourceManifest,
+			Source:      source,
 			Skill:       status.Skill,
 		}
-		if gating.ShouldInclude(entry) {
-			entries = append(entries, entry)
-		}
-	}
-
-	// Collect SKILL.md skills
-	for _, entry := range m.skillMDEntries {
 		if gating.ShouldInclude(entry) {
 			entries = append(entries, entry)
 		}
@@ -566,6 +602,41 @@ func (m *Manager) FormatSkillsXML() string {
 		b.WriteString("  </skill>\n")
 	}
 	b.WriteString("</available_skills>")
+	return b.String()
+}
+
+// FormatSkillsXMLFiltered formats available skills as XML, filtered by selected skill IDs.
+func (m *Manager) FormatSkillsXMLFiltered(selectedSkills []string) string {
+	entries := m.GetAvailableEntries()
+	if len(entries) == 0 {
+		return ""
+	}
+
+	// Build lookup set
+	selected := make(map[string]bool, len(selectedSkills))
+	for _, id := range selectedSkills {
+		selected[id] = true
+	}
+
+	var b strings.Builder
+	b.WriteString("<available_skills>\n")
+	count := 0
+	for _, entry := range entries {
+		if !selected[entry.Name] {
+			continue
+		}
+		b.WriteString("  <skill>\n")
+		b.WriteString(fmt.Sprintf("    <name>%s</name>\n", escapeXML(entry.Name)))
+		b.WriteString(fmt.Sprintf("    <description>%s</description>\n", escapeXML(entry.Description)))
+		b.WriteString(fmt.Sprintf("    <location>%s</location>\n", escapeXML(entry.Location)))
+		b.WriteString("  </skill>\n")
+		count++
+	}
+	b.WriteString("</available_skills>")
+
+	if count == 0 {
+		return ""
+	}
 	return b.String()
 }
 

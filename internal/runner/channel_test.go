@@ -11,6 +11,7 @@ import (
 )
 
 // mockChannelPlugin 用于测试的 mock 渠道插件
+//
 //nolint:unused // Test helper
 type mockChannelPlugin struct {
 	id       channel.ChannelType
@@ -317,6 +318,7 @@ func BenchmarkInitChannels(b *testing.B) {
 }
 
 // 辅助函数：等待条件满足
+//
 //nolint:unused // Test helper
 func waitFor(t *testing.T, condition func() bool, timeout time.Duration, msg string) {
 	deadline := time.Now().Add(timeout)

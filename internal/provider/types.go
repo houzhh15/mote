@@ -38,12 +38,14 @@ type ToolFunction struct {
 
 // ChatRequest represents a chat completion request.
 type ChatRequest struct {
-	Model       string    `json:"model"`
-	Messages    []Message `json:"messages"`
-	Tools       []Tool    `json:"tools,omitempty"`
-	Temperature float64   `json:"temperature,omitempty"`
-	MaxTokens   int       `json:"max_tokens,omitempty"`
-	Stream      bool      `json:"stream,omitempty"`
+	Model          string       `json:"model"`
+	Messages       []Message    `json:"messages"`
+	Attachments    []Attachment `json:"attachments,omitempty"` // File attachments
+	Tools          []Tool       `json:"tools,omitempty"`
+	Temperature    float64      `json:"temperature,omitempty"`
+	MaxTokens      int          `json:"max_tokens,omitempty"`
+	Stream         bool         `json:"stream,omitempty"`
+	ConversationID string       `json:"conversation_id,omitempty"` // Used to identify requests in the same conversation turn
 }
 
 // ChatResponse represents a chat completion response.
@@ -63,20 +65,49 @@ type Usage struct {
 
 // ChatEvent represents a streaming chat event.
 type ChatEvent struct {
-	Type         string    `json:"type"` // content, tool_call, done, error
-	Delta        string    `json:"delta,omitempty"`
-	ToolCall     *ToolCall `json:"tool_call,omitempty"`
-	Usage        *Usage    `json:"usage,omitempty"`
-	FinishReason string    `json:"finish_reason,omitempty"` // stop, tool_calls, length
-	Error        error     `json:"-"`
+	Type           string          `json:"type"` // content, tool_call, tool_call_update, thinking, done, error
+	Delta          string          `json:"delta,omitempty"`
+	Thinking       string          `json:"thinking,omitempty"`         // Thinking/reasoning content (temporary display)
+	ToolCall       *ToolCall       `json:"tool_call,omitempty"`        // For tool_call events
+	ToolCallUpdate *ToolCallUpdate `json:"tool_call_update,omitempty"` // For tool_call_update events
+	Usage          *Usage          `json:"usage,omitempty"`
+	FinishReason   string          `json:"finish_reason,omitempty"` // stop, tool_calls, length
+	Error          error           `json:"-"`
+}
+
+// ToolCallUpdate represents a tool call progress update.
+type ToolCallUpdate struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Status    string `json:"status,omitempty"`    // "running", "completed"
+	Arguments string `json:"arguments,omitempty"` // May be partial during streaming
+}
+
+// Attachment represents a file attachment in a message.
+type Attachment struct {
+	Type     string            `json:"type"` // "text", "image_url"
+	Text     string            `json:"text,omitempty"`
+	ImageURL *ImageURL         `json:"image_url,omitempty"`
+	Filepath string            `json:"filepath,omitempty"`
+	Filename string            `json:"filename,omitempty"`
+	MimeType string            `json:"mime_type,omitempty"`
+	Size     int               `json:"size,omitempty"`
+	Metadata map[string]any    `json:"metadata,omitempty"`
+}
+
+// ImageURL represents an image URL (data URI or http(s) URL).
+type ImageURL struct {
+	URL string `json:"url"`
 }
 
 // Event types.
 const (
-	EventTypeContent  = "content"
-	EventTypeToolCall = "tool_call"
-	EventTypeDone     = "done"
-	EventTypeError    = "error"
+	EventTypeContent        = "content"
+	EventTypeToolCall       = "tool_call"
+	EventTypeToolCallUpdate = "tool_call_update" // Tool call progress update
+	EventTypeThinking       = "thinking"         // Agent thinking/reasoning
+	EventTypeDone           = "done"
+	EventTypeError          = "error"
 )
 
 // Role constants.

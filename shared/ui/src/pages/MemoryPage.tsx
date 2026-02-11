@@ -3,7 +3,7 @@
 // ================================================================
 
 import React, { useState, useEffect, useMemo } from 'react';
-import { Typography, Tag, Button, Space, Input, Spin, Empty, message, Modal, Form, Select, theme, Tooltip, Badge } from 'antd';
+import { Typography, Tag, Button, Space, Input, Spin, Empty, message, Modal, Form, Select, theme, Tooltip, Badge, Pagination } from 'antd';
 import { SearchOutlined, ReloadOutlined, DeleteOutlined, EyeOutlined, PlusOutlined, EditOutlined, FileOutlined, FolderOutlined, DownOutlined, RightOutlined } from '@ant-design/icons';
 import { useAPI } from '../context/APIContext';
 import type { Memory } from '../types';
@@ -84,15 +84,22 @@ export const MemoryPage: React.FC = () => {
   const [selectedMemory, setSelectedMemory] = useState<Memory | null>(null);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [form] = Form.useForm();
+  
+  // Pagination state
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(100);
+  const [total, setTotal] = useState(0);
 
   const canCreate = typeof api.createMemory === 'function';
   const canUpdate = typeof api.updateMemory === 'function';
 
-  const fetchMemories = async () => {
+  const fetchMemories = async (page = currentPage, size = pageSize) => {
     setLoading(true);
     try {
-      const data = await api.getMemories();
-      setMemories(data);
+      const offset = (page - 1) * size;
+      const data = await api.getMemories({ limit: size, offset });
+      setMemories(data.memories);
+      setTotal(data.total);
     } catch (error) {
       console.error('Failed to fetch memories:', error);
       message.error('获取记忆失败');
@@ -103,18 +110,32 @@ export const MemoryPage: React.FC = () => {
 
   const searchMemories = async (query: string) => {
     if (!query.trim()) {
-      fetchMemories();
+      fetchMemories(1, pageSize);
       return;
     }
     setLoading(true);
     try {
-      const data = await api.searchMemories(query);
+      const data = await api.searchMemories(query, 500); // Search returns more results
       setMemories(data);
+      setTotal(data.length);
+      setCurrentPage(1); // Reset to first page on search
     } catch (error) {
       console.error('Failed to search memories:', error);
       message.error('搜索记忆失败');
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Handle page change
+  const handlePageChange = (page: number, size?: number) => {
+    const newSize = size || pageSize;
+    setCurrentPage(page);
+    if (size && size !== pageSize) {
+      setPageSize(size);
+    }
+    if (!searchQuery.trim()) {
+      fetchMemories(page, newSize);
     }
   };
 
@@ -125,6 +146,11 @@ export const MemoryPage: React.FC = () => {
     }, 300);
     return () => clearTimeout(timer);
   }, [searchQuery]);
+
+  // Initial load
+  useEffect(() => {
+    fetchMemories(1, pageSize);
+  }, []);
 
   const deleteMemory = async (id: string) => {
     Modal.confirm({
@@ -197,6 +223,7 @@ export const MemoryPage: React.FC = () => {
       setEditModalVisible(false);
       form.resetFields();
       setSearchQuery(''); // 清空搜索以显示所有记忆
+      fetchMemories(); // 刷新数据列表
     } catch (error) {
       console.error('Failed to save memory:', error);
       message.error(selectedMemory ? '更新失败' : '添加失败');
@@ -368,7 +395,7 @@ export const MemoryPage: React.FC = () => {
               style={{ width: 120 }}
               options={[{ value: null, label: '全部分类' }, ...CATEGORIES]}
             />
-            <Button icon={<ReloadOutlined />} onClick={fetchMemories} className="page-header-btn">
+            <Button icon={<ReloadOutlined />} onClick={() => fetchMemories()} className="page-header-btn">
               刷新
             </Button>
           </Space>
@@ -395,6 +422,22 @@ export const MemoryPage: React.FC = () => {
                   {renderChunkList(group)}
                 </div>
               ))}
+              
+              {/* Pagination - only show when not searching and total > pageSize */}
+              {!searchQuery.trim() && total > pageSize && (
+                <div style={{ display: 'flex', justifyContent: 'center', marginTop: 24, paddingBottom: 16 }}>
+                  <Pagination
+                    current={currentPage}
+                    pageSize={pageSize}
+                    total={total}
+                    onChange={handlePageChange}
+                    showSizeChanger
+                    showQuickJumper
+                    showTotal={(t, range) => `第 ${range[0]}-${range[1]} 条，共 ${t} 条记忆`}
+                    pageSizeOptions={['50', '100', '200', '500']}
+                  />
+                </div>
+              )}
             </div>
           )}
         </Spin>

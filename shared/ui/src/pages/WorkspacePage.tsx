@@ -36,6 +36,16 @@ export const WorkspacePage: React.FC = () => {
   const [form] = Form.useForm();
   const [defaultForm] = Form.useForm();
 
+  const getDirName = (path: string) => {
+    // Handle both Windows and Unix separators
+    const normalized = path.replace(/\\/g, '/');
+    // Remove trailing slash if present (unless it's root)
+    const trimmed = normalized.endsWith('/') && normalized.length > 1 
+      ? normalized.slice(0, -1) 
+      : normalized;
+    return trimmed.split('/').pop() || path;
+  };
+
   const fetchWorkspaces = async () => {
     setLoading(true);
     try {
@@ -44,13 +54,28 @@ export const WorkspacePage: React.FC = () => {
       if (Array.isArray(data)) {
         // Old API format: returns array of bound workspaces
         const defaultWs = (data as Workspace[]).find(ws => ws.is_default);
+        if (defaultWs && !defaultWs.name) {
+          defaultWs.name = getDirName(defaultWs.path);
+        }
         setDefaultWorkspace(defaultWs || null);
-        setRecentWorkspaces((data as Workspace[]).map(ws => ({ path: ws.path, name: ws.name || ws.path })));
+        setRecentWorkspaces((data as Workspace[]).map(ws => ({ 
+          path: ws.path, 
+          name: ws.name || getDirName(ws.path) 
+        })));
       } else {
         // New API format with default property
         const responseData = data as { default?: Workspace; workspaces?: RecentWorkspace[] };
-        setDefaultWorkspace(responseData.default || null);
-        setRecentWorkspaces(responseData.workspaces || []);
+        const defaultWs = responseData.default;
+        if (defaultWs && !defaultWs.name) {
+          defaultWs.name = getDirName(defaultWs.path);
+        }
+        setDefaultWorkspace(defaultWs || null);
+        
+        const workspaces = (responseData.workspaces || []).map(ws => ({
+          ...ws,
+          name: ws.name || getDirName(ws.path)
+        }));
+        setRecentWorkspaces(workspaces);
       }
     } catch (error) {
       console.error('Failed to fetch workspaces:', error);

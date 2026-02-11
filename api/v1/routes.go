@@ -165,6 +165,7 @@ func (r *Router) RegisterRoutes(router *mux.Router) {
 	v1.HandleFunc("/sessions/{id}", r.HandleDeleteSession).Methods(http.MethodDelete)
 	v1.HandleFunc("/sessions/{id}/messages", r.HandleGetMessages).Methods(http.MethodGet)
 	v1.HandleFunc("/sessions/{id}/model", r.HandleUpdateSessionModel).Methods(http.MethodPut)
+	v1.HandleFunc("/sessions/{id}/skills", r.HandleUpdateSessionSkills).Methods(http.MethodPut)
 
 	// Tools
 	v1.HandleFunc("/tools", r.HandleListTools).Methods(http.MethodGet)
@@ -256,6 +257,7 @@ func (r *Router) RegisterRoutes(router *mux.Router) {
 	v1.HandleFunc("/workspaces/{sessionId}", r.HandleGetWorkspace).Methods(http.MethodGet)
 	v1.HandleFunc("/workspaces/{sessionId}", r.HandleUnbindWorkspace).Methods(http.MethodDelete)
 	v1.HandleFunc("/workspaces/{sessionId}/files", r.HandleListWorkspaceFiles).Methods(http.MethodGet)
+	v1.HandleFunc("/browse-directory", r.HandleBrowseDirectory).Methods(http.MethodGet)
 
 	// Skills
 	v1.HandleFunc("/skills", r.HandleListSkills).Methods(http.MethodGet)
@@ -397,6 +399,7 @@ func (r *Router) HandleListSessions(w http.ResponseWriter, req *http.Request) {
 		       COALESCE(s.title, '') as title,
 		       COALESCE(s.model, '') as model,
 		       COALESCE(s.scenario, 'chat') as scenario,
+		       COALESCE(s.selected_skills, '') as selected_skills,
 		       (SELECT COUNT(*) FROM messages WHERE session_id = s.id) as message_count,
 		       COALESCE(
 		           (SELECT SUBSTR(content, 1, 50) FROM messages 
@@ -418,12 +421,14 @@ func (r *Router) HandleListSessions(w http.ResponseWriter, req *http.Request) {
 	for rows.Next() {
 		var s SessionSummary
 		var preview string
-		if err := rows.Scan(&s.ID, &s.CreatedAt, &s.UpdatedAt, &s.Title, &s.Model, &s.Scenario, &s.MessageCount, &preview); err != nil {
+		var selectedSkillsStr string
+		if err := rows.Scan(&s.ID, &s.CreatedAt, &s.UpdatedAt, &s.Title, &s.Model, &s.Scenario, &selectedSkillsStr, &s.MessageCount, &preview); err != nil {
 			continue
 		}
 		if preview != "" {
 			s.Preview = preview
 		}
+		s.SelectedSkills = parseSkillsJSON(selectedSkillsStr)
 		sessions = append(sessions, s)
 	}
 
@@ -495,13 +500,13 @@ func (r *Router) HandleGetSession(w http.ResponseWriter, req *http.Request) {
 	id := vars["id"]
 
 	var s SessionSummary
-	var title, model, scenario sql.NullString
+	var title, model, scenario, selectedSkills sql.NullString
 	err := r.db.QueryRow(`
-		SELECT id, created_at, updated_at, title, model, scenario,
+		SELECT id, created_at, updated_at, title, model, scenario, selected_skills,
 		       (SELECT COUNT(*) FROM messages WHERE session_id = sessions.id) as message_count
 		FROM sessions 
 		WHERE id = ?
-	`, id).Scan(&s.ID, &s.CreatedAt, &s.UpdatedAt, &title, &model, &scenario, &s.MessageCount)
+	`, id).Scan(&s.ID, &s.CreatedAt, &s.UpdatedAt, &title, &model, &scenario, &selectedSkills, &s.MessageCount)
 
 	if err != nil {
 		handlers.SendError(w, http.StatusNotFound, handlers.ErrCodeNotFound, "Session not found")
@@ -516,6 +521,9 @@ func (r *Router) HandleGetSession(w http.ResponseWriter, req *http.Request) {
 	}
 	if scenario.Valid {
 		s.Scenario = scenario.String
+	}
+	if selectedSkills.Valid {
+		s.SelectedSkills = parseSkillsJSON(selectedSkills.String)
 	}
 
 	handlers.SendJSON(w, http.StatusOK, s)
@@ -699,6 +707,61 @@ func (r *Router) HandleUpdateSessionModel(w http.ResponseWriter, req *http.Reque
 	}
 
 	handlers.SendJSON(w, http.StatusOK, UpdateSessionModelResponse{ID: id, Model: body.Model})
+}
+
+// HandleUpdateSessionSkills updates the selected skills for a specific session.
+func (r *Router) HandleUpdateSessionSkills(w http.ResponseWriter, req *http.Request) {
+	if r.db == nil {
+		handlers.SendError(w, http.StatusServiceUnavailable, handlers.ErrCodeServiceUnavailable, "Database not available")
+		return
+	}
+
+	vars := mux.Vars(req)
+	id := vars["id"]
+
+	var body UpdateSessionSkillsRequest
+	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+		handlers.SendError(w, http.StatusBadRequest, handlers.ErrCodeInvalidRequest, "Invalid request body")
+		return
+	}
+
+	// Serialize skills to JSON for storage
+	var skillsStr string
+	if len(body.SelectedSkills) > 0 {
+		data, err := json.Marshal(body.SelectedSkills)
+		if err != nil {
+			handlers.SendError(w, http.StatusInternalServerError, handlers.ErrCodeInternalError, "Failed to serialize skills")
+			return
+		}
+		skillsStr = string(data)
+	}
+
+	result, err := r.db.Exec("UPDATE sessions SET selected_skills = ?, updated_at = ? WHERE id = ?", skillsStr, time.Now(), id)
+	if err != nil {
+		handlers.SendError(w, http.StatusInternalServerError, handlers.ErrCodeInternalError, "Failed to update session skills")
+		return
+	}
+
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		handlers.SendError(w, http.StatusNotFound, handlers.ErrCodeNotFound, "Session not found")
+		return
+	}
+
+	handlers.SendJSON(w, http.StatusOK, UpdateSessionSkillsResponse{ID: id, SelectedSkills: body.SelectedSkills})
+}
+
+// parseSkillsJSON parses a JSON array string into a string slice.
+// Returns nil for empty string (meaning "all skills").
+func parseSkillsJSON(s string) []string {
+	if s == "" {
+		return nil
+	}
+	var skills []string
+	if err := json.Unmarshal([]byte(s), &skills); err != nil {
+		return nil
+	}
+	return skills
 }
 
 // HandleUpdateSession updates the properties of a specific session.
@@ -996,18 +1059,18 @@ type ModelsResponse struct {
 
 // ModelView represents a single model's information.
 type ModelView struct {
-	ID             string `json:"id"`
-	Provider       string `json:"provider"` // Provider name: copilot, ollama
-	DisplayName    string `json:"display_name"`
-	Family         string `json:"family"`
-	IsFree         bool   `json:"is_free"`
-	Multiplier     int    `json:"multiplier"`
-	ContextWindow  int    `json:"context_window"`
-	MaxOutput      int    `json:"max_output"`
-	SupportsVision bool   `json:"supports_vision"`
-	SupportsTools  bool   `json:"supports_tools"`
-	Description    string `json:"description"`
-	Available      bool   `json:"available"` // Whether the model is currently available
+	ID             string  `json:"id"`
+	Provider       string  `json:"provider"` // Provider name: copilot, copilot-acp, ollama
+	DisplayName    string  `json:"display_name"`
+	Family         string  `json:"family"`
+	IsFree         bool    `json:"is_free"`
+	Multiplier     float64 `json:"multiplier"`
+	ContextWindow  int     `json:"context_window"`
+	MaxOutput      int     `json:"max_output"`
+	SupportsVision bool    `json:"supports_vision"`
+	SupportsTools  bool    `json:"supports_tools"`
+	Description    string  `json:"description"`
+	Available      bool    `json:"available"` // Whether the model is currently available
 }
 
 // HandleListModels returns the list of supported models from all enabled providers.
@@ -1073,13 +1136,39 @@ func (r *Router) HandleListModels(w http.ResponseWriter, req *http.Request) {
 					DisplayName:    info.DisplayName,
 					Family:         string(info.Family),
 					IsFree:         info.IsFree,
-					Multiplier:     info.Multiplier,
+					Multiplier:     float64(info.Multiplier),
 					ContextWindow:  info.ContextWindow,
 					MaxOutput:      info.MaxOutput,
 					SupportsVision: info.SupportsVision,
 					SupportsTools:  info.SupportsTools,
 					Description:    info.Description,
 					Available:      r.multiPool.HasProvider("copilot"),
+				})
+			}
+		}
+
+		// Add Copilot ACP models (premium models via Copilot CLI)
+		if providerFilter == "" || providerFilter == "copilot-acp" || providerFilter == "copilot" {
+			for id, info := range copilot.ACPSupportedModels {
+				if freeOnly {
+					continue // All ACP models are premium
+				}
+				if family != "" && string(info.Family) != family {
+					continue
+				}
+				models = append(models, ModelView{
+					ID:             id,
+					Provider:       "copilot-acp",
+					DisplayName:    info.DisplayName,
+					Family:         string(info.Family),
+					IsFree:         false,
+					Multiplier:     info.Multiplier,
+					ContextWindow:  info.ContextWindow,
+					MaxOutput:      info.MaxOutput,
+					SupportsVision: info.SupportsVision,
+					SupportsTools:  info.SupportsTools,
+					Description:    info.Description,
+					Available:      r.multiPool.HasProvider("copilot-acp"),
 				})
 			}
 		}
@@ -1122,7 +1211,7 @@ func (r *Router) HandleListModels(w http.ResponseWriter, req *http.Request) {
 				DisplayName:    info.DisplayName,
 				Family:         string(info.Family),
 				IsFree:         info.IsFree,
-				Multiplier:     info.Multiplier,
+				Multiplier:     float64(info.Multiplier),
 				ContextWindow:  info.ContextWindow,
 				MaxOutput:      info.MaxOutput,
 				SupportsVision: info.SupportsVision,

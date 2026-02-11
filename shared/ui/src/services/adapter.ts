@@ -23,6 +23,7 @@ import type {
   Skill,
   Workspace,
   WorkspaceFile,
+  BrowseDirectoryResult,
   Prompt,
   MCPPrompt,
   MCPPromptContent,
@@ -59,7 +60,7 @@ export interface APIAdapter {
   deleteSession(sessionId: string): Promise<void>;
   
   // ============== Memory Service ==============
-  getMemories(query?: string): Promise<Memory[]>;
+  getMemories(options?: { limit?: number; offset?: number }): Promise<{ memories: Memory[]; total: number; limit: number; offset: number }>;
   searchMemories(query: string, limit?: number): Promise<Memory[]>;
   createMemory?(content: string, category?: string): Promise<Memory>;
   updateMemory?(id: string, content: string, category?: string): Promise<Memory>;
@@ -106,6 +107,7 @@ export interface APIAdapter {
   getModels(): Promise<ModelsResponse>;
   setCurrentModel(modelId: string): Promise<void>;
   setSessionModel?(sessionId: string, modelId: string): Promise<void>;
+  setSessionSkills?(sessionId: string, skillIds: string[]): Promise<void>;
   getScenarioModels?(): Promise<ScenarioModels>;
   setScenarioModel?(scenario: string, modelId: string): Promise<void>;
   
@@ -219,6 +221,12 @@ export interface APIAdapter {
    * List files in a workspace
    */
   listWorkspaceFiles?(sessionId: string, path?: string): Promise<WorkspaceFile[]>;
+
+  /**
+   * Browse system directories for the directory picker.
+   * If path is empty, returns home directory contents (or drive list on Windows).
+   */
+  browseDirectory?(path?: string): Promise<BrowseDirectoryResult>;
   
   // ============== Prompts Service ==============
   /**
@@ -282,7 +290,7 @@ export const createNoopAdapter = (): APIAdapter => ({
   getSessionMessages: async () => [],
   createSession: async () => ({ id: '', title: '', created_at: '', updated_at: '' }),
   deleteSession: async () => {},
-  getMemories: async () => [],
+  getMemories: async () => ({ memories: [], total: 0, limit: 100, offset: 0 }),
   searchMemories: async () => [],
   deleteMemory: async () => {},
   getTools: async () => [],

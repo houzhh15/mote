@@ -17,3 +17,12 @@ type Provider interface {
 	// Stream sends a chat request and returns a channel of streaming events.
 	Stream(ctx context.Context, req ChatRequest) (<-chan ChatEvent, error)
 }
+
+// ACPCapable indicates a provider that uses ACP protocol.
+// ACP providers handle tool call loops internally, so the runner
+// should not perform external tool call iterations.
+type ACPCapable interface {
+	Provider
+	// IsACPProvider returns true if this provider uses ACP protocol.
+	IsACPProvider() bool
+}

@@ -138,3 +138,16 @@ func GetSkillMDBody(content string) string {
 	}
 	return strings.TrimSpace(content[idx[1]:])
 }
+
+// ConvertSkillEntryToSkill converts a SkillEntry (from SKILL.md) to a Skill.
+// This allows SKILL.md format skills to be activated like manifest.json skills.
+func ConvertSkillEntryToSkill(entry *SkillEntry) *Skill {
+	skill := &Skill{
+		ID:          entry.Name, // Use name as ID for SKILL.md skills
+		Name:        entry.Name,
+		Description: entry.Description,
+		Version:     "1.0.0", // Default version for SKILL.md skills
+		FilePath:    entry.Location,
+	}
+	return skill
+}

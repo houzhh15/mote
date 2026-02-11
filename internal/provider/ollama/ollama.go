@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -252,6 +253,35 @@ func (p *OllamaProvider) buildRequest(req provider.ChatRequest, stream bool) *ol
 					Parameters:  tool.Function.Parameters,
 				},
 			})
+		}
+	}
+
+	// Process attachments (add to last user message)
+	if len(req.Attachments) > 0 && len(ollamaReq.Messages) > 0 {
+		// Find last user message
+		for i := len(ollamaReq.Messages) - 1; i >= 0; i-- {
+			if ollamaReq.Messages[i].Role == "user" {
+				// Add images
+				for _, att := range req.Attachments {
+					if att.Type == "image_url" && att.ImageURL != nil {
+						// Extract base64 from data URI
+						// Format: data:image/png;base64,iVBORw0KGgo...
+						dataURI := att.ImageURL.URL
+						if idx := strings.Index(dataURI, ","); idx != -1 {
+							base64Data := dataURI[idx+1:]
+							ollamaReq.Messages[i].Images = append(ollamaReq.Messages[i].Images, base64Data)
+						}
+					} else if att.Type == "text" {
+						// Append text attachment to content
+						contentText := fmt.Sprintf("\n\n--- File: %s ---\n```%s\n%s\n```",
+							att.Filename,
+							att.Metadata["language"],
+							att.Text)
+						ollamaReq.Messages[i].Content += contentText
+					}
+				}
+				break
+			}
 		}
 	}
 

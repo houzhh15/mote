@@ -82,6 +82,7 @@ export interface Session {
   preview?: string;  // First 50 chars of first user message
   model?: string;  // Session-specific model (if set)
   scenario?: string;  // Session scenario (chat, cron, channel)
+  selected_skills?: string[];  // Selected skill IDs (undefined/null = all)
   created_at: string;
   updated_at: string;
   message_count?: number;
@@ -220,12 +221,19 @@ export interface ErrorDetail {
 
 // Streaming event types
 export interface StreamEvent {
-  type: 'content' | 'tool_call' | 'tool_result' | 'error' | 'done';
+  type: 'content' | 'tool_call' | 'tool_call_update' | 'tool_result' | 'thinking' | 'error' | 'done' | 'truncated' | 'heartbeat';
   delta?: string;  // Content delta from backend
   content?: string;  // Also support content for compatibility
+  thinking?: string;  // Thinking/reasoning content (temporary display)
   session_id?: string;  // Session ID (for done event)
   tool_call?: {
     name: string;
+    arguments?: string;
+  };
+  tool_call_update?: {
+    tool_call_id: string;
+    tool_name: string;
+    status?: string;  // "running", "completed"
     arguments?: string;
   };
   tool_result?: {
@@ -240,6 +248,9 @@ export interface StreamEvent {
   };
   error?: string;
   error_detail?: ErrorDetail;  // Detailed error info for recovery
+  // For truncated events
+  truncated_reason?: string;  // e.g., "length" for max_tokens limit
+  pending_tool_calls?: number;  // Number of pending tool calls when truncated
 }
 
 // ================================================================
@@ -350,6 +361,18 @@ export interface WorkspaceFile {
   size: number;
   mod_time: string;
   children?: WorkspaceFile[];
+}
+
+export interface DirectoryEntry {
+  name: string;
+  path: string;
+  is_dir: boolean;
+}
+
+export interface BrowseDirectoryResult {
+  path: string;
+  parent: string;
+  entries: DirectoryEntry[];
 }
 
 // ================================================================

@@ -2,9 +2,14 @@ package v1
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
 	"time"
 
 	"mote/internal/gateway/handlers"
@@ -40,7 +45,13 @@ func (r *Router) HandleChat(w http.ResponseWriter, req *http.Request) {
 	}
 
 	// Run agent and collect response
-	events, err := r.runner.Run(ctx, sessionID, chatReq.Message)
+	var events <-chan runner.Event
+	var err error
+	if chatReq.Model != "" {
+		events, err = r.runner.RunWithModel(ctx, sessionID, chatReq.Message, chatReq.Model, "chat")
+	} else {
+		events, err = r.runner.Run(ctx, sessionID, chatReq.Message)
+	}
 	if err != nil {
 		handlers.SendError(w, http.StatusInternalServerError, ErrCodeInternalError, err.Error())
 		return
@@ -72,6 +83,183 @@ func (r *Router) HandleChat(w http.ResponseWriter, req *http.Request) {
 		Message:   message,
 		ToolCalls: toolCalls,
 	})
+}
+
+// parseFileReferences extracts @filepath references from message.
+// Returns the original message and a list of file paths.
+func parseFileReferences(message string) (cleanMessage string, fileRefs []string) {
+	// Regex: match @(non-whitespace) at word boundaries (start, space, newline)
+	// Negative lookbehind for alphanumeric to avoid matching email addresses
+	re := regexp.MustCompile(`(?:^|\s)@([^\s@]+)`)
+	matches := re.FindAllStringSubmatch(message, -1)
+	
+	for _, match := range matches {
+		if len(match) > 1 {
+			filepath := match[1]
+			// Validate path safety
+			if isValidFilePath(filepath) {
+				fileRefs = append(fileRefs, filepath)
+			} else {
+				logger.Warn().Str("path", filepath).Msg("Invalid file path in reference")
+			}
+		}
+	}
+	
+	// Keep original message (including @ references for UI display)
+	cleanMessage = message
+	return
+}
+
+// isValidFilePath validates file path for security.
+func isValidFilePath(path string) bool {
+	// 1. Prevent path traversal
+	if strings.Contains(path, "..") {
+		return false
+	}
+	
+	// 2. Block sensitive files (check filename only, not full path)
+	filename := filepath.Base(path)
+	filenameLower := strings.ToLower(filename)
+	
+	sensitivePaths := []string{".env", "id_rsa", ".ssh", "password", "secret", "private_key"}
+	for _, s := range sensitivePaths {
+		if strings.Contains(filenameLower, s) {
+			return false
+		}
+	}
+	
+	return true
+}
+
+// buildAttachmentFromFile reads a file and constructs an Attachment.
+func buildAttachmentFromFile(filePath string) (provider.Attachment, error) {
+	// 1. Read file
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return provider.Attachment{}, fmt.Errorf("file not found: %s", filePath)
+		}
+		if os.IsPermission(err) {
+			return provider.Attachment{}, fmt.Errorf("permission denied: %s", filePath)
+		}
+		return provider.Attachment{}, fmt.Errorf("read file: %w", err)
+	}
+	
+	// 2. Check file size (10MB limit)
+	const maxFileSize = 10 * 1024 * 1024
+	if len(data) > maxFileSize {
+		return provider.Attachment{}, fmt.Errorf("file too large: %s (%.1f MB, limit: 10 MB)", 
+			filePath, float64(len(data))/1024/1024)
+	}
+	
+	// 3. Detect MIME type
+	mimeType := detectMimeType(filePath, data)
+	
+	// 4. Construct attachment
+	attachment := provider.Attachment{
+		Filepath: filePath,
+		Filename: filepath.Base(filePath),
+		MimeType: mimeType,
+		Size:     len(data),
+	}
+	
+	// 5. Process based on type
+	if strings.HasPrefix(mimeType, "image/") {
+		// Image: Base64 encode
+		attachment.Type = "image_url"
+		attachment.ImageURL = &provider.ImageURL{
+			URL: fmt.Sprintf("data:%s;base64,%s", 
+				mimeType, 
+				base64.StdEncoding.EncodeToString(data)),
+		}
+	} else {
+		// Code/text: direct text
+		attachment.Type = "text"
+		attachment.Text = string(data)
+		
+		// Add metadata
+		attachment.Metadata = map[string]any{
+			"filepath": filePath,
+			"language": detectLanguage(filePath),
+		}
+	}
+	
+	return attachment, nil
+}
+
+// detectMimeType detects MIME type from file extension and content.
+func detectMimeType(filePath string, data []byte) string {
+	// Extension-based detection
+	ext := strings.ToLower(filepath.Ext(filePath))
+	extToMime := map[string]string{
+		".png":  "image/png",
+		".jpg":  "image/jpeg",
+		".jpeg": "image/jpeg",
+		".gif":  "image/gif",
+		".webp": "image/webp",
+		".svg":  "image/svg+xml",
+		".bmp":  "image/bmp",
+		".js":   "text/javascript",
+		".ts":   "text/typescript",
+		".tsx":  "text/typescript",
+		".jsx":  "text/javascript",
+		".go":   "text/x-go",
+		".py":   "text/x-python",
+		".java": "text/x-java",
+		".cpp":  "text/x-c++",
+		".c":    "text/x-c",
+		".rs":   "text/x-rust",
+		".md":   "text/markdown",
+		".json": "application/json",
+		".yaml": "text/yaml",
+		".yml":  "text/yaml",
+		".xml":  "text/xml",
+		".txt":  "text/plain",
+	}
+	
+	if mime, ok := extToMime[ext]; ok {
+		return mime
+	}
+	
+	// Fallback: content-based detection
+	return http.DetectContentType(data)
+}
+
+// detectLanguage detects programming language from file extension.
+func detectLanguage(filePath string) string {
+	ext := strings.ToLower(filepath.Ext(filePath))
+	langMap := map[string]string{
+		".go":    "go",
+		".js":    "javascript",
+		".ts":    "typescript",
+		".tsx":   "typescript",
+		".jsx":   "javascript",
+		".py":    "python",
+		".java":  "java",
+		".cpp":   "cpp",
+		".c":     "c",
+		".h":     "c",
+		".hpp":   "cpp",
+		".rs":    "rust",
+		".rb":    "ruby",
+		".php":   "php",
+		".swift": "swift",
+		".kt":    "kotlin",
+		".cs":    "csharp",
+		".sh":    "bash",
+		".bash":  "bash",
+		".md":    "markdown",
+		".json":  "json",
+		".yaml":  "yaml",
+		".yml":   "yaml",
+		".xml":   "xml",
+	}
+	
+	if lang, ok := langMap[ext]; ok {
+		return lang
+	}
+	
+	return "text"
 }
 
 // HandleChatStream handles streaming chat requests using SSE.
@@ -117,7 +305,13 @@ func (r *Router) HandleChatStream(w http.ResponseWriter, req *http.Request) {
 	defer cancel()
 
 	// Run agent with streaming
-	events, err := r.runner.Run(ctx, sessionID, chatReq.Message)
+	var events <-chan runner.Event
+	var err error
+	if chatReq.Model != "" {
+		events, err = r.runner.RunWithModel(ctx, sessionID, chatReq.Message, chatReq.Model, "chat")
+	} else {
+		events, err = r.runner.Run(ctx, sessionID, chatReq.Message)
+	}
 	if err != nil {
 		sendSSEError(w, flusher, err)
 		return
@@ -132,6 +326,16 @@ func (r *Router) HandleChatStream(w http.ResponseWriter, req *http.Request) {
 				Type:  "content",
 				Delta: event.Content,
 			}
+		case runner.EventTypeThinking:
+			// Send thinking event for temporary display
+			if event.Thinking != "" {
+				sseEvent = ChatStreamEvent{
+					Type:     "thinking",
+					Thinking: event.Thinking,
+				}
+			} else {
+				continue
+			}
 		case runner.EventTypeToolCall:
 			if event.ToolCall != nil {
 				sseEvent = ChatStreamEvent{
@@ -139,6 +343,21 @@ func (r *Router) HandleChatStream(w http.ResponseWriter, req *http.Request) {
 					ToolCall: &ToolCallResult{
 						Name:      event.ToolCall.GetName(),
 						Arguments: event.ToolCall.GetArguments(),
+					},
+				}
+			} else {
+				continue
+			}
+		case runner.EventTypeToolCallUpdate:
+			// Send tool call update event for progress display
+			if event.ToolCallUpdate != nil {
+				sseEvent = ChatStreamEvent{
+					Type: "tool_call_update",
+					ToolCallUpdate: &ToolCallUpdateEvent{
+						ToolCallID: event.ToolCallUpdate.ToolCallID,
+						ToolName:   event.ToolCallUpdate.ToolName,
+						Status:     event.ToolCallUpdate.Status,
+						Arguments:  event.ToolCallUpdate.Arguments,
 					},
 				}
 			} else {
@@ -164,6 +383,19 @@ func (r *Router) HandleChatStream(w http.ResponseWriter, req *http.Request) {
 				Type:  "error",
 				Error: event.ErrorMsg,
 			}
+		case runner.EventTypeTruncated:
+			// Response was truncated due to max_tokens limit
+			sseEvent = ChatStreamEvent{
+				Type:             "truncated",
+				TruncatedReason:  event.TruncatedReason,
+				PendingToolCalls: event.PendingToolCalls,
+				SessionID:        sessionID,
+			}
+			logger.Warn().
+				Str("sessionID", sessionID).
+				Str("reason", event.TruncatedReason).
+				Int("pendingToolCalls", event.PendingToolCalls).
+				Msg("Response truncated, user can choose to continue")
 		case runner.EventTypeDone:
 			// Skip internal done event, we'll send our own
 			continue

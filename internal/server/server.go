@@ -44,19 +44,22 @@ import (
 
 // Server is the embedded mote server that runs in-process.
 type Server struct {
-	cfg           *config.Config
-	logger        zerolog.Logger
-	gatewayServer *gateway.Server
-	cronScheduler *cron.Scheduler
-	db            *storage.DB
-	multiPool     *provider.MultiProviderPool // Provider pool for hot reload
-	ctx           context.Context
-	cancel        context.CancelFunc
-	running       bool
-	mu            sync.RWMutex
-	startedAt     time.Time
-	errChan       chan error
-	onStateChange func(bool)
+	cfg              *config.Config
+	logger           zerolog.Logger
+	gatewayServer    *gateway.Server
+	cronScheduler    *cron.Scheduler
+	db               *storage.DB
+	multiPool        *provider.MultiProviderPool // Provider pool for hot reload
+	toolRegistry     *tools.Registry             // Tool registry for ACP bridge
+	workspaceManager *workspace.WorkspaceManager // Workspace manager for session bindings
+	skillManager     *skills.Manager             // Skill manager for skills prompt injection
+	ctx              context.Context
+	cancel           context.CancelFunc
+	running          bool
+	mu               sync.RWMutex
+	startedAt        time.Time
+	errChan          chan error
+	onStateChange    func(bool)
 }
 
 // ServerConfig holds configuration for the embedded server.
@@ -244,7 +247,28 @@ func (s *Server) run() {
 				s.logger.Info().
 					Str("provider", "copilot").
 					Int("models", len(copilotModels)).
-					Msg("Copilot provider initialized")
+					Msg("Copilot API provider initialized")
+			}
+
+			// Also register Copilot ACP provider for premium models.
+			// ACP uses Copilot CLI for authentication (independent of GitHub token).
+			// Model selection determines which provider is used:
+			//   - API models (gpt-4.1, gpt-4o, etc.) → copilot provider (REST API)
+			//   - ACP models (claude-sonnet-4.5, etc.) → copilot-acp provider (CLI)
+			//
+			// Use ACPFactoryWithConfigFunc to get fresh config on each provider creation.
+			// This allows toolRegistry to be injected after it's initialized.
+			acpFactory := copilot.ACPFactoryWithConfigFunc(s.buildACPConfig)
+			acpPool := provider.NewPool(acpFactory)
+			acpModels := copilot.ACPListModels()
+
+			if err := multiPool.AddProvider("copilot-acp", acpPool, acpModels); err != nil {
+				s.logger.Warn().Err(err).Msg("Failed to add Copilot ACP provider")
+			} else {
+				s.logger.Info().
+					Str("provider", "copilot-acp").
+					Int("models", len(acpModels)).
+					Msg("Copilot ACP provider initialized (uses Copilot CLI)")
 			}
 		}
 	}
@@ -307,6 +331,15 @@ func (s *Server) run() {
 		s.errChan <- fmt.Errorf("failed to register builtin tools: %w", err)
 		return
 	}
+	s.toolRegistry = toolRegistry
+
+	// Clear ACP provider cache so it will be recreated with the new toolRegistry.
+	// ACP provider was initialized earlier (before toolRegistry was ready), so we
+	// need to clear its cache to ensure new providers get the updated config.
+	if acpPool, ok := multiPool.GetPool("copilot-acp"); ok {
+		acpPool.Clear()
+		s.logger.Debug().Msg("ACP provider cache cleared for toolRegistry injection")
+	}
 
 	// Initialize JSVM Runtime
 	jsvmLogger := zerolog.New(zerolog.NewConsoleWriter()).With().Timestamp().Logger()
@@ -347,7 +380,7 @@ func (s *Server) run() {
 
 	// Initialize runner
 	runnerConfig := runner.Config{
-		MaxIterations: 10000, // Increased for complex tasks
+		MaxIterations: 1000, // Reasonable limit to prevent quota exhaustion
 		MaxTokens:     maxTokens,
 		MaxMessages:   200, // Increased for complex tasks
 		StreamOutput:  true,
@@ -392,6 +425,7 @@ func (s *Server) run() {
 		}
 	}
 	agentRunner.SetSkillManager(skillManager)
+	s.skillManager = skillManager
 
 	// Initialize channel system
 	if err := agentRunner.InitChannels(s.cfg.Channels); err != nil {
@@ -416,6 +450,7 @@ func (s *Server) run() {
 
 	// Initialize Workspace Manager
 	workspaceManager := workspace.NewWorkspaceManager()
+	s.workspaceManager = workspaceManager
 	s.gatewayServer.SetWorkspaceManager(workspaceManager)
 
 	// Initialize Prompt Manager
@@ -640,6 +675,7 @@ func (s *Server) reloadCopilotProvider() error {
 		maxTokens = 4096
 	}
 
+	// Reload Copilot API provider (free models)
 	copilotFactory := copilot.Factory(githubToken, maxTokens)
 	copilotPool := provider.NewPool(copilotFactory)
 	copilotModels := copilot.ListModels()
@@ -651,7 +687,25 @@ func (s *Server) reloadCopilotProvider() error {
 	s.logger.Info().
 		Str("provider", "copilot").
 		Int("models", len(copilotModels)).
-		Msg("Copilot provider reloaded")
+		Msg("Copilot API provider reloaded")
+
+	// Reload Copilot ACP provider (premium models)
+	acpCfg := s.buildACPConfig()
+	acpFactory := copilot.ACPFactory(acpCfg)
+	acpPool := provider.NewPool(acpFactory)
+	acpModels := copilot.ACPListModels()
+
+	if err := s.multiPool.UpdateProvider("copilot-acp", acpPool, acpModels); err != nil {
+		// If copilot-acp doesn't exist yet, add it
+		if addErr := s.multiPool.AddProvider("copilot-acp", acpPool, acpModels); addErr != nil {
+			s.logger.Warn().Err(addErr).Msg("Failed to add Copilot ACP provider during reload")
+		}
+	}
+
+	s.logger.Info().
+		Str("provider", "copilot-acp").
+		Int("models", len(acpModels)).
+		Msg("Copilot ACP provider reloaded")
 
 	return nil
 }
@@ -673,6 +727,86 @@ func (s *Server) getStoragePath() string {
 func (s *Server) getConfigPath() string {
 	homeDir, _ := os.UserHomeDir()
 	return filepath.Join(homeDir, ".mote", "config.yaml")
+}
+
+// buildACPConfig constructs ACPConfig with MCP servers, system message, and working directory.
+func (s *Server) buildACPConfig() copilot.ACPConfig {
+	cfg := copilot.ACPConfig{
+		// Always allow all tools in ACP mode. Mote has its own security
+		// policy layer (internal/policy) that controls tool access before
+		// messages reach the provider. Without this flag, the CLI blocks
+		// waiting for interactive permission confirmation.
+		AllowAllTools: true,
+	}
+
+	// Load MCP servers config (non-blocking: failure uses empty map)
+	var mcpServerNames []string
+	if mcpServers, err := v1.LoadMCPServersConfigPublic(); err == nil && len(mcpServers) > 0 {
+		persistInfos := make([]copilot.MCPServerPersistInfo, len(mcpServers))
+		for i, srv := range mcpServers {
+			persistInfos[i] = copilot.MCPServerPersistInfo{
+				Name:    srv.Name,
+				Type:    srv.Type,
+				URL:     srv.URL,
+				Headers: srv.Headers,
+				Command: srv.Command,
+				Args:    srv.Args,
+			}
+			mcpServerNames = append(mcpServerNames, srv.Name)
+		}
+		cfg.MCPServers = copilot.ConvertMCPServers(persistInfos)
+		s.logger.Info().Int("count", len(cfg.MCPServers)).Msg("ACP: loaded MCP servers")
+	}
+
+	// Build system message from config, including MCP server info and skills prompts
+	extraPrompt := viper.GetString("prompt.extra")
+	workspaceRules := viper.GetString("prompt.workspace_rules")
+
+	// Build skills prompts from skill manager
+	var skillsPrompt string
+	if s.skillManager != nil {
+		skillsSection := skills.NewPromptSection(s.skillManager)
+		if section := skillsSection.Build(); section != "" {
+			skillsPrompt += section
+		}
+		if activePrompts := skillsSection.BuildActivePrompts(); activePrompts != "" {
+			skillsPrompt += "\n" + activePrompts
+		}
+	}
+
+	cfg.SystemMessage = copilot.BuildACPSystemMessage(extraPrompt, workspaceRules, mcpServerNames, skillsPrompt)
+
+	// Inject tool registry for ACP ToolBridge
+	if s.toolRegistry != nil {
+		cfg.ToolRegistry = &acpToolRegistryAdapter{registry: s.toolRegistry}
+	}
+
+	// Set workspace resolver to get session bound workspace path
+	// This is a closure that captures s, so it can access s.workspaceManager
+	// at call time (when ACP session is created), not at config build time.
+	cfg.WorkspaceResolver = func(sessionID string) string {
+		if s.workspaceManager == nil {
+			return ""
+		}
+		if binding, ok := s.workspaceManager.Get(sessionID); ok && binding != nil {
+			return binding.Path
+		}
+		return ""
+	}
+
+	// Set skills directories for CLI skill loading
+	homeDir, _ := os.UserHomeDir()
+	if homeDir != "" {
+		skillsDir := filepath.Join(homeDir, ".mote", "skills")
+		cfg.SkillDirectories = []string{skillsDir}
+	}
+
+	// Pass GitHub token for authentication
+	if s.cfg.Copilot.Token != "" {
+		cfg.GithubToken = s.cfg.Copilot.Token
+	}
+
+	return cfg
 }
 
 // reloadConfig reloads the configuration from disk.
@@ -916,6 +1050,35 @@ func (a *cronRunnerAdapter) Run(ctx context.Context, prompt string, opts ...inte
 	}
 
 	return result.String(), nil
+}
+
+// acpToolRegistryAdapter adapts tools.Registry to copilot.ToolRegistryInterface.
+type acpToolRegistryAdapter struct {
+	registry *tools.Registry
+}
+
+func (a *acpToolRegistryAdapter) ListToolInfo() []copilot.ToolInfo {
+	registered := a.registry.List()
+	infos := make([]copilot.ToolInfo, len(registered))
+	for i, t := range registered {
+		infos[i] = copilot.ToolInfo{
+			Name:        t.Name(),
+			Description: t.Description(),
+			Parameters:  t.Parameters(),
+		}
+	}
+	return infos
+}
+
+func (a *acpToolRegistryAdapter) ExecuteTool(ctx context.Context, name string, args map[string]any) (copilot.ToolExecResult, error) {
+	result, err := a.registry.Execute(ctx, name, args)
+	if err != nil {
+		return copilot.ToolExecResult{}, err
+	}
+	return copilot.ToolExecResult{
+		Content: result.Content,
+		IsError: result.IsError,
+	}, nil
 }
 
 // cronToolRegistryAdapter adapts tools.Registry to cron.ToolRegistry interface.

@@ -46,11 +46,18 @@ type RateLimitConfig struct {
 }
 
 // CopilotConfig AI 助手配置
+// Copilot 支持两种模式，由选择的模型自动决定：
+//   - API 模式：使用免费模型 (gpt-4.1, gpt-4o 等)，通过 GitHub Token + REST API 认证
+//   - ACP 模式：使用付费模型 (claude-sonnet-4.5 等)，通过 Copilot CLI 认证，按 prompt 计费
 type CopilotConfig struct {
 	Token     string `mapstructure:"token" yaml:"token"`
 	Model     string `mapstructure:"model" yaml:"model"`           // 默认模型（向后兼容）
 	ChatModel string `mapstructure:"chat_model" yaml:"chat_model"` // Chat场景默认模型
 	MaxTokens int    `mapstructure:"max_tokens" yaml:"max_tokens"`
+
+	// ACP mode configuration
+	Mode          string `mapstructure:"mode" yaml:"mode"`                       // Deprecated: 模型选择自动决定模式，保留字段仅为向后兼容
+	AllowAllTools bool   `mapstructure:"allow_all_tools" yaml:"allow_all_tools"` // Auto-approve all tool calls in ACP mode
 }
 
 // ProviderConfig Provider 选择配置

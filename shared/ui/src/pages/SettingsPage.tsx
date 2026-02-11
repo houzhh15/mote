@@ -227,6 +227,24 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
     }
   };
 
+  // Helper: Get provider display label
+  const getProviderLabel = (provider: string): string => {
+    switch (provider) {
+      case 'copilot': return 'GitHub Copilot';
+      case 'copilot-acp': return 'Copilot (Premium)';
+      case 'ollama': return 'Ollama';
+      default: return provider;
+    }
+  };
+
+  // Helper: Get provider icon component
+  const getProviderIcon = (provider: string, props?: Record<string, unknown>) => {
+    if (provider === 'ollama') {
+      return <OllamaIcon {...props} />;
+    }
+    return <GithubOutlined {...props} />;
+  };
+
   // Helper: Group models by provider for OptGroup display
   const getModelsByProvider = useCallback(() => {
     const grouped: Record<string, Model[]> = {};
@@ -296,8 +314,8 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
             key={provider} 
             label={
               <Space>
-                {provider === 'copilot' ? <GithubOutlined /> : <OllamaIcon />}
-                {provider === 'copilot' ? 'GitHub Copilot' : 'Ollama'}
+                {getProviderIcon(provider)}
+                {getProviderLabel(provider)}
               </Space>
             }
           >
@@ -668,8 +686,8 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                   {enabledProviders.map(p => (
                     <Select.Option key={p} value={p}>
                       <Space>
-                        {p === 'copilot' ? <GithubOutlined /> : <OllamaIcon />}
-                        {p === 'copilot' ? 'GitHub Copilot' : 'Ollama'}
+                        {getProviderIcon(p)}
+                        {getProviderLabel(p)}
                       </Space>
                     </Select.Option>
                   ))}
@@ -689,8 +707,8 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                     <Space direction="vertical" size="small" style={{ width: '100%' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                         <Space>
-                          {status.name === 'copilot' ? <GithubOutlined /> : <OllamaIcon />}
-                          <Text strong>{status.name === 'copilot' ? 'GitHub Copilot' : 'Ollama'}</Text>
+                          {getProviderIcon(status.name)}
+                          <Text strong>{getProviderLabel(status.name)}</Text>
                         </Space>
                         <Badge 
                           status={status.available ? 'success' : 'error'} 

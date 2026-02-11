@@ -305,12 +305,35 @@ func (p *CopilotProvider) doStreamRequest(ctx context.Context, req *provider.Cha
 		httpReq.Header.Set("Content-Type", "application/json")
 		httpReq.Header.Set("Copilot-Integration-Id", "vscode-chat")
 		httpReq.Header.Set("Accept", "text/event-stream")
+		// Set conversation ID headers to help Copilot identify requests in the same turn
+		// This may help with quota accounting for multi-turn tool call conversations
+		if req.ConversationID != "" {
+			httpReq.Header.Set("X-Conversation-Id", req.ConversationID)
+			httpReq.Header.Set("Openai-Conversation-Id", req.ConversationID)
+		}
 
 		// Send request
 		resp, err := p.httpClient.Do(httpReq)
 		if err != nil {
 			lastErr = err
 			continue
+		}
+
+		// Log response headers for debugging quota/session tracking
+		if reqID := resp.Header.Get("X-Request-Id"); reqID != "" {
+			logger.Debug().
+				Str("x_request_id", reqID).
+				Str("conversation_id", req.ConversationID).
+				Msg("Copilot API response headers")
+		}
+		// Check for any useful session/turn tracking headers
+		for _, header := range []string{"X-Request-Id", "X-Session-Id", "X-Turn-Id", "X-Conversation-Id", "Openai-Conversation-Id"} {
+			if val := resp.Header.Get(header); val != "" {
+				logger.Debug().
+					Str("header", header).
+					Str("value", val).
+					Msg("Copilot response header")
+			}
 		}
 
 		// Check for errors
@@ -393,14 +416,20 @@ func (p *CopilotProvider) buildRequestBody(req *provider.ChatRequest, stream boo
 		model = p.model
 	}
 
+	// Determine max_tokens: priority is request > model capability > provider default
 	maxTokens := req.MaxTokens
 	if maxTokens <= 0 {
-		maxTokens = p.maxTokens
+		// Try to get model's MaxOutput capability
+		if modelInfo := GetModelInfo(model); modelInfo != nil && modelInfo.MaxOutput > 0 {
+			maxTokens = modelInfo.MaxOutput
+		} else {
+			maxTokens = p.maxTokens
+		}
 	}
 
 	body := map[string]interface{}{
 		"model":      model,
-		"messages":   p.convertMessages(req.Messages),
+		"messages":   p.convertMessages(p.sanitizeMessages(req.Messages)),
 		"stream":     stream,
 		"max_tokens": maxTokens,
 	}
@@ -414,6 +443,54 @@ func (p *CopilotProvider) buildRequestBody(req *provider.ChatRequest, stream boo
 	}
 
 	return body
+}
+
+// sanitizeMessages validates and cleans the message history to ensure tool_call/tool_result pairs are intact.
+// This prevents API errors like "unexpected tool_use_id found in tool_result blocks".
+func (p *CopilotProvider) sanitizeMessages(messages []provider.Message) []provider.Message {
+	// Build a set of valid tool_call IDs from assistant messages
+	validToolCallIDs := make(map[string]bool)
+
+	// First pass: collect all tool_call IDs from assistant messages
+	for _, msg := range messages {
+		if msg.Role == provider.RoleAssistant && len(msg.ToolCalls) > 0 {
+			for _, tc := range msg.ToolCalls {
+				if tc.ID != "" {
+					validToolCallIDs[tc.ID] = true
+				}
+			}
+		}
+	}
+
+	// Second pass: filter out orphaned tool messages
+	result := make([]provider.Message, 0, len(messages))
+	orphanedCount := 0
+
+	for _, msg := range messages {
+		if msg.Role == provider.RoleTool {
+			// Check if this tool result has a corresponding tool_call
+			if msg.ToolCallID == "" || !validToolCallIDs[msg.ToolCallID] {
+				// Orphaned tool result - skip it
+				orphanedCount++
+				logger.Warn().
+					Str("tool_call_id", msg.ToolCallID).
+					Int("content_len", len(msg.Content)).
+					Msg("Removing orphaned tool result message (no matching tool_call)")
+				continue
+			}
+		}
+		result = append(result, msg)
+	}
+
+	if orphanedCount > 0 {
+		logger.Info().
+			Int("removed_count", orphanedCount).
+			Int("original_count", len(messages)).
+			Int("result_count", len(result)).
+			Msg("Sanitized message history - removed orphaned tool results")
+	}
+
+	return result
 }
 
 // convertMessages converts provider messages to API format.

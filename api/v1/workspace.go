@@ -4,6 +4,11 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
+	"runtime"
+	"sort"
+	"strings"
 
 	"github.com/gorilla/mux"
 )
@@ -170,7 +175,7 @@ func (r *Router) HandleListWorkspaceFiles(w http.ResponseWriter, req *http.Reque
 	sessionID := vars["sessionId"]
 
 	relativePath := req.URL.Query().Get("path")
-	if relativePath == "" {
+	if relativePath == "" || relativePath == "/" {
 		relativePath = "."
 	}
 
@@ -192,5 +197,143 @@ func (r *Router) HandleListWorkspaceFiles(w http.ResponseWriter, req *http.Reque
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(responses)
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"files": responses,
+	})
+}
+
+// DirectoryEntry represents a directory item for the directory browser.
+type DirectoryEntry struct {
+	Name  string `json:"name"`
+	Path  string `json:"path"`
+	IsDir bool   `json:"is_dir"`
+}
+
+// HandleBrowseDirectory lists directories (and optionally files) at a given system path.
+// This is used by the frontend directory picker to browse the filesystem.
+//
+//	GET /api/v1/browse-directory?path=/some/path&dirs_only=true
+//
+// If path is empty, returns the user's home directory contents.
+// On Windows with an empty path, returns available drive letters.
+func (r *Router) HandleBrowseDirectory(w http.ResponseWriter, req *http.Request) {
+	requestedPath := req.URL.Query().Get("path")
+	dirsOnly := req.URL.Query().Get("dirs_only") != "false" // default true
+
+	// If no path specified, use home directory (or drive roots on Windows)
+	if requestedPath == "" {
+		if runtime.GOOS == "windows" {
+			// List available drive letters on Windows
+			drives := listWindowsDrives()
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"path":    "",
+				"parent":  "",
+				"entries": drives,
+			})
+			return
+		}
+		home, err := os.UserHomeDir()
+		if err != nil {
+			http.Error(w, "cannot determine home directory", http.StatusInternalServerError)
+			return
+		}
+		requestedPath = home
+	}
+
+	// Clean and resolve the path
+	absPath, err := filepath.Abs(requestedPath)
+	if err != nil {
+		http.Error(w, "invalid path", http.StatusBadRequest)
+		return
+	}
+
+	// Verify the path exists and is a directory
+	info, err := os.Stat(absPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			http.Error(w, "path does not exist", http.StatusNotFound)
+		} else {
+			http.Error(w, "cannot access path: "+err.Error(), http.StatusForbidden)
+		}
+		return
+	}
+	if !info.IsDir() {
+		http.Error(w, "path is not a directory", http.StatusBadRequest)
+		return
+	}
+
+	// Read directory entries
+	dirEntries, err := os.ReadDir(absPath)
+	if err != nil {
+		http.Error(w, "cannot read directory: "+err.Error(), http.StatusForbidden)
+		return
+	}
+
+	entries := make([]DirectoryEntry, 0, len(dirEntries))
+	for _, entry := range dirEntries {
+		// Skip hidden files/directories (starting with .)
+		if strings.HasPrefix(entry.Name(), ".") {
+			continue
+		}
+
+		isDir := entry.IsDir()
+
+		// If dirs_only, skip non-directory entries
+		if dirsOnly && !isDir {
+			continue
+		}
+
+		entries = append(entries, DirectoryEntry{
+			Name:  entry.Name(),
+			Path:  filepath.Join(absPath, entry.Name()),
+			IsDir: isDir,
+		})
+	}
+
+	// Sort: directories first, then by name
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].IsDir != entries[j].IsDir {
+			return entries[i].IsDir
+		}
+		return strings.ToLower(entries[i].Name) < strings.ToLower(entries[j].Name)
+	})
+
+	// Compute parent directory
+	parent := filepath.Dir(absPath)
+	if parent == absPath {
+		// We're at the root (/ on Unix, C:\ on Windows)
+		if runtime.GOOS == "windows" {
+			parent = "" // signal to show drive list
+		} else {
+			parent = "" // no parent for /
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"path":    absPath,
+		"parent":  parent,
+		"entries": entries,
+	})
+}
+
+// listWindowsDrives returns available drive letters on Windows.
+func listWindowsDrives() []DirectoryEntry {
+	drives := make([]DirectoryEntry, 0)
+	if runtime.GOOS != "windows" {
+		return drives
+	}
+	// Check drives A-Z
+	for letter := 'A'; letter <= 'Z'; letter++ {
+		drivePath := string(letter) + ":\\"
+		if _, err := os.Stat(drivePath); err == nil {
+			drives = append(drives, DirectoryEntry{
+				Name:  string(letter) + ":",
+				Path:  drivePath,
+				IsDir: true,
+			})
+		}
+	}
+	return drives
 }

@@ -707,6 +707,14 @@ func (r *Runner) runLoopCore(ctx context.Context, cached *scheduler.CachedSessio
 		}
 	}
 
+	// Check if this is an ACP provider - if so, use simplified ACP mode
+	// ACP providers handle tool call loops internally, so we only need a single call
+	if acpProv, ok := prov.(provider.ACPCapable); ok && acpProv.IsACPProvider() {
+		slog.Info("runLoopCore: using ACP mode", "sessionID", sessionID, "provider", prov.Name())
+		r.runACPMode(ctx, cached, sessionID, userInput, prov, events)
+		return
+	}
+
 	// Build messages
 	messages, err := r.buildMessages(ctx, cached, userInput)
 	if err != nil {
@@ -772,7 +780,7 @@ func (r *Runner) runLoopCore(ctx context.Context, cached *scheduler.CachedSessio
 		if cached.Session != nil {
 			sessionModel = cached.Session.Model
 		}
-		req := r.buildChatRequest(messages, sessionModel)
+		req := r.buildChatRequest(messages, sessionModel, sessionID)
 
 		// Call provider
 		resp, err := r.callProviderWith(ctx, prov, req, events, iteration)
@@ -814,9 +822,24 @@ func (r *Runner) runLoopCore(ctx context.Context, cached *scheduler.CachedSessio
 		// Check finish reason first - this is the LLM's native stop signal
 		// FinishReason == "stop" means LLM decided to stop (no more tool calls)
 		// FinishReason == "tool_calls" means LLM wants to execute tools
-		// FinishReason == "length" means max tokens reached (should also stop)
+		// FinishReason == "length" means max tokens reached
+
+		// Special handling for "length" with pending tool calls:
+		// Don't stop! Continue executing tools and warn the user.
+		// User can manually stop if needed, but we shouldn't lose progress.
+		if resp.FinishReason == provider.FinishReasonLength && len(resp.ToolCalls) > 0 {
+			slog.Warn("runLoopCore: response truncated due to max_tokens, continuing with pending tool calls",
+				"sessionID", sessionID,
+				"pendingToolCalls", len(resp.ToolCalls),
+				"finishReason", resp.FinishReason)
+
+			// Emit warning event to frontend, but DON'T stop - continue execution
+			events <- NewTruncatedEvent("length", len(resp.ToolCalls), &totalUsage)
+			// Fall through to execute the tool calls
+		}
+
 		shouldStop := resp.FinishReason == provider.FinishReasonStop ||
-			resp.FinishReason == provider.FinishReasonLength ||
+			(resp.FinishReason == provider.FinishReasonLength && len(resp.ToolCalls) == 0) ||
 			(len(resp.ToolCalls) == 0 && resp.FinishReason != provider.FinishReasonToolCalls)
 
 		if shouldStop {
@@ -929,6 +952,135 @@ func (r *Runner) runLoopCore(ctx context.Context, cached *scheduler.CachedSessio
 	events <- NewErrorEvent(ErrMaxIterations)
 }
 
+// runACPMode handles execution for ACP providers.
+// ACP providers handle tool call loops internally, so we only need to:
+// 1. Send the user message
+// 2. Forward streaming events from the provider
+// 3. Save the final response
+//
+// This is more efficient for quota usage as it counts as a single premium request
+// regardless of how many tool calls are executed internally.
+func (r *Runner) runACPMode(ctx context.Context, cached *scheduler.CachedSession, sessionID, userInput string, prov provider.Provider, events chan<- Event) {
+	// Add user message to session
+	_, err := r.sessions.AddMessage(sessionID, provider.RoleUser, userInput, nil, "")
+	if err != nil {
+		events <- NewErrorEvent(err)
+		return
+	}
+
+	// Build a simple request - ACP doesn't need full message history since
+	// it maintains its own session context
+	req := provider.ChatRequest{
+		Model: cached.Session.Model,
+		Messages: []provider.Message{
+			{Role: provider.RoleUser, Content: userInput},
+		},
+		Stream:         true,
+		ConversationID: sessionID,
+	}
+
+	slog.Info("runACPMode: starting ACP execution", "sessionID", sessionID, "model", req.Model)
+
+	// Stream from ACP provider
+	provEvents, err := prov.Stream(ctx, req)
+	if err != nil {
+		events <- NewErrorEvent(err)
+		return
+	}
+
+	var assistantContent strings.Builder
+	var totalUsage Usage
+	var toolCallEvents []provider.ToolCall
+
+	// Forward events from provider to runner events
+	for event := range provEvents {
+		switch event.Type {
+		case provider.EventTypeContent:
+			assistantContent.WriteString(event.Delta)
+			events <- NewContentEvent(event.Delta)
+
+		case provider.EventTypeThinking:
+			// Forward thinking events for temporary display
+			if event.Thinking != "" {
+				events <- Event{
+					Type:     EventTypeThinking,
+					Thinking: event.Thinking,
+				}
+			}
+
+		case provider.EventTypeToolCall:
+			if event.ToolCall != nil {
+				toolCallEvents = append(toolCallEvents, *event.ToolCall)
+				// Convert to storage format and emit event
+				tc := &storage.ToolCall{
+					ID:   event.ToolCall.ID,
+					Type: "function",
+				}
+				if event.ToolCall.Name != "" {
+					funcData, _ := json.Marshal(map[string]string{
+						"name":      event.ToolCall.Name,
+						"arguments": event.ToolCall.Arguments,
+					})
+					tc.Function = funcData
+				}
+				events <- NewToolCallEvent(tc)
+			}
+
+		case provider.EventTypeToolCallUpdate:
+			// Forward tool call update events
+			if event.ToolCallUpdate != nil {
+				events <- Event{
+					Type: EventTypeToolCallUpdate,
+					ToolCallUpdate: &ToolCallUpdateEvent{
+						ToolCallID: event.ToolCallUpdate.ID,
+						ToolName:   event.ToolCallUpdate.Name,
+						Status:     event.ToolCallUpdate.Status,
+						Arguments:  event.ToolCallUpdate.Arguments,
+					},
+				}
+			}
+
+		case provider.EventTypeDone:
+			// Update usage if available
+			if event.Usage != nil {
+				totalUsage.PromptTokens += event.Usage.PromptTokens
+				totalUsage.CompletionTokens += event.Usage.CompletionTokens
+				totalUsage.TotalTokens += event.Usage.TotalTokens
+			}
+
+			// Save assistant message
+			content := assistantContent.String()
+			if content != "" {
+				_, _ = r.sessions.AddMessage(sessionID, provider.RoleAssistant, content, nil, "")
+			}
+
+			// Log completion with content preview for debugging
+			contentPreview := content
+			if len(contentPreview) > 500 {
+				contentPreview = contentPreview[:500] + "...[truncated]"
+			}
+			slog.Info("runACPMode: completed",
+				"sessionID", sessionID,
+				"contentLen", len(content),
+				"contentPreview", contentPreview,
+				"toolCalls", len(toolCallEvents),
+				"finishReason", event.FinishReason)
+
+			events <- NewDoneEvent(&totalUsage)
+			return
+
+		case provider.EventTypeError:
+			slog.Error("runACPMode: error from provider", "sessionID", sessionID, "error", event.Error)
+			events <- NewErrorEvent(event.Error)
+			return
+		}
+	}
+
+	// If we get here without a done event, something went wrong
+	slog.Warn("runACPMode: provider events ended without done event", "sessionID", sessionID)
+	events <- NewDoneEvent(&totalUsage)
+}
+
 // buildMessages constructs the message list for the provider.
 func (r *Runner) buildMessages(ctx context.Context, cached *scheduler.CachedSession, userInput string) ([]provider.Message, error) {
 	var messages []provider.Message
@@ -956,6 +1108,10 @@ func (r *Runner) buildMessages(ctx context.Context, cached *scheduler.CachedSess
 	// Inject skills section if skillManager is available
 	if r.skillManager != nil {
 		skillsSection := skills.NewPromptSection(r.skillManager)
+		// Apply session-level skill selection filter
+		if cached.Session != nil && len(cached.Session.SelectedSkills) > 0 {
+			skillsSection.WithSelectedSkills(cached.Session.SelectedSkills)
+		}
 		if section := skillsSection.Build(); section != "" {
 			sysPromptContent += "\n\n" + section
 		}
@@ -1016,19 +1172,21 @@ func (r *Runner) buildMessages(ctx context.Context, cached *scheduler.CachedSess
 }
 
 // buildChatRequest creates a ChatRequest from messages.
-func (r *Runner) buildChatRequest(messages []provider.Message, model string) provider.ChatRequest {
+// sessionID is used as the conversation ID to help providers track multi-turn tool call conversations.
+func (r *Runner) buildChatRequest(messages []provider.Message, model string, sessionID string) provider.ChatRequest {
 	tools, _ := r.registry.ToProviderTools()
 
 	// For Ollama provider, strip the "ollama:" prefix from model name
 	model = strings.TrimPrefix(model, "ollama:")
 
 	req := provider.ChatRequest{
-		Model:       model,
-		Messages:    messages,
-		Tools:       tools,
-		Temperature: r.config.Temperature,
-		MaxTokens:   r.config.MaxTokens,
-		Stream:      r.config.StreamOutput,
+		Model:          model,
+		Messages:       messages,
+		Tools:          tools,
+		Temperature:    r.config.Temperature,
+		MaxTokens:      r.config.MaxTokens,
+		Stream:         r.config.StreamOutput,
+		ConversationID: sessionID, // Pass session ID as conversation ID for quota tracking
 	}
 	return req
 }
@@ -1166,6 +1324,16 @@ func (r *Runner) processStreamResponse(ctx context.Context, streamCh <-chan prov
 				Iteration: iteration,
 			}
 
+		case provider.EventTypeThinking:
+			// Forward thinking events for temporary display
+			if streamEvent.Thinking != "" {
+				events <- Event{
+					Type:      EventTypeThinking,
+					Thinking:  streamEvent.Thinking,
+					Iteration: iteration,
+				}
+			}
+
 		case provider.EventTypeToolCall:
 			if streamEvent.ToolCall != nil {
 				tc := streamEvent.ToolCall
@@ -1190,6 +1358,21 @@ func (r *Runner) processStreamResponse(ctx context.Context, streamCh <-chan prov
 						Function:  tc.Function,
 					}
 					pendingToolCalls[tc.Index] = newTc
+				}
+			}
+
+		case provider.EventTypeToolCallUpdate:
+			// Forward tool call update events
+			if streamEvent.ToolCallUpdate != nil {
+				events <- Event{
+					Type: EventTypeToolCallUpdate,
+					ToolCallUpdate: &ToolCallUpdateEvent{
+						ToolCallID: streamEvent.ToolCallUpdate.ID,
+						ToolName:   streamEvent.ToolCallUpdate.Name,
+						Status:     streamEvent.ToolCallUpdate.Status,
+						Arguments:  streamEvent.ToolCallUpdate.Arguments,
+					},
+					Iteration: iteration,
 				}
 			}
 

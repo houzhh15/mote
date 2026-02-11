@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -290,11 +291,32 @@ func (r *Router) HandleListMemory(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	// Parse pagination parameters from query string
 	limit := 100
 	offset := 0
-	// TODO: parse limit/offset from query params if needed
+	if limitStr := req.URL.Query().Get("limit"); limitStr != "" {
+		if parsed, err := strconv.Atoi(limitStr); err == nil && parsed > 0 {
+			limit = parsed
+			if limit > 1000 {
+				limit = 1000 // Cap at 1000 to prevent abuse
+			}
+		}
+	}
+	if offsetStr := req.URL.Query().Get("offset"); offsetStr != "" {
+		if parsed, err := strconv.Atoi(offsetStr); err == nil && parsed >= 0 {
+			offset = parsed
+		}
+	}
 
 	ctx := req.Context()
+
+	// Get total count
+	total, err := r.memory.Count(ctx)
+	if err != nil {
+		handlers.SendError(w, http.StatusInternalServerError, ErrCodeInternalError, err.Error())
+		return
+	}
+
 	results, err := r.memory.List(ctx, limit, offset)
 	if err != nil {
 		handlers.SendError(w, http.StatusInternalServerError, ErrCodeInternalError, err.Error())
@@ -324,6 +346,9 @@ func (r *Router) HandleListMemory(w http.ResponseWriter, req *http.Request) {
 
 	handlers.SendJSON(w, http.StatusOK, MemoryListResponse{
 		Memories: memoryResults,
+		Total:    total,
+		Limit:    limit,
+		Offset:   offset,
 	})
 }
 

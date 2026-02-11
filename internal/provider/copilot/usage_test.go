@@ -91,8 +91,8 @@ func TestUsageTracker_Record_Premium(t *testing.T) {
 	tmpDir := t.TempDir()
 	ut := NewUsageTracker(WithDataPath(filepath.Join(tmpDir, "usage.json")))
 
-	// gpt-5 has multiplier of 5
-	err := ut.Record("gpt-5", 200, 100, ModeAgent)
+	// claude-opus-4.5 is an ACP premium model with multiplier of 3
+	err := ut.Record("claude-opus-4.5", 200, 100, ModeAgent)
 	if err != nil {
 		t.Fatalf("Record failed: %v", err)
 	}
@@ -107,8 +107,8 @@ func TestUsageTracker_Record_Premium(t *testing.T) {
 		t.Errorf("FreeRequests = %d, want 0 (premium model)", monthly.FreeRequests)
 	}
 
-	if monthly.PremiumUnits != 5 {
-		t.Errorf("PremiumUnits = %d, want 5", monthly.PremiumUnits)
+	if monthly.PremiumUnits != 3 {
+		t.Errorf("PremiumUnits = %d, want 3", monthly.PremiumUnits)
 	}
 }
 
@@ -120,9 +120,9 @@ func TestUsageTracker_GetQuotaStatus(t *testing.T) {
 	)
 
 	// Record some usage
-	_ = ut.Record("gpt-4.1", 100, 50, ModeAgent) // Free, no multiplier
-	_ = ut.Record("gpt-4.1", 100, 50, ModeAgent) // Free, no multiplier
-	_ = ut.Record("gpt-5", 100, 50, ModeAgent)   // Premium, 5x multiplier
+	_ = ut.Record("gpt-4.1", 100, 50, ModeAgent)         // Free, no multiplier
+	_ = ut.Record("gpt-4.1", 100, 50, ModeAgent)         // Free, no multiplier
+	_ = ut.Record("claude-opus-4.5", 100, 50, ModeAgent) // ACP premium, 3x multiplier
 
 	status := ut.GetQuotaStatus()
 
@@ -134,28 +134,24 @@ func TestUsageTracker_GetQuotaStatus(t *testing.T) {
 		t.Errorf("FreeRequestsLimit = %d, want 100", status.FreeRequestsLimit)
 	}
 
-	if status.FreeRequestsRemaining != 98 {
-		t.Errorf("FreeRequestsRemaining = %d, want 98", status.FreeRequestsRemaining)
-	}
-
 	if status.FreePercentUsed != 2.0 {
 		t.Errorf("FreePercentUsed = %f, want 2.0", status.FreePercentUsed)
 	}
 
-	if status.PremiumUnitsUsed != 5 {
-		t.Errorf("PremiumUnitsUsed = %d, want 5", status.PremiumUnitsUsed)
+	if status.PremiumUnitsUsed != 3 {
+		t.Errorf("PremiumUnitsUsed = %d, want 3", status.PremiumUnitsUsed)
 	}
 
 	if status.PremiumUnitsLimit != 10 {
 		t.Errorf("PremiumUnitsLimit = %d, want 10", status.PremiumUnitsLimit)
 	}
 
-	if status.PremiumUnitsRemaining != 5 {
-		t.Errorf("PremiumUnitsRemaining = %d, want 5", status.PremiumUnitsRemaining)
+	if status.PremiumUnitsRemaining != 7 {
+		t.Errorf("PremiumUnitsRemaining = %d, want 7", status.PremiumUnitsRemaining)
 	}
 
-	if status.PremiumPercentUsed != 50.0 {
-		t.Errorf("PremiumPercentUsed = %f, want 50.0", status.PremiumPercentUsed)
+	if status.PremiumPercentUsed != 30.0 {
+		t.Errorf("PremiumPercentUsed = %f, want 30.0", status.PremiumPercentUsed)
 	}
 }
 

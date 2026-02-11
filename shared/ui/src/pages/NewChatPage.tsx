@@ -4,13 +4,14 @@
  * 居中布局，延迟创建 Session，发送第一条消息时才创建
  */
 import React, { useState, useEffect, useCallback } from 'react';
-import { Input, Button, Select, Space, Typography, message, Modal, Tag } from 'antd';
-import { SendOutlined, GithubOutlined, FolderOutlined, LinkOutlined, DisconnectOutlined, FolderOpenOutlined } from '@ant-design/icons';
+import { Input, Button, Select, Space, Typography, message, Modal, Tag, Tooltip, Dropdown } from 'antd';
+import { SendOutlined, GithubOutlined, FolderOutlined, LinkOutlined, DisconnectOutlined, FolderOpenOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import { useAPI } from '../context/APIContext';
 import { useInputHistory } from '../hooks';
 import { PromptSelector } from '../components/PromptSelector';
+import { DirectoryPicker } from '../components/DirectoryPicker';
 import { OllamaIcon } from '../components/OllamaIcon';
-import type { Model, Workspace } from '../types';
+import type { Model, Workspace, Skill } from '../types';
 
 const { TextArea } = Input;
 const { Text, Title } = Typography;
@@ -39,8 +40,11 @@ export const NewChatPage: React.FC<NewChatPageProps> = ({
   const [modelsLoading, setModelsLoading] = useState(true);
   const [workspaceModalVisible, setWorkspaceModalVisible] = useState(false);
   const [workspacePath, setWorkspacePath] = useState('');
+  const [directoryPickerVisible, setDirectoryPickerVisible] = useState(false);
   const [promptSelectorVisible, setPromptSelectorVisible] = useState(false);
   const [promptSearchQuery, setPromptSearchQuery] = useState('');
+  const [skills, setSkills] = useState<Skill[]>([]);
+  const [selectedSkills, setSelectedSkills] = useState<string[]>([]); // empty = all
 
   // 加载模型列表
   const loadModels = useCallback(async () => {
@@ -68,10 +72,22 @@ export const NewChatPage: React.FC<NewChatPageProps> = ({
     }
   }, [api]);
 
+  // 加载技能列表
+  const loadSkills = useCallback(async () => {
+    if (!api.getSkills) return;
+    try {
+      const skillsList = await api.getSkills();
+      setSkills(skillsList || []);
+    } catch (error) {
+      console.error('Failed to load skills:', error);
+    }
+  }, [api]);
+
   useEffect(() => {
     loadModels();
     loadWorkspaces();
-  }, [loadModels, loadWorkspaces]);
+    loadSkills();
+  }, [loadModels, loadWorkspaces, loadSkills]);
 
   // 获取模型图标
   const getModelIcon = (model: Model) => {
@@ -159,6 +175,16 @@ export const NewChatPage: React.FC<NewChatPageProps> = ({
           console.error('Failed to bind workspace:', e);
           message.warning('工作区绑定失败，但会话已创建');
           // 不阻塞，继续发送
+        }
+      }
+
+      // 3.5. 如果选择了技能，设置会话技能
+      if (selectedSkills.length > 0 && api.setSessionSkills) {
+        try {
+          await api.setSessionSkills(sessionId, selectedSkills);
+        } catch (e) {
+          console.error('Failed to set session skills:', e);
+          // 不阻塞，继续
         }
       }
 
@@ -275,6 +301,41 @@ export const NewChatPage: React.FC<NewChatPageProps> = ({
           {/* 底部控制栏：模型选择 + 工作区绑定 + 发送按钮，同一行 */}
           <div style={styles.controlBar}>
             <Space size="middle">
+              {/* 技能选择 */}
+              {skills.length > 0 && (
+                <Dropdown
+                  menu={{
+                    items: skills.filter(s => s.state === 'active').map(skill => ({
+                      key: skill.name,
+                      label: (
+                        <Tooltip title={skill.description} placement="left">
+                          <div style={{ fontSize: '12px', fontWeight: 'normal' }}>
+                            {skill.name}
+                          </div>
+                        </Tooltip>
+                      ),
+                    })),
+                    selectable: true,
+                    multiple: true,
+                    selectedKeys: selectedSkills.length > 0 ? selectedSkills : skills.filter(s => s.state === 'active').map(s => s.name),
+                    onSelect: ({ selectedKeys }) => {
+                      const activeSkills = skills.filter(s => s.state === 'active');
+                      const allSelected = selectedKeys.length === activeSkills.length;
+                      setSelectedSkills(allSelected ? [] : selectedKeys);
+                    },
+                    onDeselect: ({ selectedKeys }) => {
+                      setSelectedSkills(selectedKeys);
+                    },
+                  }}
+                  trigger={['click']}
+                >
+                  <Button 
+                    icon={<ThunderboltOutlined />} 
+                    style={{ width: 44 }}
+                  />
+                </Dropdown>
+              )}
+
               {/* 模型选择 */}
               <Select
                 value={currentModel}
@@ -297,6 +358,8 @@ export const NewChatPage: React.FC<NewChatPageProps> = ({
                   ),
                 }))}
               />
+
+
 
               {/* 工作区绑定按钮 */}
               {selectedWorkspace ? (
@@ -397,18 +460,38 @@ export const NewChatPage: React.FC<NewChatPageProps> = ({
               </div>
             )}
             <div>
-              <Typography.Text strong>或输入新工作区路径：</Typography.Text>
-              <Input
-                style={{ marginTop: 8 }}
-                placeholder="输入工作区路径，如 /path/to/project"
-                value={workspacePath}
-                onChange={(e) => setWorkspacePath(e.target.value)}
-                onPressEnter={handleBindWorkspacePath}
-              />
+              <Typography.Text strong>或输入/浏览工作区路径：</Typography.Text>
+              <Space.Compact style={{ width: '100%', marginTop: 8 }}>
+                <Input
+                  style={{ flex: 1 }}
+                  placeholder="输入工作区路径，如 /path/to/project"
+                  value={workspacePath}
+                  onChange={(e) => setWorkspacePath(e.target.value)}
+                  onPressEnter={handleBindWorkspacePath}
+                />
+                <Button
+                  icon={<FolderOpenOutlined />}
+                  onClick={() => setDirectoryPickerVisible(true)}
+                >
+                  浏览
+                </Button>
+              </Space.Compact>
             </div>
           </div>
         )}
       </Modal>
+
+      {/* 目录选择器 */}
+      <DirectoryPicker
+        open={directoryPickerVisible}
+        onCancel={() => setDirectoryPickerVisible(false)}
+        onSelect={(path) => {
+          setWorkspacePath(path);
+          setDirectoryPickerVisible(false);
+        }}
+        initialPath={workspacePath || undefined}
+        title="选择工作区目录"
+      />
     </div>
   );
 };

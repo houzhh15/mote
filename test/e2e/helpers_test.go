@@ -79,6 +79,7 @@ func assertStatus(t *testing.T, resp *http.Response, expected int) {
 // Session helpers
 
 // createSession creates a new session and returns its ID.
+//
 //nolint:unused // Test helper
 func createSession(t *testing.T) string {
 	t.Helper()
@@ -97,6 +98,7 @@ func createSession(t *testing.T) string {
 }
 
 // getSession retrieves a session by ID.
+//
 //nolint:unused // Test helper
 func getSession(t *testing.T, id string) map[string]interface{} {
 	t.Helper()
@@ -129,6 +131,7 @@ func listSessions(t *testing.T) []interface{} {
 // Chat helpers
 
 // sendChat sends a chat message and returns the response.
+//
 //nolint:unused // Test helper
 func sendChat(t *testing.T, sessionID, message string) map[string]interface{} {
 	t.Helper()
@@ -151,6 +154,7 @@ func sendChat(t *testing.T, sessionID, message string) map[string]interface{} {
 // Memory helpers
 
 // addMemory adds a memory entry and returns its ID.
+//
 //nolint:unused // Test helper
 func addMemory(t *testing.T, content string) string {
 	t.Helper()
@@ -174,6 +178,7 @@ func addMemory(t *testing.T, content string) string {
 }
 
 // searchMemory searches for memories matching the query.
+//
 //nolint:unused // Test helper
 func searchMemory(t *testing.T, query string, topK int) []interface{} {
 	t.Helper()
@@ -218,6 +223,7 @@ func listTools(t *testing.T) []interface{} {
 }
 
 // executeTool executes a tool with the given arguments.
+//
 //nolint:unused // Test helper
 func executeTool(t *testing.T, name string, args map[string]interface{}) map[string]interface{} {
 	t.Helper()
@@ -255,6 +261,7 @@ func listCronJobs(t *testing.T) []interface{} {
 }
 
 // createCronJob creates a new cron job.
+//
 //nolint:unused // Test helper
 func createCronJob(t *testing.T, name, schedule, prompt string) {
 	t.Helper()
@@ -270,6 +277,7 @@ func createCronJob(t *testing.T, name, schedule, prompt string) {
 }
 
 // deleteCronJob deletes a cron job.
+//
 //nolint:unused // Test helper
 func deleteCronJob(t *testing.T, name string) {
 	t.Helper()

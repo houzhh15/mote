@@ -67,26 +67,52 @@ export const ErrorBanner: React.FC<ErrorBannerProps> = ({
 
   // Determine banner variant based on error severity
   const isWarning = detail.code === 'RATE_LIMITED' || detail.code === 'QUOTA_EXCEEDED';
-  const bannerClasses = isWarning
-    ? 'bg-yellow-50 border-yellow-200 text-yellow-800 dark:bg-yellow-900/20 dark:border-yellow-800 dark:text-yellow-200'
-    : 'bg-red-50 border-red-200 text-red-800 dark:bg-red-900/20 dark:border-red-800 dark:text-red-200';
+  
+  // Inline styles for banner (no Tailwind dependency)
+  const bannerStyle: React.CSSProperties = {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 16,
+    padding: '12px 16px',
+    borderRadius: 8,
+    border: '1px solid',
+    backgroundColor: isWarning ? '#fefce8' : '#fef2f2',
+    borderColor: isWarning ? '#fde047' : '#fecaca',
+    color: isWarning ? '#854d0e' : '#991b1b',
+  };
+
+  const iconStyle: React.CSSProperties = {
+    width: 20,
+    height: 20,
+    flexShrink: 0,
+  };
+
+  const buttonStyle: React.CSSProperties = {
+    padding: '4px 12px',
+    fontSize: 14,
+    fontWeight: 500,
+    borderRadius: 4,
+    border: 'none',
+    cursor: 'pointer',
+    backgroundColor: isWarning ? '#fde047' : '#fecaca',
+    color: isWarning ? '#854d0e' : '#991b1b',
+  };
+
+  const dismissButtonStyle: React.CSSProperties = {
+    padding: 4,
+    borderRadius: 4,
+    border: 'none',
+    cursor: 'pointer',
+    backgroundColor: 'transparent',
+    color: 'inherit',
+  };
 
   return (
-    <div
-      className={`
-        flex items-center justify-between gap-4
-        px-4 py-3 rounded-lg border
-        ${bannerClasses}
-      `}
-      role="alert"
-    >
-      {/* Error icon */}
-      <div className="flex items-center gap-3">
-        <svg
-          className="w-5 h-5 flex-shrink-0"
-          fill="currentColor"
-          viewBox="0 0 20 20"
-        >
+    <div style={bannerStyle} role="alert">
+      {/* Error icon and content */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <svg style={iconStyle} fill="currentColor" viewBox="0 0 20 20">
           {isWarning ? (
             <path
               fillRule="evenodd"
@@ -103,15 +129,15 @@ export const ErrorBanner: React.FC<ErrorBannerProps> = ({
         </svg>
 
         {/* Error content */}
-        <div className="flex flex-col">
-          <span className="font-medium">
+        <div style={{ display: 'flex', flexDirection: 'column' }}>
+          <span style={{ fontWeight: 500 }}>
             {sourceLabels[source]} ({name}): {friendlyMessage}
           </span>
           {detail.message !== friendlyMessage && (
-            <span className="text-sm opacity-80">{detail.message}</span>
+            <span style={{ fontSize: 14, opacity: 0.8 }}>{detail.message}</span>
           )}
           {actions.wait && detail.retry_after && detail.retry_after > 0 && (
-            <span className="text-sm">
+            <span style={{ fontSize: 14 }}>
               请等待 {detail.retry_after} 秒后重试
             </span>
           )}
@@ -119,20 +145,17 @@ export const ErrorBanner: React.FC<ErrorBannerProps> = ({
       </div>
 
       {/* Action buttons */}
-      <div className="flex items-center gap-2">
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         {/* Retry button */}
         {actions.retry && detail.retryable && onRetry && (
           <button
             onClick={onRetry}
             disabled={isRecovering}
-            className={`
-              px-3 py-1 text-sm font-medium rounded
-              ${isWarning
-                ? 'bg-yellow-200 hover:bg-yellow-300 dark:bg-yellow-800 dark:hover:bg-yellow-700'
-                : 'bg-red-200 hover:bg-red-300 dark:bg-red-800 dark:hover:bg-red-700'
-              }
-              disabled:opacity-50 disabled:cursor-not-allowed
-            `}
+            style={{
+              ...buttonStyle,
+              opacity: isRecovering ? 0.5 : 1,
+              cursor: isRecovering ? 'not-allowed' : 'pointer',
+            }}
           >
             {isRecovering ? '重试中...' : '重试'}
           </button>
@@ -143,14 +166,11 @@ export const ErrorBanner: React.FC<ErrorBannerProps> = ({
           <button
             onClick={onReauth}
             disabled={isRecovering}
-            className={`
-              px-3 py-1 text-sm font-medium rounded
-              ${isWarning
-                ? 'bg-yellow-200 hover:bg-yellow-300 dark:bg-yellow-800 dark:hover:bg-yellow-700'
-                : 'bg-red-200 hover:bg-red-300 dark:bg-red-800 dark:hover:bg-red-700'
-              }
-              disabled:opacity-50 disabled:cursor-not-allowed
-            `}
+            style={{
+              ...buttonStyle,
+              opacity: isRecovering ? 0.5 : 1,
+              cursor: isRecovering ? 'not-allowed' : 'pointer',
+            }}
           >
             {isRecovering ? '认证中...' : '重新认证'}
           </button>
@@ -158,12 +178,8 @@ export const ErrorBanner: React.FC<ErrorBannerProps> = ({
 
         {/* Dismiss button */}
         {onDismiss && (
-          <button
-            onClick={onDismiss}
-            className="p-1 rounded hover:bg-black/10 dark:hover:bg-white/10"
-            aria-label="关闭"
-          >
-            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+          <button onClick={onDismiss} style={dismissButtonStyle} aria-label="关闭">
+            <svg style={{ width: 16, height: 16 }} fill="currentColor" viewBox="0 0 20 20">
               <path
                 fillRule="evenodd"
                 d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z"
@@ -194,27 +210,56 @@ export const CompactErrorBanner: React.FC<CompactErrorBannerProps> = ({
   onRetry,
   onDismiss,
 }) => {
+  const containerStyle: React.CSSProperties = {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    padding: '8px 12px',
+    fontSize: 14,
+    backgroundColor: '#fef2f2',
+    color: '#b91c1c',
+    borderRadius: 4,
+  };
+
   return (
-    <div className="flex items-center gap-2 px-3 py-2 text-sm bg-red-50 text-red-700 dark:bg-red-900/20 dark:text-red-300 rounded">
-      <svg className="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+    <div style={containerStyle}>
+      <svg style={{ width: 16, height: 16, flexShrink: 0 }} fill="currentColor" viewBox="0 0 20 20">
         <path
           fillRule="evenodd"
           d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z"
           clipRule="evenodd"
         />
       </svg>
-      <span className="flex-1">{message}</span>
+      <span style={{ flex: 1 }}>{message}</span>
       {retryable && onRetry && (
         <button
           onClick={onRetry}
-          className="text-xs font-medium text-red-600 hover:underline dark:text-red-400"
+          style={{
+            fontSize: 12,
+            fontWeight: 500,
+            color: '#dc2626',
+            background: 'none',
+            border: 'none',
+            cursor: 'pointer',
+            textDecoration: 'underline',
+          }}
         >
           重试
         </button>
       )}
       {onDismiss && (
-        <button onClick={onDismiss} className="p-0.5 hover:opacity-70" aria-label="关闭">
-          <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+        <button 
+          onClick={onDismiss} 
+          style={{ 
+            padding: 2, 
+            background: 'none', 
+            border: 'none', 
+            cursor: 'pointer',
+            color: 'inherit',
+          }} 
+          aria-label="关闭"
+        >
+          <svg style={{ width: 12, height: 12 }} fill="currentColor" viewBox="0 0 20 20">
             <path
               fillRule="evenodd"
               d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z"

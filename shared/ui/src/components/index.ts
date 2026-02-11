@@ -5,6 +5,8 @@
 export { MainLayout } from './MainLayout';
 export type { PageKey } from './MainLayout';
 export { PromptSelector } from './PromptSelector';
+export { DirectoryPicker } from './DirectoryPicker';
+export type { DirectoryPickerProps } from './DirectoryPicker';
 export { OllamaIcon } from './OllamaIcon';
 
 // Status components

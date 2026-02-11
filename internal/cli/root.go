@@ -19,6 +19,7 @@ type GlobalFlags struct {
 var globalFlags GlobalFlags
 
 // contextKey CLI 上下文键
+//
 //nolint:unused // Context key
 type contextKey struct{}
 

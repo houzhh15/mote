@@ -30,23 +30,25 @@ func TestCopilotProvider_Models(t *testing.T) {
 		t.Error("Models() returned empty list")
 	}
 
-	// Check for expected models from the new registry
-	foundClaude := false
-	foundGPT := false
+	// Check for expected API models (free models only)
+	expectedModels := []string{"gpt-4.1", "gpt-4o", "gpt-5-mini", "grok-code-fast-1"}
+	modelSet := make(map[string]bool)
 	for _, m := range models {
-		if m == "claude-sonnet-4" {
-			foundClaude = true
-		}
-		if m == "gpt-4.1" {
-			foundGPT = true
+		modelSet[m] = true
+	}
+
+	for _, expected := range expectedModels {
+		if !modelSet[expected] {
+			t.Errorf("Models() missing expected API model: %s", expected)
 		}
 	}
 
-	if !foundClaude {
-		t.Error("Models() missing claude-sonnet-4")
-	}
-	if !foundGPT {
-		t.Error("Models() missing gpt-4.1")
+	// ACP models should NOT be in CopilotProvider.Models()
+	acpModels := []string{"claude-sonnet-4.5", "claude-opus-4.6"}
+	for _, acpModel := range acpModels {
+		if modelSet[acpModel] {
+			t.Errorf("Models() should not contain ACP model: %s", acpModel)
+		}
 	}
 }
 

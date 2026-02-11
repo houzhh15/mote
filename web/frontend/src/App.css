@@ -60,6 +60,8 @@
 .markdown-content {
   line-height: 1.6;
   font-size: 13px;
+  overflow-x: auto;
+  word-break: break-word;
 }
 
 .markdown-content p {

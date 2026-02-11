@@ -22,6 +22,7 @@ import type {
   Skill,
   Workspace,
   WorkspaceFile,
+  BrowseDirectoryResult,
   Prompt,
   MCPPrompt,
   MCPPromptContent,
@@ -163,12 +164,18 @@ export const createHttpAdapter = (options: HttpAdapterOptions = {}): APIAdapter 
     },
 
     // ============== Memory Service ==============
-    getMemories: async (query?: string): Promise<Memory[]> => {
+    getMemories: async (options?: { limit?: number; offset?: number }): Promise<{ memories: Memory[]; total: number; limit: number; offset: number }> => {
       const params = new URLSearchParams();
-      if (query) params.set('q', query);
+      if (options?.limit) params.set('limit', String(options.limit));
+      if (options?.offset) params.set('offset', String(options.offset));
       const queryString = params.toString();
-      const data = await fetchJSON<{ memories: Memory[] }>(`/api/v1/memory${queryString ? '?' + queryString : ''}`);
-      return data.memories || [];
+      const data = await fetchJSON<{ memories: Memory[]; total: number; limit: number; offset: number }>(`/api/v1/memory${queryString ? '?' + queryString : ''}`);
+      return {
+        memories: data.memories || [],
+        total: data.total || 0,
+        limit: data.limit || 100,
+        offset: data.offset || 0,
+      };
     },
 
     searchMemories: async (query: string, limit?: number): Promise<Memory[]> => {
@@ -347,6 +354,13 @@ export const createHttpAdapter = (options: HttpAdapterOptions = {}): APIAdapter 
       });
     },
 
+    setSessionSkills: async (sessionId: string, skillIds: string[]): Promise<void> => {
+      await fetchJSON(`/api/v1/sessions/${sessionId}/skills`, {
+        method: 'PUT',
+        body: JSON.stringify({ selected_skills: skillIds }),
+      });
+    },
+
     getScenarioModels: async (): Promise<ScenarioModels> => {
       return fetchJSON<ScenarioModels>('/api/v1/settings/models');
     },
@@ -475,6 +489,13 @@ export const createHttpAdapter = (options: HttpAdapterOptions = {}): APIAdapter 
         : `/api/v1/workspaces/${sessionId}/files`;
       const data = await fetchJSON<{ files: WorkspaceFile[] }>(url);
       return data.files || [];
+    },
+
+    browseDirectory: async (path?: string) => {
+      const url = path
+        ? `/api/v1/browse-directory?path=${encodeURIComponent(path)}`
+        : '/api/v1/browse-directory';
+      return fetchJSON<BrowseDirectoryResult>(url);
     },
 
     // ============== Prompts Service ==============

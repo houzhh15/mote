@@ -11,6 +11,7 @@ import (
 )
 
 // mockCmdBuilder 用于测试的命令构造器
+//
 //nolint:unused // Test helper
 type mockCmdBuilder struct {
 	output []byte

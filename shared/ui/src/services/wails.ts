@@ -33,6 +33,7 @@ import type {
   Skill,
   Workspace,
   WorkspaceFile,
+  BrowseDirectoryResult,
 } from '../types';
 
 // Extend window with Wails runtime
@@ -191,8 +192,11 @@ export function createWailsAdapter(app: WailsApp): APIAdapter {
       onEvent: (event: StreamEvent) => void,
       signal?: AbortSignal
     ): Promise<void> => {
+      // Use session-specific event name for isolation between concurrent chats
+      const eventName = `chat:stream:${request.session_id || ''}`;
+      
       // Set up event listener for stream events
-      const cleanup = window.runtime?.EventsOn('chat:stream', (...data: unknown[]) => {
+      const cleanup = window.runtime?.EventsOn(eventName, (...data: unknown[]) => {
         // 如果已取消，忽略后续事件
         if (signal?.aborted) return;
         try {
@@ -214,7 +218,7 @@ export function createWailsAdapter(app: WailsApp): APIAdapter {
         if (cleanup) {
           cleanup();
         } else if (window.runtime?.EventsOff) {
-          window.runtime.EventsOff('chat:stream');
+          window.runtime.EventsOff(eventName);
         }
       }
     },
@@ -250,13 +254,19 @@ export function createWailsAdapter(app: WailsApp): APIAdapter {
     },
 
     // ============== Memory Service ==============
-    getMemories: async (query?: string): Promise<Memory[]> => {
+    getMemories: async (options?: { limit?: number; offset?: number }): Promise<{ memories: Memory[]; total: number; limit: number; offset: number }> => {
       const params = new URLSearchParams();
-      if (query) params.set('q', query);
+      if (options?.limit) params.set('limit', String(options.limit));
+      if (options?.offset) params.set('offset', String(options.offset));
       const queryString = params.toString();
       const path = `/api/v1/memory${queryString ? '?' + queryString : ''}`;
-      const data = await callAPI<{ memories: Memory[] }>('GET', path);
-      return data.memories || [];
+      const data = await callAPI<{ memories: Memory[]; total: number; limit: number; offset: number }>('GET', path);
+      return {
+        memories: data.memories || [],
+        total: data.total || 0,
+        limit: data.limit || 100,
+        offset: data.offset || 0,
+      };
     },
 
     searchMemories: async (query: string, limit?: number): Promise<Memory[]> => {
@@ -488,6 +498,13 @@ export function createWailsAdapter(app: WailsApp): APIAdapter {
       return data.files || [];
     },
 
+    browseDirectory: async (path?: string): Promise<BrowseDirectoryResult> => {
+      const url = path
+        ? `/api/v1/browse-directory?path=${encodeURIComponent(path)}`
+        : '/api/v1/browse-directory';
+      return callAPI<BrowseDirectoryResult>('GET', url);
+    },
+
     // ============== Config Service ==============
     getConfig: async (): Promise<Config> => {
       return callAPI<Config>('GET', '/api/v1/config');
@@ -508,6 +525,10 @@ export function createWailsAdapter(app: WailsApp): APIAdapter {
 
     setSessionModel: async (sessionId: string, modelId: string): Promise<void> => {
       await callAPI('PUT', `/api/v1/sessions/${sessionId}/model`, { model: modelId });
+    },
+
+    setSessionSkills: async (sessionId: string, skillIds: string[]): Promise<void> => {
+      await callAPI('PUT', `/api/v1/sessions/${sessionId}/skills`, { selected_skills: skillIds });
     },
 
     getScenarioModels: async (): Promise<{ chat: string; cron: string; channel: string }> => {

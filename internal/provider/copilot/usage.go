@@ -110,8 +110,6 @@ func NewUsageTracker(opts ...UsageTrackerOption) *UsageTracker {
 
 // Record records a new usage event.
 func (ut *UsageTracker) Record(modelID string, inputTokens, outputTokens int, mode Mode) error {
-	info := GetModelInfo(modelID)
-
 	record := UsageRecord{
 		Timestamp:    time.Now(),
 		ModelID:      modelID,
@@ -120,9 +118,13 @@ func (ut *UsageTracker) Record(modelID string, inputTokens, outputTokens int, mo
 		Mode:         mode,
 	}
 
-	if info != nil {
+	// Check API model registry first, then ACP model registry
+	if info := GetModelInfo(modelID); info != nil {
 		record.Multiplier = info.Multiplier
 		record.IsPremium = !info.IsFree
+	} else if acpInfo := ACPGetModelInfo(modelID); acpInfo != nil {
+		record.Multiplier = int(acpInfo.Multiplier)
+		record.IsPremium = true // All ACP models are premium
 	}
 
 	ut.mu.Lock()

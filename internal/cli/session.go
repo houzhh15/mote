@@ -323,6 +323,7 @@ func runSessionClear(serverURL string, force bool) error {
 }
 
 // Helper for making HTTP requests (unused but kept for potential future use)
+//
 //nolint:unused // Future use
 func doHTTPRequest(client *http.Client, method, url string, body interface{}) (*http.Response, error) {
 	var bodyReader io.Reader

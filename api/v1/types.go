@@ -42,6 +42,7 @@ type ErrorResponse struct {
 type ChatRequest struct {
 	SessionID string `json:"session_id,omitempty"` // Optional, auto-created if empty
 	Message   string `json:"message"`              // Required
+	Model     string `json:"model,omitempty"`      // Optional, model to use for this request
 }
 
 // ChatResponse represents a chat response.
@@ -53,13 +54,25 @@ type ChatResponse struct {
 
 // ChatStreamEvent represents a streaming event.
 type ChatStreamEvent struct {
-	Type        string           `json:"type"`                   // "content", "tool_call", "tool_result", "done", "error", "heartbeat"
-	Delta       string           `json:"delta,omitempty"`        // For content type
-	ToolCall    *ToolCallResult  `json:"tool_call,omitempty"`    // For tool_call type
-	ToolResult  *ToolResultEvent `json:"tool_result,omitempty"`  // For tool_result type
-	SessionID   string           `json:"session_id,omitempty"`   // For done type
-	Error       string           `json:"error,omitempty"`        // For error type (legacy)
-	ErrorDetail *ErrorDetail     `json:"error_detail,omitempty"` // For error type (detailed)
+	Type             string               `json:"type"`                         // "content", "tool_call", "tool_call_update", "tool_result", "thinking", "done", "error", "heartbeat", "truncated"
+	Delta            string               `json:"delta,omitempty"`              // For content type
+	Thinking         string               `json:"thinking,omitempty"`           // For thinking type (temporary display)
+	ToolCall         *ToolCallResult      `json:"tool_call,omitempty"`          // For tool_call type
+	ToolCallUpdate   *ToolCallUpdateEvent `json:"tool_call_update,omitempty"`   // For tool_call_update type
+	ToolResult       *ToolResultEvent     `json:"tool_result,omitempty"`        // For tool_result type
+	SessionID        string               `json:"session_id,omitempty"`         // For done type
+	Error            string               `json:"error,omitempty"`              // For error type (legacy)
+	ErrorDetail      *ErrorDetail         `json:"error_detail,omitempty"`       // For error type (detailed)
+	TruncatedReason  string               `json:"truncated_reason,omitempty"`   // For truncated type (e.g., "length")
+	PendingToolCalls int                  `json:"pending_tool_calls,omitempty"` // For truncated type
+}
+
+// ToolCallUpdateEvent represents a tool call progress update in streaming.
+type ToolCallUpdateEvent struct {
+	ToolCallID string `json:"tool_call_id"`
+	ToolName   string `json:"tool_name"`
+	Status     string `json:"status,omitempty"`    // "running", "completed"
+	Arguments  string `json:"arguments,omitempty"` // May be partial during streaming
 }
 
 // ErrorDetail represents detailed error information for SSE events.
@@ -138,6 +151,9 @@ type MemorySearchResponse struct {
 // MemoryListResponse represents a memory list response.
 type MemoryListResponse struct {
 	Memories []MemoryResult `json:"memories"`
+	Total    int            `json:"total"`  // Total number of memories
+	Limit    int            `json:"limit"`  // Items per page
+	Offset   int            `json:"offset"` // Current offset
 }
 
 // MemoryResult represents a single memory search result.
@@ -197,26 +213,28 @@ type MemoryStatsResponse struct {
 
 // SessionSummary represents session summary info.
 type SessionSummary struct {
-	ID           string    `json:"id"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
-	MessageCount int       `json:"message_count"`
-	Title        string    `json:"title,omitempty"`    // Session title/name
-	Preview      string    `json:"preview,omitempty"`  // Message preview
-	Model        string    `json:"model,omitempty"`    // Model used for this session
-	Scenario     string    `json:"scenario,omitempty"` // Scenario: chat/cron/channel
+	ID             string    `json:"id"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+	MessageCount   int       `json:"message_count"`
+	Title          string    `json:"title,omitempty"`           // Session title/name
+	Preview        string    `json:"preview,omitempty"`         // Message preview
+	Model          string    `json:"model,omitempty"`           // Model used for this session
+	Scenario       string    `json:"scenario,omitempty"`        // Scenario: chat/cron/channel
+	SelectedSkills []string  `json:"selected_skills,omitempty"` // Selected skill IDs (nil=all)
 }
 
 // SessionDetail represents detailed session info.
 type SessionDetail struct {
-	ID           string    `json:"id"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
-	MessageCount int       `json:"message_count"`
-	Title        string    `json:"title,omitempty"` // Session title/name
-	Messages     []Message `json:"messages"`
-	Model        string    `json:"model,omitempty"`    // Model used for this session
-	Scenario     string    `json:"scenario,omitempty"` // Scenario: chat/cron/channel
+	ID             string    `json:"id"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+	MessageCount   int       `json:"message_count"`
+	Title          string    `json:"title,omitempty"` // Session title/name
+	Messages       []Message `json:"messages"`
+	Model          string    `json:"model,omitempty"`           // Model used for this session
+	Scenario       string    `json:"scenario,omitempty"`        // Scenario: chat/cron/channel
+	SelectedSkills []string  `json:"selected_skills,omitempty"` // Selected skill IDs (nil=all)
 }
 
 // SessionsListResponse represents the response for listing sessions.
@@ -245,6 +263,17 @@ type UpdateSessionModelRequest struct {
 type UpdateSessionModelResponse struct {
 	ID    string `json:"id"`
 	Model string `json:"model"`
+}
+
+// UpdateSessionSkillsRequest represents a request to update session selected skills.
+type UpdateSessionSkillsRequest struct {
+	SelectedSkills []string `json:"selected_skills"` // Skill IDs to enable; empty array means all
+}
+
+// UpdateSessionSkillsResponse represents the response for updating session skills.
+type UpdateSessionSkillsResponse struct {
+	ID             string   `json:"id"`
+	SelectedSkills []string `json:"selected_skills"`
 }
 
 // ScenarioModelsResponse represents scenario default models.

@@ -43,6 +43,7 @@ type ollamaRequest struct {
 type ollamaMessage struct {
 	Role      string           `json:"role"`
 	Content   string           `json:"content"`
+	Images    []string         `json:"images,omitempty"` // Base64 encoded images
 	ToolCalls []ollamaToolCall `json:"tool_calls,omitempty"`
 }
 

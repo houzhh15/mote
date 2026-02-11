@@ -2,24 +2,686 @@
 // ChatPage - Shared chat page component
 // ================================================================
 
-import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Input, Button, List, Typography, Space, Spin, message, Select, Tooltip, Collapse, Modal, Tag, theme } from 'antd';
-import { SendOutlined, ClearOutlined, PlusOutlined, ToolOutlined, FolderOutlined, FolderOpenOutlined, LinkOutlined, DisconnectOutlined, GithubOutlined, StopOutlined, CopyOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
+import React, { useState, useRef, useEffect, useCallback, useMemo, memo } from 'react';
+import { Input, Button, Typography, Space, Spin, message, Select, Tooltip, Collapse, Modal, Tag, theme, Dropdown } from 'antd';
+import { SendOutlined, ClearOutlined, PlusOutlined, ToolOutlined, FolderOutlined, FolderOpenOutlined, LinkOutlined, DisconnectOutlined, GithubOutlined, StopOutlined, CopyOutlined, EditOutlined, DeleteOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import ReactMarkdown from 'react-markdown';
 import { useAPI } from '../context/APIContext';
 import { useTheme } from '../context/ThemeContext';
 import { useChatManager } from '../context/ChatManager';
 import { useInputHistory } from '../hooks';
 import { PromptSelector } from '../components/PromptSelector';
+import { DirectoryPicker } from '../components/DirectoryPicker';
+import { FileSelector } from '../components/FileSelector';
+import type { FileSelectorMode } from '../components/FileSelector';
 import { OllamaIcon } from '../components/OllamaIcon';
 import { StatusIndicator, ErrorBanner } from '../components';
 import { useConnectionStatus, useHasConnectionIssues } from '../context/ConnectionStatusContext';
 import moteLogo from '../assets/mote_logo.png';
 import userAvatar from '../assets/user.png';
-import type { Message, Model, Workspace, ErrorDetail } from '../types';
+import type { Message, Model, Workspace, ErrorDetail, Skill } from '../types';
 
 const { TextArea } = Input;
 const { Text } = Typography;
+
+// ================================================================
+// Memoized Message Item Component - Prevents unnecessary re-renders
+// ================================================================
+interface TokenColors {
+  colorBgLayout: string;
+  colorBgContainer: string;
+  colorText: string;
+  colorTextSecondary: string;
+  colorBorderSecondary: string;
+  colorPrimary: string;
+  colorWarning: string;
+  colorWarningBg: string;
+  colorWarningBorder: string;
+  colorWarningText: string;
+}
+
+interface MessageItemProps {
+  msg: Message;
+  index: number;
+  isUser: boolean;
+  effectiveTheme: string;
+  tokenColors: TokenColors;
+  onCopy: (content: string) => void;
+  onEdit: (index: number, content: string) => void;
+  onDelete: (index: number) => void;
+}
+
+const MessageItem = memo<MessageItemProps>(({ 
+  msg, 
+  index, 
+  isUser, 
+  effectiveTheme, 
+  tokenColors, 
+  onCopy, 
+  onEdit, 
+  onDelete 
+}) => {
+  const hasToolCalls = msg.tool_calls && msg.tool_calls.length > 0;
+  const hasContent = msg.content && msg.content.trim().length > 0;
+
+  return (
+    <div style={{ padding: '12px 0' }}>
+      <div style={{ display: 'flex', gap: 12, width: '100%', alignItems: 'flex-start' }}>
+        {isUser ? (
+          <div
+            style={{
+              width: 36,
+              height: 36,
+              backgroundColor: '#8B5CF6',
+              borderRadius: '50%',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: 6,
+              flexShrink: 0,
+              marginTop: 4,
+            }}
+          >
+            <img src={userAvatar} alt="User" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+          </div>
+        ) : (
+          <div
+            style={{
+              width: 36,
+              height: 36,
+              backgroundColor: effectiveTheme === 'dark' ? '#1f1f1f' : '#F5F5F5',
+              borderRadius: '50%',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: 6,
+              flexShrink: 0,
+              marginTop: 4,
+            }}
+          >
+            <img src={moteLogo} alt="AI" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+          </div>
+        )}
+        <div style={{ flex: 1, minWidth: 0, overflow: 'hidden' }}>
+          {/* Tool Calls - Collapsible */}
+          {hasToolCalls && (
+            <div style={{ marginBottom: hasContent ? 8 : 0 }}>
+              <Collapse
+                ghost
+                size="small"
+                items={[
+                  {
+                    key: '1',
+                    label: (
+                      <span style={{ fontSize: 12, color: tokenColors.colorTextSecondary }}>
+                        <ToolOutlined style={{ marginRight: 4 }} />
+                        工具调用 ({msg.tool_calls?.length})
+                      </span>
+                    ),
+                    children: (
+                      <div style={{ fontSize: 12, color: tokenColors.colorTextSecondary }}>
+                        {msg.tool_calls?.map((tool, idx) => (
+                          <div key={idx} style={{ marginBottom: idx < msg.tool_calls!.length - 1 ? 12 : 0 }}>
+                            <div style={{ fontWeight: 500, marginBottom: 4 }}>
+                              {tool.name}
+                            </div>
+                            {tool.arguments && (
+                              <div style={{ marginBottom: 4 }}>
+                                <div style={{ color: tokenColors.colorTextSecondary, marginBottom: 2, fontSize: 11 }}>参数:</div>
+                                <pre style={{
+                                  background: tokenColors.colorBgLayout,
+                                  padding: 8,
+                                  borderRadius: 4,
+                                  overflow: 'auto',
+                                  margin: 0,
+                                  fontSize: 11,
+                                  border: `1px solid ${tokenColors.colorBorderSecondary}`,
+                                  whiteSpace: 'pre-wrap',
+                                  wordBreak: 'break-word',
+                                  maxWidth: '100%',
+                                }}>
+                                  {(() => {
+                                    try {
+                                      return JSON.stringify(JSON.parse(tool.arguments!), null, 2);
+                                    } catch {
+                                      return tool.arguments;
+                                    }
+                                  })()}
+                                </pre>
+                              </div>
+                            )}
+                            {tool.error && (
+                              <div style={{ color: '#ff4d4f', marginBottom: 4 }}>
+                                错误: {tool.error}
+                              </div>
+                            )}
+                            {tool.result && (
+                              <div>
+                                <div style={{ color: tokenColors.colorTextSecondary, marginBottom: 2, fontSize: 11 }}>结果:</div>
+                                <pre style={{
+                                  background: tokenColors.colorBgLayout,
+                                  padding: 8,
+                                  borderRadius: 4,
+                                  overflow: 'auto',
+                                  margin: 0,
+                                  fontSize: 11,
+                                  border: `1px solid ${tokenColors.colorBorderSecondary}`,
+                                  whiteSpace: 'pre-wrap',
+                                  wordBreak: 'break-word',
+                                  maxWidth: '100%',
+                                }}>
+                                  {typeof tool.result === 'string' 
+                                    ? tool.result 
+                                    : JSON.stringify(tool.result as object, null, 2)}
+                                </pre>
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    ),
+                  },
+                ]}
+              />
+            </div>
+          )}
+          
+          {/* Message Content */}
+          {hasContent && (
+            <div
+              style={{
+                background: isUser ? '#8B5CF6' : tokenColors.colorBgLayout,
+                color: isUser ? 'white' : tokenColors.colorText,
+                padding: '12px 16px',
+                borderRadius: 12,
+                maxWidth: '100%',
+                fontSize: 13,
+                overflowX: 'auto',
+              }}
+            >
+              {isUser ? (
+                <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{msg.content}</div>
+              ) : (
+                <div className="markdown-content">
+                  <ReactMarkdown>{msg.content}</ReactMarkdown>
+                </div>
+              )}
+            </div>
+          )}
+          
+          {/* Action buttons for assistant messages */}
+          {!isUser && hasContent && (
+            <div style={{ 
+              display: 'flex', 
+              gap: 4, 
+              marginTop: 4,
+              opacity: 0.6,
+            }}
+            className="message-actions"
+            >
+              <Tooltip title="复制">
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<CopyOutlined />}
+                  onClick={() => onCopy(msg.content)}
+                  style={{ fontSize: 12, color: tokenColors.colorTextSecondary }}
+                />
+              </Tooltip>
+              <Tooltip title="编辑">
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<EditOutlined />}
+                  onClick={() => onEdit(index, msg.content)}
+                  style={{ fontSize: 12, color: tokenColors.colorTextSecondary }}
+                />
+              </Tooltip>
+              <Tooltip title="删除">
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<DeleteOutlined />}
+                  onClick={() => onDelete(index)}
+                  style={{ fontSize: 12, color: tokenColors.colorTextSecondary }}
+                />
+              </Tooltip>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}, (prevProps, nextProps) => {
+  // Custom comparison - only re-render if message content or theme changes
+  return prevProps.msg === nextProps.msg && 
+         prevProps.index === nextProps.index &&
+         prevProps.effectiveTheme === nextProps.effectiveTheme &&
+         prevProps.tokenColors === nextProps.tokenColors;
+});
+
+MessageItem.displayName = 'MessageItem';
+
+// HTML 转义函数，防止 XSS
+const escapeHtml = (str: string): string => {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+};
+
+// ================================================================
+// Streaming Content Component - Self-managed state for isolation
+// Uses internal state + direct ChatManager subscription to prevent
+// parent component re-renders from causing flicker
+// ================================================================
+interface StreamingContentProps {
+  sessionId: string;
+  tokenColors: TokenColors;
+  effectiveTheme: string;
+  onScrollRequest?: () => void;
+}
+
+/**
+ * StreamingContent - 使用 DOM 直接更新避免 React 重渲染闪烁
+ * 
+ * 关键优化：
+ * 1. 完全使用 useRef 和 DOM 操作，避免任何 setState
+ * 2. 使用 CSS display 切换代替条件渲染
+ * 3. 只在组件挂载时订阅一次
+ */
+const StreamingContent: React.FC<StreamingContentProps> = ({ sessionId, tokenColors, effectiveTheme, onScrollRequest }) => {
+  const chatManager = useChatManager();
+  
+  // 所有 DOM 元素引用
+  const contentRef = useRef<HTMLPreElement>(null);
+  const contentWrapperRef = useRef<HTMLDivElement>(null);
+  const thinkingRef = useRef<HTMLDivElement>(null);
+  const toolCallsRef = useRef<HTMLDivElement>(null);
+  const toolCallsContentRef = useRef<HTMLDivElement>(null);
+  
+  // 状态存储在 ref 中
+  const lastContentLengthRef = useRef(0);
+  const lastToolCallsJsonRef = useRef('');
+
+  // 使用 useLayoutEffect 确保 DOM 已准备好
+  useEffect(() => {
+    if (!sessionId) return;
+
+    const unsubscribe = chatManager.subscribe(sessionId, (state) => {
+      // === 1. 更新内容文本（直接操作 DOM）===
+      const newContent = state.currentContent || '';
+      if (contentRef.current && contentRef.current.textContent !== newContent) {
+        contentRef.current.textContent = newContent;
+        
+        // 内容增加时请求滚动
+        if (newContent.length > lastContentLengthRef.current) {
+          lastContentLengthRef.current = newContent.length;
+          onScrollRequest?.();
+        }
+      }
+      
+      // 切换内容区域显示/隐藏
+      if (contentWrapperRef.current) {
+        const hasContent = !!(newContent && newContent.trim());
+        contentWrapperRef.current.style.display = hasContent ? 'block' : 'none';
+      }
+      
+      // === 2. 更新 thinking 文本 ===
+      if (thinkingRef.current) {
+        const thinkingText = state.currentThinking || '';
+        const thinkingSpan = thinkingRef.current.querySelector('.thinking-text');
+        if (thinkingSpan) {
+          thinkingSpan.textContent = thinkingText;
+        }
+        
+        // 显示条件：有 thinking 且没有内容和工具调用
+        const hasThinking = !!(thinkingText && thinkingText.trim());
+        const hasContent = !!(state.currentContent && state.currentContent.trim());
+        const hasToolCalls = state.currentToolCalls && Object.keys(state.currentToolCalls).length > 0;
+        thinkingRef.current.style.display = (hasThinking && !hasContent && !hasToolCalls) ? 'block' : 'none';
+      }
+      
+      // === 3. 更新 Tool Calls（只有结构变化时才更新 DOM）===
+      const newToolCalls = state.currentToolCalls || {};
+      const newToolCallsJson = JSON.stringify(newToolCalls);
+      
+      if (newToolCallsJson !== lastToolCallsJsonRef.current) {
+        lastToolCallsJsonRef.current = newToolCallsJson;
+        
+        if (toolCallsRef.current && toolCallsContentRef.current) {
+          const hasToolCalls = Object.keys(newToolCalls).length > 0;
+          toolCallsRef.current.style.display = hasToolCalls ? 'block' : 'none';
+          
+          if (hasToolCalls) {
+            // 直接更新工具调用内容
+            const toolCallsHtml = Object.entries(newToolCalls).map(([_name, tool]) => {
+              let argsHtml = '';
+              if (tool.arguments) {
+                let argsStr = tool.arguments;
+                try {
+                  argsStr = JSON.stringify(JSON.parse(tool.arguments), null, 2);
+                } catch {}
+                argsHtml = `
+                  <div style="margin-bottom: 4px">
+                    <div style="color: ${tokenColors.colorTextSecondary}; margin-bottom: 2px; font-size: 11px">参数:</div>
+                    <pre style="background: ${tokenColors.colorBgLayout}; padding: 8px; border-radius: 4px; overflow: auto; margin: 0; font-size: 11px; border: 1px solid ${tokenColors.colorBorderSecondary}; white-space: pre-wrap; word-break: break-word; max-width: 100%">${escapeHtml(argsStr)}</pre>
+                  </div>
+                `;
+              }
+              
+              let resultHtml = '';
+              if (tool.result) {
+                const resultStr = typeof tool.result === 'string' ? tool.result : JSON.stringify(tool.result, null, 2);
+                resultHtml = `
+                  <div>
+                    <div style="color: ${tokenColors.colorTextSecondary}; margin-bottom: 2px; font-size: 11px">结果:</div>
+                    <pre style="background: ${tokenColors.colorBgLayout}; padding: 8px; border-radius: 4px; overflow: auto; margin: 0; font-size: 11px; border: 1px solid ${tokenColors.colorBorderSecondary}; white-space: pre-wrap; word-break: break-word; max-width: 100%">${escapeHtml(resultStr)}</pre>
+                  </div>
+                `;
+              }
+              
+              let errorHtml = '';
+              if (tool.error) {
+                errorHtml = `<div style="color: #ff4d4f; margin-bottom: 4px">错误: ${escapeHtml(tool.error)}</div>`;
+              }
+              
+              const statusIcon = (tool.status === 'running' || (!tool.status && !tool.result && !tool.error))
+                ? '<span class="ant-spin ant-spin-sm" style="margin-left: 8px"><span class="ant-spin-dot ant-spin-dot-spin"><i></i><i></i><i></i><i></i></span></span>'
+                : tool.status === 'completed'
+                ? '<span style="margin-left: 8px; background: #52c41a; color: white; padding: 0 7px; border-radius: 4px; font-size: 10px">完成</span>'
+                : '';
+              
+              return `
+                <div style="margin-bottom: 12px">
+                  <div style="font-weight: 500; margin-bottom: 4px; display: flex; align-items: center">
+                    ${escapeHtml(tool.name)}${statusIcon}
+                  </div>
+                  ${argsHtml}${errorHtml}${resultHtml}
+                </div>
+              `;
+            }).join('');
+            
+            toolCallsContentRef.current.innerHTML = toolCallsHtml;
+          }
+        }
+      }
+    });
+
+    return unsubscribe;
+  }, [sessionId, chatManager, onScrollRequest, tokenColors]);
+
+  return (
+    <div style={{ padding: '12px 0', contain: 'layout style' }}>
+      <div style={{ display: 'flex', gap: 12, width: '100%', alignItems: 'flex-start' }}>
+        <div
+          style={{
+            width: 36,
+            height: 36,
+            backgroundColor: effectiveTheme === 'dark' ? '#1f1f1f' : '#F5F5F5',
+            borderRadius: '50%',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 6,
+            flexShrink: 0,
+            marginTop: 4,
+          }}
+        >
+          <img src={moteLogo} alt="AI" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          {/* Thinking content - 初始隐藏，由 JS 控制显示 */}
+          <div
+            ref={thinkingRef}
+            style={{
+              display: 'none',
+              background: effectiveTheme === 'dark' ? '#2a2a2a' : '#fafafa',
+              color: tokenColors.colorTextSecondary,
+              padding: '8px 12px',
+              borderRadius: 8,
+              fontSize: 12,
+              fontStyle: 'italic',
+              marginBottom: 8,
+              borderLeft: `3px solid ${tokenColors.colorPrimary}`,
+            }}
+          >
+            <Spin size="small" style={{ marginRight: 8 }} />
+            <span className="thinking-text"></span>
+          </div>
+
+          {/* Tool Calls - 初始隐藏，由 JS 控制显示和内容 */}
+          <div 
+            ref={toolCallsRef}
+            style={{ 
+              display: 'none',
+              marginBottom: 8,
+              fontSize: 12,
+              color: tokenColors.colorTextSecondary,
+              background: tokenColors.colorBgLayout,
+              borderRadius: 8,
+              padding: '8px 12px',
+            }}
+          >
+            <div style={{ fontWeight: 500, marginBottom: 8, display: 'flex', alignItems: 'center' }}>
+              <ToolOutlined style={{ marginRight: 4 }} />
+              工具调用中
+            </div>
+            <div ref={toolCallsContentRef}></div>
+          </div>
+          
+          {/* Streaming text content - 初始隐藏，由 JS 控制显示 */}
+          <div
+            ref={contentWrapperRef}
+            style={{
+              display: 'none',
+              background: tokenColors.colorBgLayout,
+              color: tokenColors.colorText,
+              padding: '12px 16px',
+              borderRadius: 12,
+              maxWidth: '100%',
+              fontSize: 13,
+              contain: 'layout paint',
+            }}
+          >
+            <pre 
+              ref={contentRef}
+              style={{ 
+                whiteSpace: 'pre-wrap', 
+                wordBreak: 'break-word',
+                margin: 0,
+                fontFamily: 'inherit',
+                fontSize: 'inherit',
+              }}
+            />
+            <Spin size="small" style={{ marginLeft: 8 }} />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// 旧版 LegacyStreamingContent 保留作为参考
+interface LegacyStreamingContentProps {
+  content: string;
+  thinking: string;
+  toolCalls: { [key: string]: { name: string; status?: string; arguments?: string; result?: string | object; error?: string } };
+  tokenColors: TokenColors;
+  effectiveTheme: string;
+}
+
+const LegacyStreamingContent = memo<LegacyStreamingContentProps>(({ content, thinking, toolCalls, tokenColors, effectiveTheme }) => {
+  const hasToolCalls = Object.keys(toolCalls).length > 0;
+  const hasThinking = thinking && thinking.trim().length > 0;
+  
+  return (
+    <div style={{ 
+      padding: '12px 0',
+      // CSS containment: 限制重绘范围，防止内容变化影响页面其他部分
+      contain: 'content',
+    }}>
+      <div style={{ display: 'flex', gap: 12, width: '100%', alignItems: 'flex-start' }}>
+        <div
+          style={{
+            width: 36,
+            height: 36,
+            backgroundColor: effectiveTheme === 'dark' ? '#1f1f1f' : '#F5F5F5',
+            borderRadius: '50%',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 6,
+            flexShrink: 0,
+            marginTop: 4,
+          }}
+        >
+          <img src={moteLogo} alt="AI" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+        </div>
+        <div style={{ flex: 1 }}>
+          {/* Thinking content - temporary display, shown when no other content */}
+          {hasThinking && !content && !hasToolCalls && (
+            <div
+              style={{
+                background: effectiveTheme === 'dark' ? '#2a2a2a' : '#fafafa',
+                color: tokenColors.colorTextSecondary,
+                padding: '8px 12px',
+                borderRadius: 8,
+                fontSize: 12,
+                fontStyle: 'italic',
+                marginBottom: 8,
+                borderLeft: `3px solid ${tokenColors.colorPrimary}`,
+              }}
+            >
+              <Spin size="small" style={{ marginRight: 8 }} />
+              {thinking}
+            </div>
+          )}
+
+          {/* Tool Calls during streaming */}
+          {hasToolCalls && (
+            <div style={{ marginBottom: content ? 8 : 0 }}>
+              <Collapse
+                ghost
+                size="small"
+                defaultActiveKey={['1']}
+                items={[
+                  {
+                    key: '1',
+                    label: (
+                      <span style={{ fontSize: 12, color: tokenColors.colorTextSecondary }}>
+                        <ToolOutlined style={{ marginRight: 4 }} />
+                        工具调用中 ({Object.keys(toolCalls).length})
+                      </span>
+                    ),
+                    children: (
+                      <div style={{ fontSize: 12, color: tokenColors.colorTextSecondary }}>
+                        {Object.entries(toolCalls).map(([name, tool], idx) => (
+                          <div key={name} style={{ marginBottom: idx < Object.keys(toolCalls).length - 1 ? 12 : 0 }}>
+                            <div style={{ fontWeight: 500, marginBottom: 4, display: 'flex', alignItems: 'center' }}>
+                              {tool.name}
+                              {tool.status === 'running' && <Spin size="small" style={{ marginLeft: 8 }} />}
+                              {tool.status === 'completed' && (
+                                <Tag color="success" style={{ marginLeft: 8, fontSize: 10 }}>完成</Tag>
+                              )}
+                              {!tool.status && !tool.result && !tool.error && <Spin size="small" style={{ marginLeft: 8 }} />}
+                            </div>
+                            {tool.arguments && (
+                              <div style={{ marginBottom: 4 }}>
+                                <div style={{ color: tokenColors.colorTextSecondary, marginBottom: 2, fontSize: 11 }}>参数:</div>
+                                <pre style={{
+                                  background: tokenColors.colorBgLayout,
+                                  padding: 8,
+                                  borderRadius: 4,
+                                  overflow: 'auto',
+                                  margin: 0,
+                                  fontSize: 11,
+                                  border: `1px solid ${tokenColors.colorBorderSecondary}`,
+                                  whiteSpace: 'pre-wrap',
+                                  wordBreak: 'break-word',
+                                  maxWidth: '100%',
+                                }}>
+                                  {(() => {
+                                    try {
+                                      return JSON.stringify(JSON.parse(tool.arguments!), null, 2);
+                                    } catch {
+                                      return tool.arguments;
+                                    }
+                                  })()}
+                                </pre>
+                              </div>
+                            )}
+                            {tool.error && (
+                              <div style={{ color: '#ff4d4f', marginBottom: 4 }}>
+                                错误: {tool.error}
+                              </div>
+                            )}
+                            {tool.result && (
+                              <div>
+                                <div style={{ color: tokenColors.colorTextSecondary, marginBottom: 2, fontSize: 11 }}>结果:</div>
+                                <pre style={{
+                                  background: tokenColors.colorBgLayout,
+                                  padding: 8,
+                                  borderRadius: 4,
+                                  overflow: 'auto',
+                                  margin: 0,
+                                  fontSize: 11,
+                                  border: `1px solid ${tokenColors.colorBorderSecondary}`,
+                                  whiteSpace: 'pre-wrap',
+                                  wordBreak: 'break-word',
+                                  maxWidth: '100%',
+                                }}>
+                                  {typeof tool.result === 'string' 
+                                    ? tool.result 
+                                    : JSON.stringify(tool.result as object, null, 2)}
+                                </pre>
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    ),
+                  },
+                ]}
+              />
+            </div>
+          )}
+          
+          {/* Streaming text content - Use plain text during streaming for performance */}
+          {content && (
+            <div
+              style={{
+                background: tokenColors.colorBgLayout,
+                color: tokenColors.colorText,
+                padding: '12px 16px',
+                borderRadius: 12,
+                maxWidth: '100%',
+                fontSize: 13,
+                // 性能优化：提示浏览器此元素会频繁变化
+                willChange: 'contents',
+                // 创建独立的层叠上下文，减少重绘影响
+                isolation: 'isolate',
+              }}
+            >
+              {/* During streaming, render as plain text with basic formatting */}
+              <pre style={{ 
+                whiteSpace: 'pre-wrap', 
+                wordBreak: 'break-word',
+                margin: 0,
+                fontFamily: 'inherit',
+                fontSize: 'inherit',
+              }}>
+                {content}
+              </pre>
+              <Spin size="small" style={{ marginLeft: 8 }} />
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+});
+
+LegacyStreamingContent.displayName = 'LegacyStreamingContent';
 
 export interface ChatPageProps {
   sessionId?: string;
@@ -32,6 +694,21 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
   const { effectiveTheme } = useTheme();
   const chatManager = useChatManager();
   const { addHistory, navigatePrev, navigateNext, resetNavigation } = useInputHistory();
+  
+  // Extract stable token values to prevent re-renders
+  // These values rarely change and can be memoized
+  const tokenColors = useMemo(() => ({
+    colorBgLayout: token.colorBgLayout,
+    colorBgContainer: token.colorBgContainer,
+    colorText: token.colorText,
+    colorTextSecondary: token.colorTextSecondary,
+    colorBorderSecondary: token.colorBorderSecondary,
+    colorPrimary: token.colorPrimary,
+    colorWarning: token.colorWarning,
+    colorWarningBg: token.colorWarningBg,
+    colorWarningBorder: token.colorWarningBorder,
+    colorWarningText: token.colorWarningText,
+  }), [effectiveTheme]); // Only recalculate when theme changes
   
   // Connection status (may not be available if ConnectionStatusProvider is not present)
   let connectionStatus: ReturnType<typeof useConnectionStatus> | null = null;
@@ -47,7 +724,6 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
   const [inputValue, setInputValue] = useState('');
   const [loading, setLoading] = useState(false);
   const [streaming, setStreaming] = useState(false);
-  const [currentResponse, setCurrentResponse] = useState('');
   // 跟踪是否正在浏览历史记录
   const isNavigatingHistoryRef = useRef(false);
   const [sessionId, setSessionId] = useState<string | undefined>(initialSessionId);
@@ -55,27 +731,80 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
   const [models, setModels] = useState<Model[]>([]);
   const [currentModel, setCurrentModel] = useState<string>('');
   const [modelLoading, setModelLoading] = useState(false);
-  const [currentToolCalls, setCurrentToolCalls] = useState<{ [key: string]: { name: string; arguments?: string; result?: any; error?: string } }>({});
+  const [skills, setSkills] = useState<Skill[]>([]);
+  const [selectedSkills, setSelectedSkills] = useState<string[]>([]); // empty = all
+  const [skillsLoading, setSkillsLoading] = useState(false);
   const [promptSelectorVisible, setPromptSelectorVisible] = useState(false);
   const [promptSearchQuery, setPromptSearchQuery] = useState('');
+  
+  // File selector state
+  const [fileSelectorVisible, setFileSelectorVisible] = useState(false);
+  const [fileSearchQuery, setFileSearchQuery] = useState('');
+  const [fileSelectorMode, setFileSelectorMode] = useState<FileSelectorMode>('context');
+  const [_filesToContext, _setFilesToContext] = useState<Set<string>>(new Set());
+  const [tabTriggerPos, setTabTriggerPos] = useState<number | null>(null);
+  
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [workspaceModalVisible, setWorkspaceModalVisible] = useState(false);
   const [workspacePath, setWorkspacePath] = useState('');
+  const [directoryPickerVisible, setDirectoryPickerVisible] = useState(false);
   const [editModalVisible, setEditModalVisible] = useState(false);
   const [editingMessage, setEditingMessage] = useState<{ index: number; content: string } | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<any>(null);
   // 用于保存当前累积的响应内容（停止时使用）
   const currentResponseRef = useRef('');
   // Stream error state
   const [streamError, setStreamError] = useState<ErrorDetail | null>(null);
+  const lastScrollHeightRef = useRef(0);
+  // Truncation state - when response is cut off due to max_tokens
+  const [truncated, setTruncated] = useState(false);
+  const [truncatedInfo, setTruncatedInfo] = useState<{ reason: string; pendingToolCalls: number } | null>(null);
 
-  const scrollToBottom = (behavior: ScrollBehavior = 'smooth') => {
+  // 检测用户是否在消息列表底部附近
+  const isNearBottom = () => {
+    const container = messagesContainerRef.current;
+    if (!container) return true;
+    
+    const threshold = 150; // 150px 阈值
+    const { scrollTop, scrollHeight, clientHeight } = container;
+    return scrollHeight - scrollTop - clientHeight < threshold;
+  };
+
+  // 智能滚动：只在用户位于底部或强制时才滚动
+  const scrollToBottom = (behavior: ScrollBehavior = 'auto', force = false) => {
+    if (!force && !isNearBottom()) {
+      // 用户正在查看历史消息，不要自动滚动
+      return;
+    }
+    
     messagesEndRef.current?.scrollIntoView({ behavior });
   };
 
+  // 注意：不需要监听滚动事件来存储状态，isNearBottom() 会实时检查
+
+  // 消息变化时的智能滚动
   useEffect(() => {
-    scrollToBottom();
-  }, [messages, currentResponse]);
+    const container = messagesContainerRef.current;
+    if (!container) return;
+
+    // 记录滚动高度变化前用户是否在底部
+    const threshold = 150;
+    const { scrollTop, scrollHeight, clientHeight } = container;
+    const wasAtBottom = scrollHeight - scrollTop - clientHeight < threshold;
+
+    // 使用 requestAnimationFrame 确保 DOM 已更新
+    requestAnimationFrame(() => {
+      // 只有当用户之前在底部时才自动滚动
+      if (wasAtBottom) {
+        scrollToBottom('auto', false);
+      }
+      lastScrollHeightRef.current = container.scrollHeight;
+    });
+  }, [messages]);
+
+  // 流式内容滚动由 StreamingContent 组件的 onScrollRequest 回调处理
 
   // Load models on mount
   useEffect(() => {
@@ -89,6 +818,20 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
       }
     };
     loadModels();
+  }, [api]);
+
+  // Load skills on mount
+  useEffect(() => {
+    const loadSkills = async () => {
+      if (!api.getSkills) return;
+      try {
+        const skillsList = await api.getSkills();
+        setSkills(skillsList || []);
+      } catch (error) {
+        console.error('Failed to load skills:', error);
+      }
+    };
+    loadSkills();
   }, [api]);
 
   // Initialize session - NEVER auto-create, only load existing or show empty state
@@ -105,13 +848,15 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
           console.error('Failed to load session messages:', e);
           setMessages([]);
         }
-        // Load session model if available
+        // Load session model and skills if available
         if (api.getSession) {
           try {
             const session = await api.getSession(initialSessionId);
             if (session.model) {
               setCurrentModel(session.model);
             }
+            // Load session skills: undefined/null/empty means all
+            setSelectedSkills(session.selected_skills || []);
           } catch (e) {
             console.error('Failed to load session model:', e);
           }
@@ -140,6 +885,7 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
                 if (session.model) {
                   setCurrentModel(session.model);
                 }
+                setSelectedSkills(session.selected_skills || []);
               } catch (e) {
                 console.error('Failed to load session model:', e);
               }
@@ -184,8 +930,6 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
       setMessages((prev: Message[]) => [...prev, userMessage]);
       setLoading(true);
       setStreaming(true);
-      setCurrentResponse('');
-      setCurrentToolCalls({});
       currentResponseRef.current = '';
 
       // 使用 ChatManager 发起请求
@@ -209,8 +953,11 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
 
   useEffect(() => {
     initializeSession().then(() => {
-      // 初始加载后滚动到底部（使用 instant 避免动画延迟）
-      setTimeout(() => scrollToBottom('instant'), 100);
+      // 初始加载后强制滚动到底部（使用 instant 避免动画延迟）
+      setTimeout(() => {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'instant' });
+        lastScrollHeightRef.current = messagesContainerRef.current?.scrollHeight || 0;
+      }, 100);
       
       // 检查是否有来自 NewChatPage 的 pending message
       if (initialSessionId) {
@@ -227,20 +974,46 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
     const existingState = chatManager.getChatState(sessionId);
     if (existingState) {
       setStreaming(existingState.streaming);
-      setCurrentResponse(existingState.currentContent || '');
       currentResponseRef.current = existingState.currentContent || '';
-      setCurrentToolCalls(existingState.currentToolCalls || {});
       if (existingState.streaming) {
         setLoading(true);
       }
+      // Restore truncation state
+      if (existingState.truncated) {
+        setTruncated(true);
+        setTruncatedInfo({
+          reason: existingState.truncatedReason || 'length',
+          pendingToolCalls: existingState.pendingToolCalls || 0,
+        });
+      }
+    } else {
+      // No active chat for this session - reset streaming state
+      // This ensures clean state when switching between sessions
+      setStreaming(false);
+      setLoading(false);
+      currentResponseRef.current = '';
+      setTruncated(false);
+      setTruncatedInfo(null);
+      setStreamError(null);
     }
 
     // Subscribe to state changes
+    // 注意：内容更新由 StreamingContent 组件内部订阅处理，这里只处理状态和最终消息
     const unsubscribe = chatManager.subscribe(sessionId, (state) => {
-      setStreaming(state.streaming);
-      setCurrentResponse(state.currentContent || '');
+      // 只在 streaming 状态变化时更新（避免频繁重渲染）
+      setStreaming(prev => prev !== state.streaming ? state.streaming : prev);
+      
+      // 保存到 ref（用于停止时），不触发重渲染
       currentResponseRef.current = state.currentContent || '';
-      setCurrentToolCalls(state.currentToolCalls || {});
+      
+      // Handle truncation state
+      if (state.truncated) {
+        setTruncated(true);
+        setTruncatedInfo({
+          reason: state.truncatedReason || 'length',
+          pendingToolCalls: state.pendingToolCalls || 0,
+        });
+      }
       
       // Handle errors with structured error detail
       if (state.errorDetail) {
@@ -256,23 +1029,29 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
       
       if (!state.streaming) {
         setLoading(false);
+        // Clear truncation state when streaming ends normally
+        setTruncated(false);
+        setTruncatedInfo(null);
         // When streaming ends, add the final message to the list
-        if (state.currentContent && state.currentContent.trim()) {
+        // Use finalMessage from ChatManager if available (set on 'done' event)
+        const finalContent = state.finalMessage?.content || state.currentContent;
+        const finalToolCalls = state.finalMessage?.tool_calls || 
+          (state.currentToolCalls ? Object.values(state.currentToolCalls) : undefined);
+        
+        if (finalContent && finalContent.trim()) {
           setMessages((prev: Message[]) => {
             // Avoid duplicating if already added
             const lastMsg = prev[prev.length - 1];
-            if (lastMsg && lastMsg.role === 'assistant' && lastMsg.content === state.currentContent) {
+            if (lastMsg && lastMsg.role === 'assistant' && lastMsg.content === finalContent) {
               return prev;
             }
             return [...prev, {
               role: 'assistant' as const,
-              content: state.currentContent,
-              tool_calls: state.currentToolCalls ? Object.values(state.currentToolCalls) : undefined,
+              content: finalContent,
+              tool_calls: finalToolCalls,
               timestamp: new Date().toISOString(),
             }];
           });
-          setCurrentResponse('');
-          setCurrentToolCalls({});
         }
       }
     });
@@ -337,6 +1116,8 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
       if (session.model) {
         setCurrentModel(session.model);
       }
+      // New session defaults to all skills
+      setSelectedSkills([]);
       onSessionCreated?.(session.id);
       message.success('新会话已创建');
     } catch (error) {
@@ -366,6 +1147,28 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
     }
   };
 
+  // Handle skills selection change (per session)
+  const handleSkillsChange = async (skillIds: string[]) => {
+    if (!sessionId) {
+      message.error('无会话可设置技能');
+      return;
+    }
+    if (!api.setSessionSkills) {
+      message.error('当前版本不支持会话级技能选择');
+      return;
+    }
+    setSkillsLoading(true);
+    try {
+      await api.setSessionSkills(sessionId, skillIds);
+      setSelectedSkills(skillIds);
+      message.success('技能选择已更新');
+    } catch (error) {
+      message.error('更新技能选择失败');
+    } finally {
+      setSkillsLoading(false);
+    }
+  };
+
   const handleSend = async () => {
     if (!inputValue.trim() || loading || !sessionId) return;
 
@@ -382,8 +1185,6 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
     setInputValue('');
     setLoading(true);
     setStreaming(true);
-    setCurrentResponse('');
-    setCurrentToolCalls({});
     currentResponseRef.current = '';
 
     // 使用 ChatManager 发起请求，它会在后台持续运行
@@ -404,9 +1205,19 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
     );
   };
 
+  // Handle dismiss truncation warning
+  const handleDismissTruncation = () => {
+    setTruncated(false);
+    setTruncatedInfo(null);
+  };
+
   const handleStop = () => {
     if (streaming && sessionId) {
       chatManager.abortChat(sessionId);
+      
+      // Clear truncation state when stopping
+      setTruncated(false);
+      setTruncatedInfo(null);
       
       // 如果有累积的响应内容，保存为一条中断的消息
       if (currentResponseRef.current.trim()) {
@@ -420,8 +1231,6 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
       
       setLoading(false);
       setStreaming(false);
-      setCurrentResponse('');
-      setCurrentToolCalls({});
       currentResponseRef.current = '';
       message.info('已停止生成');
     }
@@ -468,13 +1277,37 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
       }
     }
     // Close prompt selector on Escape
-    if (e.key === 'Escape' && promptSelectorVisible) {
-      setPromptSelectorVisible(false);
-      setPromptSearchQuery('');
+    if (e.key === 'Escape') {
+      if (promptSelectorVisible) {
+        setPromptSelectorVisible(false);
+        setPromptSearchQuery('');
+      }
+      if (fileSelectorVisible) {
+        setFileSelectorVisible(false);
+        setFileSearchQuery('');
+      }
+    }
+    
+    // Tab key path completion
+    if (e.key === 'Tab' && !e.shiftKey && !promptSelectorVisible && !fileSelectorVisible) {
+      const value = inputValue;
+      const cursorPos = e.currentTarget.selectionStart;
+      const beforeCursor = value.substring(0, cursorPos);
+      
+      // Detect if cursor is in a path fragment
+      const pathMatch = beforeCursor.match(/[\w\/\.\-_]*$/);
+      
+      if (pathMatch && pathMatch[0].length > 0) {
+        e.preventDefault();
+        setFileSelectorVisible(true);
+        setFileSelectorMode('path-only');
+        setFileSearchQuery(pathMatch[0]);
+        setTabTriggerPos(cursorPos - pathMatch[0].length);
+      }
     }
   };
 
-  // Handle input change with prompt detection
+  // Handle input change with prompt and file detection
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const value = e.target.value;
     setInputValue(value);
@@ -484,14 +1317,34 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
     // 用户手动输入时重置历史导航
     resetNavigation();
 
-    // Detect / command at the start of input
-    const match = value.match(/^\/(\S*)$/);
-    if (match) {
+    // ===== Detect / command for prompt selector =====
+    const slashMatch = value.match(/^\/(\S*)$/);
+    if (slashMatch) {
       setPromptSelectorVisible(true);
-      setPromptSearchQuery(match[1] || '');
+      setPromptSearchQuery(slashMatch[1] || '');
+      setFileSelectorVisible(false); // Mutually exclusive
     } else if (!value.startsWith('/')) {
       setPromptSelectorVisible(false);
       setPromptSearchQuery('');
+    }
+    
+    // ===== Detect @ for file selector =====
+    if (value.endsWith('@')) {
+      const beforeAt = value.slice(0, -1);
+      if (beforeAt === '' || beforeAt.endsWith(' ') || beforeAt.endsWith('\n')) {
+        setFileSelectorVisible(true);
+        setFileSearchQuery('');
+        setFileSelectorMode('context'); // Default mode
+        setPromptSelectorVisible(false); // Mutually exclusive
+        return;
+      }
+    }
+    
+    const lastAtIndex = value.lastIndexOf('@');
+    if (lastAtIndex !== -1 && fileSelectorVisible) {
+      setFileSearchQuery(value.slice(lastAtIndex + 1));
+    } else if (!fileSelectorVisible) {
+      // Don't close if already closed
     }
   };
 
@@ -500,6 +1353,34 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
     setInputValue(content);
     setPromptSelectorVisible(false);
     setPromptSearchQuery('');
+  };
+  
+  // Handle file selection
+  const handleFileSelect = (filepath: string, mode: FileSelectorMode) => {
+    if (fileSelectorMode === 'path-only' && tabTriggerPos !== null) {
+      // Tab completion: replace path fragment
+      const cursorPos = inputRef.current?.selectionStart || 0;
+      const before = inputValue.substring(0, tabTriggerPos);
+      const after = inputValue.substring(cursorPos);
+      setInputValue(`${before}${filepath}${after}`);
+      setTabTriggerPos(null);
+    } else {
+      // @ reference: insert at end
+      const lastAtIndex = inputValue.lastIndexOf('@');
+      const before = inputValue.substring(0, lastAtIndex);
+      
+      if (mode === 'context') {
+        // Add to context mode
+        _setFilesToContext((prev: Set<string>) => new Set(prev).add(filepath));
+        setInputValue(`${before}@${filepath} `);
+      } else {
+        // Path-only mode (no @)
+        setInputValue(`${before}${filepath} `);
+      }
+    }
+    
+    setFileSelectorVisible(false);
+    setFileSearchQuery('');
   };
 
   // Copy message content to clipboard
@@ -546,230 +1427,52 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
     });
   };
 
-  const renderMessage = (msg: Message, index: number) => {
-    const isUser = msg.role === 'user';
-    const hasToolCalls = msg.tool_calls && msg.tool_calls.length > 0;
-    
-    // Check if content looks like JSON (tool result)
-    const isJsonContent = !isUser && msg.content && msg.content.trim().startsWith('{') && msg.content.trim().endsWith('}');
-    
-    // Hide JSON-only assistant messages (they're likely tool results shown separately)
-    if (!isUser && isJsonContent && !hasToolCalls) {
-      return null;
-    }
-    
-    // Don't render main content bubble if it's empty or only whitespace
-    const hasContent = msg.content && msg.content.trim().length > 0 && !isJsonContent;
-    
-    return (
-      <List.Item
-        key={index}
-        style={{
-          justifyContent: isUser ? 'flex-end' : 'flex-start',
-          padding: '12px 16px',
-          border: 'none',
-        }}
-      >
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'flex-start',
-            flexDirection: isUser ? 'row-reverse' : 'row',
-            gap: 12,
-            maxWidth: '80%',
-          }}
-        >
-          {isUser ? (
-            <div
-              style={{
-                width: 36,
-                height: 36,
-                backgroundColor: effectiveTheme === 'dark' ? '#1f1f1f' : '#F5F5F5',
-                borderRadius: '50%',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                padding: 6,
-                flexShrink: 0,
-                marginTop: 4,
-              }}
-            >
-              <img src={userAvatar} alt="User" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
-            </div>
-          ) : (
-            <div
-              style={{
-                width: 36,
-                height: 36,
-                backgroundColor: effectiveTheme === 'dark' ? '#1f1f1f' : '#F5F5F5',
-                borderRadius: '50%',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                padding: 6,
-                flexShrink: 0,
-                marginTop: 4,
-              }}
-            >
-              <img src={moteLogo} alt="AI" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
-            </div>
-          )}
-          <div style={{ flex: 1 }}>
-            {/* Tool Calls - Collapsible - Show before content for consistency */}
-            {hasToolCalls && (
-              <div style={{ marginBottom: hasContent ? 8 : 0 }}>
-                <Collapse
-                  ghost
-                  size="small"
-                  items={[
-                    {
-                      key: '1',
-                      label: (
-                        <span style={{ fontSize: 12, color: token.colorTextSecondary }}>
-                          <ToolOutlined style={{ marginRight: 4 }} />
-                          工具调用 ({msg.tool_calls?.length})
-                        </span>
-                      ),
-                      children: (
-                        <div style={{ fontSize: 12, color: token.colorTextSecondary }}>
-                          {msg.tool_calls?.map((tool, idx) => (
-                            <div key={idx} style={{ marginBottom: idx < msg.tool_calls!.length - 1 ? 12 : 0 }}>
-                              <div style={{ fontWeight: 500, marginBottom: 4 }}>
-                                {tool.name}
-                              </div>
-                              {tool.arguments && (
-                                <div style={{ marginBottom: 4 }}>
-                                  <div style={{ color: token.colorTextSecondary, marginBottom: 2, fontSize: 11 }}>参数:</div>
-                                  <pre style={{
-                                    background: token.colorBgLayout,
-                                    padding: 8,
-                                    borderRadius: 4,
-                                    overflow: 'auto',
-                                    margin: 0,
-                                    fontSize: 11,
-                                    border: `1px solid ${token.colorBorderSecondary}`,
-                                    whiteSpace: 'pre-wrap',
-                                    wordBreak: 'break-word',
-                                    maxWidth: '100%',
-                                  }}>
-                                    {(() => {
-                                      try {
-                                        return JSON.stringify(JSON.parse(tool.arguments!), null, 2);
-                                      } catch {
-                                        return tool.arguments;
-                                      }
-                                    })()}
-                                  </pre>
-                                </div>
-                              )}
-                              {tool.error && (
-                                <div style={{ color: '#ff4d4f', marginBottom: 4 }}>
-                                  错误: {tool.error}
-                                </div>
-                              )}
-                              {tool.result && (
-                                <div>
-                                  <div style={{ color: token.colorTextSecondary, marginBottom: 2, fontSize: 11 }}>结果:</div>
-                                  <pre style={{
-                                    background: token.colorBgLayout,
-                                    padding: 8,
-                                    borderRadius: 4,
-                                    overflow: 'auto',
-                                    margin: 0,
-                                    fontSize: 11,
-                                    border: `1px solid ${token.colorBorderSecondary}`,
-                                    whiteSpace: 'pre-wrap',
-                                    wordBreak: 'break-word',
-                                    maxWidth: '100%',
-                                  }}>
-                                    {typeof tool.result === 'string' 
-                                      ? tool.result 
-                                      : JSON.stringify(tool.result, null, 2)}
-                                  </pre>
-                                </div>
-                              )}
-                            </div>
-                          ))}
-                        </div>
-                      ),
-                    },
-                  ]}
-                />
-              </div>
-            )}            
-            {/* Main message content - only show if there's actual content - Display after tool calls */}
-            {hasContent && (
-              <div
-                style={{
-                  background: isUser ? token.colorPrimary : token.colorBgLayout,
-                  color: isUser ? '#fff' : token.colorText,
-                  padding: '12px 16px',
-                  borderRadius: 12,
-                  maxWidth: '100%',
-                  wordBreak: 'break-word',
-                  marginTop: hasToolCalls ? 8 : 0,
-                  fontSize: 13,
-                }}
-              >
-                {isUser ? (
-                  <Text style={{ color: '#fff', whiteSpace: 'pre-wrap', fontSize: 13 }}>{msg.content}</Text>
-                ) : (
-                  <div className="markdown-content">
-                    <ReactMarkdown>{msg.content}</ReactMarkdown>
-                  </div>
-                )}
-              </div>
-            )}
-            {/* Action buttons for assistant messages */}
-            {!isUser && hasContent && (
-              <div style={{ 
-                display: 'flex', 
-                gap: 4, 
-                marginTop: 4,
-                opacity: 0.6,
-              }}
-              className="message-actions"
-              >
-                <Tooltip title="复制">
-                  <Button
-                    type="text"
-                    size="small"
-                    icon={<CopyOutlined />}
-                    onClick={() => handleCopyMessage(msg.content)}
-                    style={{ fontSize: 12, color: token.colorTextSecondary }}
-                  />
-                </Tooltip>
-                <Tooltip title="编辑">
-                  <Button
-                    type="text"
-                    size="small"
-                    icon={<EditOutlined />}
-                    onClick={() => handleEditMessage(index, msg.content)}
-                    style={{ fontSize: 12, color: token.colorTextSecondary }}
-                  />
-                </Tooltip>
-                <Tooltip title="删除">
-                  <Button
-                    type="text"
-                    size="small"
-                    icon={<DeleteOutlined />}
-                    onClick={() => handleDeleteMessage(index)}
-                    style={{ fontSize: 12, color: token.colorTextSecondary }}
-                  />
-                </Tooltip>
-              </div>
-            )}
-          </div>
-        </div>
-      </List.Item>
-    );
-  };
+  // Memoize callbacks to prevent unnecessary re-renders
+  const handleCopyCallback = useCallback((content: string) => {
+    handleCopyMessage(content);
+  }, []);
+
+  const handleEditCallback = useCallback((index: number, content: string) => {
+    handleEditMessage(index, content);
+  }, []);
+
+  const handleDeleteCallback = useCallback((index: number) => {
+    handleDeleteMessage(index);
+  }, []);
+
+  // Memoized message list to prevent re-rendering when only streaming content changes
+  const renderedMessages = useMemo(() => {
+    return messages.map((msg, index) => {
+      const isUser = msg.role === 'user';
+      const isJsonContent = !isUser && msg.content && msg.content.trim().startsWith('{') && msg.content.trim().endsWith('}');
+      const hasToolCalls = msg.tool_calls && msg.tool_calls.length > 0;
+      
+      // Hide JSON-only assistant messages
+      if (!isUser && isJsonContent && !hasToolCalls) {
+        return null;
+      }
+      
+      return (
+        <MessageItem
+          key={`msg-${index}-${msg.timestamp || index}`}
+          msg={msg}
+          index={index}
+          isUser={isUser}
+          effectiveTheme={effectiveTheme}
+          tokenColors={tokenColors}
+          onCopy={handleCopyCallback}
+          onEdit={handleEditCallback}
+          onDelete={handleDeleteCallback}
+        />
+      );
+    });
+  }, [messages, effectiveTheme, tokenColors, handleCopyCallback, handleEditCallback, handleDeleteCallback]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       {/* Error Banner - shown when there's a connection or stream error */}
       {(connectionStatus?.status.activeError || streamError) && (
-        <div style={{ padding: '8px 24px 0', background: token.colorBgContainer }}>
+        <div style={{ padding: '8px 24px 0', background: tokenColors.colorBgContainer }}>
           <ErrorBanner
             source={connectionStatus?.status.activeError?.source || 'stream'}
             name={connectionStatus?.status.activeError?.name || 'provider'}
@@ -791,77 +1494,98 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
         </div>
       )}
       
-      {/* Header - 无标题 */}
-      <div style={{ padding: '12px 24px', borderBottom: `1px solid ${token.colorBorderSecondary}`, background: token.colorBgContainer }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          {/* Left side: Connection status indicator */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            {connectionStatus && (
-              <Tooltip title={hasConnectionIssues ? '部分连接异常，点击查看' : '连接正常'}>
-                <div>
-                  <StatusIndicator
-                    status={connectionStatus.status.overallHealth}
-                    showLabel={hasConnectionIssues}
-                    size="sm"
-                    onClick={() => connectionStatus.refreshStatus()}
-                  />
-                </div>
-              </Tooltip>
-            )}
+      {/* Truncation Banner - shown when response is cut off due to max_tokens */}
+      {truncated && truncatedInfo && (
+        <div style={{ 
+          padding: '12px 24px', 
+          background: tokenColors.colorWarningBg, 
+          borderBottom: `1px solid ${tokenColors.colorWarningBorder}`,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 12
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1 }}>
+            <span style={{ color: tokenColors.colorWarning, fontSize: 16 }}>⚠️</span>
+            <Text style={{ color: tokenColors.colorWarningText }}>
+              已达到单次响应的 token 上限，正在继续执行中...（共触发 {truncatedInfo.pendingToolCalls} 次）
+            </Text>
           </div>
-          
-          {/* Right side: Controls */}
           <Space>
-            <Select
-              value={currentModel}
-              onChange={handleModelChange}
-              loading={modelLoading}
-              style={{ width: 240 }}
-              placeholder="选择模型"
-              optionLabelProp="label"
+            <Button 
+              danger
+              size="small"
+              onClick={handleStop}
+              disabled={!streaming}
             >
-              {/* Group models by provider if multiple providers exist */}
-              {(() => {
-                const providers = [...new Set(models.map(m => m.provider || 'copilot'))];
-                if (providers.length <= 1) {
-                  // Single provider: flat list
-                  return models.map((model) => (
-                    <Select.Option 
-                      key={model.id} 
-                      value={model.id} 
-                      label={model.display_name}
-                      disabled={model.available === false}
-                    >
-                      <Tooltip title={model.description} placement="left">
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                          <span>{model.display_name}</span>
-                          <Space size={4}>
-                            {model.is_free && <Tag color="green" style={{ marginRight: 0 }}>免费</Tag>}
-                            {model.available === false && <Tag color="red" style={{ marginRight: 0 }}>不可用</Tag>}
-                          </Space>
-                        </div>
-                      </Tooltip>
-                    </Select.Option>
-                  ));
-                }
-                // Multiple providers: use OptGroup
-                const grouped: Record<string, Model[]> = {};
-                models.forEach(m => {
-                  const p = m.provider || 'copilot';
-                  if (!grouped[p]) grouped[p] = [];
-                  grouped[p].push(m);
-                });
-                return Object.keys(grouped).map(provider => (
-                  <Select.OptGroup 
-                    key={provider}
-                    label={
-                      <Space>
-                        {provider === 'copilot' ? <GithubOutlined /> : <OllamaIcon />}
-                        {provider === 'copilot' ? 'GitHub Copilot' : 'Ollama'}
-                      </Space>
-                    }
-                  >
-                    {grouped[provider].map(model => (
+              停止执行
+            </Button>
+            <Button 
+              size="small"
+              onClick={handleDismissTruncation}
+            >
+              关闭提示
+            </Button>
+          </Space>
+        </div>
+      )}
+      
+      {/* Header - 无标题 */}
+      <div style={{ padding: '12px 24px', borderBottom: `1px solid ${tokenColors.colorBorderSecondary}`, background: tokenColors.colorBgContainer }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          {/* Left side: Skills, Model, Workspace */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Space>
+              {/* Skills selector */}
+              {skills.length > 0 && (
+                <Dropdown
+                  menu={{
+                    items: skills.filter(s => s.state === 'active').map(skill => ({
+                      key: skill.name,
+                      label: (
+                        <Tooltip title={skill.description} placement="left">
+                          <div style={{ fontSize: '12px', fontWeight: 'normal' }}>
+                            {skill.name}
+                          </div>
+                        </Tooltip>
+                      ),
+                    })),
+                    selectable: true,
+                    multiple: true,
+                    selectedKeys: selectedSkills.length > 0 ? selectedSkills : skills.filter(s => s.state === 'active').map(s => s.name),
+                    onSelect: ({ selectedKeys }) => {
+                      const activeSkills = skills.filter(s => s.state === 'active');
+                      const allSelected = selectedKeys.length === activeSkills.length;
+                      handleSkillsChange(allSelected ? [] : selectedKeys);
+                    },
+                    onDeselect: ({ selectedKeys }) => {
+                      handleSkillsChange(selectedKeys);
+                    },
+                  }}
+                  trigger={['click']}
+                  disabled={!sessionId}
+                >
+                  <Button 
+                    icon={<ThunderboltOutlined />} 
+                    style={{ width: 44 }}
+                    loading={skillsLoading}
+                  />
+                </Dropdown>
+              )}
+              <Select
+                value={currentModel}
+                onChange={handleModelChange}
+                loading={modelLoading}
+                style={{ width: 240 }}
+                placeholder="选择模型"
+                optionLabelProp="label"
+              >
+                {/* Group models by provider if multiple providers exist */}
+                {(() => {
+                  const providers = [...new Set(models.map(m => m.provider || 'copilot'))];
+                  if (providers.length <= 1) {
+                    // Single provider: flat list
+                    return models.map((model) => (
                       <Select.Option 
                         key={model.id} 
                         value={model.id} 
@@ -878,33 +1602,87 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
                           </div>
                         </Tooltip>
                       </Select.Option>
-                    ))}
-                  </Select.OptGroup>
-                ));
-              })()}
-            </Select>
-            {/* Workspace button */}
-            {workspace ? (
-              <Tooltip title={`工作区: ${workspace.path}`}>
-                <Button 
-                  icon={<LinkOutlined />} 
-                  onClick={() => setWorkspaceModalVisible(true)}
-                  style={{ color: '#52c41a' }}
-                  className="page-header-btn"
-                >
-                  {workspace.alias || workspace.path.split('/').pop()}
-                </Button>
-              </Tooltip>
-            ) : (
-              <Tooltip title="设置工作区">
-                <Button 
-                  icon={<FolderOutlined />} 
-                  onClick={() => setWorkspaceModalVisible(true)}
-                  disabled={!sessionId}
-                  className="page-header-btn"
-                >
-                  工作区
-                </Button>
+                    ));
+                  }
+                  // Multiple providers: use OptGroup
+                  const grouped: Record<string, Model[]> = {};
+                  models.forEach(m => {
+                    const p = m.provider || 'copilot';
+                    if (!grouped[p]) grouped[p] = [];
+                    grouped[p].push(m);
+                  });
+                  return Object.keys(grouped).map(provider => (
+                    <Select.OptGroup 
+                      key={provider}
+                      label={
+                        <Space>
+                          {(provider === 'copilot' || provider === 'copilot-acp') ? <GithubOutlined /> : <OllamaIcon />}
+                          {provider === 'copilot' ? 'Copilot API' : provider === 'copilot-acp' ? 'Copilot ACP' : 'Ollama'}
+                        </Space>
+                      }
+                    >
+                      {grouped[provider].map(model => (
+                        <Select.Option 
+                          key={model.id} 
+                          value={model.id} 
+                          label={model.display_name}
+                          disabled={model.available === false}
+                        >
+                          <Tooltip title={model.description} placement="left">
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                              <span>{model.display_name}</span>
+                              <Space size={4}>
+                                {model.is_free && <Tag color="green" style={{ marginRight: 0 }}>免费</Tag>}
+                                {model.available === false && <Tag color="red" style={{ marginRight: 0 }}>不可用</Tag>}
+                              </Space>
+                            </div>
+                          </Tooltip>
+                        </Select.Option>
+                      ))}
+                    </Select.OptGroup>
+                  ));
+                })()}
+              </Select>
+
+              {/* Workspace button */}
+              {workspace ? (
+                <Tooltip title={`工作区: ${workspace.path}`}>
+                  <Button 
+                    icon={<LinkOutlined />} 
+                    onClick={() => setWorkspaceModalVisible(true)}
+                    style={{ color: '#52c41a' }}
+                    className="page-header-btn"
+                  >
+                    {workspace.alias || workspace.path.split('/').pop()}
+                  </Button>
+                </Tooltip>
+              ) : (
+                <Tooltip title="设置工作区">
+                  <Button 
+                    icon={<FolderOutlined />} 
+                    onClick={() => setWorkspaceModalVisible(true)}
+                    disabled={!sessionId}
+                    className="page-header-btn"
+                  >
+                    工作区
+                  </Button>
+                </Tooltip>
+              )}
+            </Space>
+          </div>
+          
+          {/* Right side: Connection Status, New Chat, Clear */}
+          <Space>
+            {connectionStatus && (
+              <Tooltip title={hasConnectionIssues ? '部分连接异常，点击查看' : '连接正常'}>
+                <div>
+                  <StatusIndicator
+                    status={connectionStatus.status.overallHealth}
+                    showLabel={hasConnectionIssues}
+                    size="sm"
+                    onClick={() => connectionStatus.refreshStatus()}
+                  />
+                </div>
               </Tooltip>
             )}
             <Tooltip title="新建对话">
@@ -975,15 +1753,36 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
             <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
               绑定工作区后，对话中可以访问该目录下的文件。工作区与当前会话关联。
             </Typography.Paragraph>
-            <Input
-              placeholder="输入工作区路径，如 /path/to/project"
-              value={workspacePath}
-              onChange={(e) => setWorkspacePath(e.target.value)}
-              onPressEnter={handleBindWorkspace}
-            />
+            <Space.Compact style={{ width: '100%' }}>
+              <Input
+                style={{ flex: 1 }}
+                placeholder="输入工作区路径，如 /path/to/project"
+                value={workspacePath}
+                onChange={(e) => setWorkspacePath(e.target.value)}
+                onPressEnter={handleBindWorkspace}
+              />
+              <Button
+                icon={<FolderOpenOutlined />}
+                onClick={() => setDirectoryPickerVisible(true)}
+              >
+                浏览
+              </Button>
+            </Space.Compact>
           </div>
         )}
       </Modal>
+
+      {/* Directory Picker */}
+      <DirectoryPicker
+        open={directoryPickerVisible}
+        onCancel={() => setDirectoryPickerVisible(false)}
+        onSelect={(path) => {
+          setWorkspacePath(path);
+          setDirectoryPickerVisible(false);
+        }}
+        initialPath={workspacePath || undefined}
+        title="选择工作区目录"
+      />
 
       {/* Edit Message Modal */}
       <Modal
@@ -1016,170 +1815,49 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
       </Modal>
 
       {/* Messages List */}
-      <div style={{ flex: 1, overflow: 'auto', padding: '0 8px' }}>
+      <div ref={messagesContainerRef} style={{ flex: 1, overflowX: 'hidden', overflowY: 'auto', padding: '0 8px' }}>
         {sessionLoading ? (
           <div style={{ textAlign: 'center', padding: 48 }}>
             <Spin tip="加载中..." />
           </div>
-        ) : messages.length === 0 && !streaming ? (
-          <div style={{ textAlign: 'center', padding: 48, color: '#999' }}>
-            <img src={moteLogo} alt="Mote" style={{ width: 48, height: 48, marginBottom: 16 }} />
-            <div>开始对话吧！</div>
-          </div>
         ) : (
-          <List dataSource={messages} renderItem={renderMessage} split={false} />
-        )}
-
-        {/* Streaming Response */}
-        {streaming && (currentResponse || Object.keys(currentToolCalls).length > 0) && (
-          <List.Item style={{ justifyContent: 'flex-start', padding: '16px 16px', border: 'none' }}>
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'flex-start',
-                flexDirection: 'row',
-                gap: 12,
-                maxWidth: '80%',
-              }}
-            >
-              <div
-                style={{
-                  width: 36,
-                  height: 36,
-                  backgroundColor: effectiveTheme === 'dark' ? '#1f1f1f' : '#F5F5F5',
-                  borderRadius: '50%',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  padding: 6,
-                  flexShrink: 0,
-                  marginTop: 4,
-                }}
-              >
-                <img src={moteLogo} alt="AI" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+          <>
+            {/* Empty state - show only when no messages and not streaming */}
+            {messages.length === 0 && !streaming && (
+              <div style={{ textAlign: 'center', padding: 48, color: '#999' }}>
+                <img src={moteLogo} alt="Mote" style={{ width: 48, height: 48, marginBottom: 16 }} />
+                <div>开始对话吧！</div>
               </div>
-              <div style={{ flex: 1 }}>
-                {/* Show current tool calls first */}
-                {Object.keys(currentToolCalls).length > 0 && (
-                  <div style={{ marginBottom: currentResponse ? 8 : 0 }}>
-                    <Collapse
-                      ghost
-                      size="small"
-                      defaultActiveKey={['1']}
-                      items={[
-                        {
-                          key: '1',
-                          label: (
-                            <span style={{ fontSize: 12, color: token.colorTextSecondary }}>
-                              <ToolOutlined style={{ marginRight: 4 }} />
-                              工具调用 ({Object.keys(currentToolCalls).length})
-                            </span>
-                          ),
-                          children: (
-                            <div style={{ fontSize: 12, color: token.colorTextSecondary }}>
-                              {Object.values(currentToolCalls).map((tool, idx) => (
-                                <div key={idx} style={{ marginBottom: idx < Object.keys(currentToolCalls).length - 1 ? 12 : 0 }}>
-                                  <div style={{ fontWeight: 500, marginBottom: 4 }}>
-                                    {tool.name}
-                                    {!tool.result && !tool.error && (
-                                      <Spin size="small" style={{ marginLeft: 8 }} />
-                                    )}
-                                  </div>
-                                  {tool.arguments && (
-                                    <div style={{ marginBottom: 4 }}>
-                                      <div style={{ color: token.colorTextSecondary, marginBottom: 2, fontSize: 11 }}>参数:</div>
-                                      <pre style={{
-                                        background: token.colorBgLayout,
-                                        padding: 8,
-                                        borderRadius: 4,
-                                        overflow: 'auto',
-                                        margin: 0,
-                                        fontSize: 11,
-                                        border: `1px solid ${token.colorBorderSecondary}`,
-                                        whiteSpace: 'pre-wrap',
-                                        wordBreak: 'break-word',
-                                        maxWidth: '100%',
-                                      }}>
-                                        {(() => {
-                                          try {
-                                            return JSON.stringify(JSON.parse(tool.arguments!), null, 2);
-                                          } catch {
-                                            return tool.arguments;
-                                          }
-                                        })()}
-                                      </pre>
-                                    </div>
-                                  )}
-                                  {tool.error && (
-                                    <div style={{ color: '#ff4d4f', marginBottom: 4 }}>
-                                      错误: {tool.error}
-                                    </div>
-                                  )}
-                                  {tool.result && !tool.error && (
-                                    <div>
-                                      <div style={{ color: token.colorTextSecondary, marginBottom: 2, fontSize: 11 }}>结果:</div>
-                                      <pre style={{
-                                        background: token.colorBgLayout,
-                                        padding: 8,
-                                        borderRadius: 4,
-                                        overflow: 'auto',
-                                        margin: 0,
-                                        fontSize: 11,
-                                        border: `1px solid ${token.colorBorderSecondary}`,
-                                        whiteSpace: 'pre-wrap',
-                                        wordBreak: 'break-word',
-                                        maxWidth: '100%',
-                                      }}>
-                                        {typeof tool.result === 'string' 
-                                          ? tool.result 
-                                          : JSON.stringify(tool.result, null, 2)}
-                                      </pre>
-                                    </div>
-                                  )}
-                                </div>
-                              ))}
-                            </div>
-                          ),
-                        },
-                      ]}
-                    />
-                  </div>
-                )}
-                
-                {/* Show streaming content */}
-                {currentResponse && (
-                  <div
-                    style={{
-                      background: token.colorBgLayout,
-                      color: token.colorText,
-                      padding: '12px 16px',
-                      borderRadius: 12,
-                      maxWidth: '100%',
-                      fontSize: 13,
-                    }}
-                  >
-                    <div className="markdown-content">
-                      <ReactMarkdown>{currentResponse}</ReactMarkdown>
-                    </div>
-                    <Spin size="small" style={{ marginLeft: 8 }} />
-                  </div>
-                )}
-              </div>
+            )}
+            
+            {/* Message list - always render to avoid remounting */}
+            <div style={{ display: messages.length === 0 && !streaming ? 'none' : 'block' }}>
+              {renderedMessages}
             </div>
-          </List.Item>
-        )}
 
-        {loading && !currentResponse && (
-          <div style={{ textAlign: 'center', padding: 16 }}>
-            <Spin tip="思考中..." />
-          </div>
+            {/* Streaming Response - 使用独立订阅，避免父组件重渲染 */}
+            {streaming && sessionId && (
+              <StreamingContent
+                sessionId={sessionId}
+                tokenColors={tokenColors}
+                effectiveTheme={effectiveTheme}
+                onScrollRequest={() => scrollToBottom('auto', false)}
+              />
+            )}
+
+            {loading && !streaming && (
+              <div style={{ textAlign: 'center', padding: 16 }}>
+                <Spin tip="思考中..." />
+              </div>
+            )}
+          </>
         )}
 
         <div ref={messagesEndRef} />
       </div>
 
       {/* Input Area */}
-      <div style={{ padding: 16, borderTop: `1px solid ${token.colorBorderSecondary}`, background: token.colorBgContainer, position: 'relative' }}>
+      <div style={{ padding: 16, borderTop: `1px solid ${tokenColors.colorBorderSecondary}`, background: tokenColors.colorBgContainer, position: 'relative' }}>
         {/* Prompt Selector */}
         <PromptSelector
           visible={promptSelectorVisible}
@@ -1190,13 +1868,29 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
             setPromptSearchQuery('');
           }}
         />
+        
+        {/* File Selector */}
+        {sessionId && (
+          <FileSelector
+            visible={fileSelectorVisible}
+            searchQuery={fileSearchQuery}
+            sessionId={sessionId}
+            mode={fileSelectorMode}
+            onSelect={handleFileSelect}
+            onCancel={() => {
+              setFileSelectorVisible(false);
+              setFileSearchQuery('');
+            }}
+          />
+        )}
 
         <Space.Compact style={{ width: '100%' }}>
           <TextArea
+            ref={inputRef}
             value={inputValue}
             onChange={handleInputChange}
             onKeyDown={handleKeyPress}
-            placeholder="输入消息... (/ 引用提示词, Shift+Enter 换行)"
+            placeholder="输入消息... (/ 引用提示词, @ 引用文件, Shift+Enter 换行)"
             autoSize={{ minRows: 1, maxRows: 10 }}
             disabled={loading}
             style={{ resize: 'none' }}

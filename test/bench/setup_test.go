@@ -38,6 +38,7 @@ func TestMain(m *testing.M) {
 }
 
 // getBenchServer returns the benchmark server.
+//
 //nolint:unused // Benchmark helper
 func getBenchServer() *gateway.Server {
 	return benchServer

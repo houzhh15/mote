@@ -35,10 +35,10 @@ type Config struct {
 // DefaultConfig returns a Config with sensible defaults.
 func DefaultConfig() Config {
 	return Config{
-		MaxIterations: 10,
-		MaxTokens:     8000,
+		MaxIterations: 1000,
+		MaxTokens:     32000,
 		MaxMessages:   100,
-		Timeout:       5 * time.Minute,
+		Timeout:       10 * time.Minute,
 		StreamOutput:  true,
 		Temperature:   0.7,
 	}

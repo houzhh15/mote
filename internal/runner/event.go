@@ -18,6 +18,13 @@ const (
 	EventTypeError
 	// EventTypeHeartbeat indicates a keepalive heartbeat during long operations.
 	EventTypeHeartbeat
+	// EventTypeTruncated indicates the response was truncated due to max_tokens limit.
+	// User can choose to continue the conversation.
+	EventTypeTruncated
+	// EventTypeThinking indicates agent thinking/reasoning (temporary display).
+	EventTypeThinking
+	// EventTypeToolCallUpdate indicates tool call progress update.
+	EventTypeToolCallUpdate
 )
 
 // String returns the string representation of the event type.
@@ -35,6 +42,12 @@ func (t EventType) String() string {
 		return "error"
 	case EventTypeHeartbeat:
 		return "heartbeat"
+	case EventTypeTruncated:
+		return "truncated"
+	case EventTypeThinking:
+		return "thinking"
+	case EventTypeToolCallUpdate:
+		return "tool_call_update"
 	default:
 		return "unknown"
 	}
@@ -55,8 +68,15 @@ type Event struct {
 	// Content contains the text content for content events.
 	Content string `json:"content,omitempty"`
 
+	// Thinking contains the thinking/reasoning text for thinking events.
+	// This is temporary display content that should be cleared when other output arrives.
+	Thinking string `json:"thinking,omitempty"`
+
 	// ToolCall contains the tool call information for tool_call events.
 	ToolCall *storage.ToolCall `json:"tool_call,omitempty"`
+
+	// ToolCallUpdate contains tool call progress information for tool_call_update events.
+	ToolCallUpdate *ToolCallUpdateEvent `json:"tool_call_update,omitempty"`
 
 	// ToolResult contains the tool execution result for tool_result events.
 	ToolResult *ToolResultEvent `json:"tool_result,omitempty"`
@@ -75,6 +95,13 @@ type Event struct {
 
 	// SessionID is the ID of the session this event belongs to.
 	SessionID string `json:"session_id,omitempty"`
+
+	// TruncatedReason contains the reason for truncation (e.g., "length" for max_tokens limit).
+	// Only set for EventTypeTruncated events.
+	TruncatedReason string `json:"truncated_reason,omitempty"`
+
+	// PendingToolCalls indicates the number of pending tool calls when truncated.
+	PendingToolCalls int `json:"pending_tool_calls,omitempty"`
 }
 
 // ToolResultEvent represents the result of a tool execution.
@@ -93,6 +120,21 @@ type ToolResultEvent struct {
 
 	// DurationMs is the time taken to execute the tool in milliseconds.
 	DurationMs int64 `json:"duration_ms,omitempty"`
+}
+
+// ToolCallUpdateEvent represents a tool call progress update.
+type ToolCallUpdateEvent struct {
+	// ToolCallID is the ID of the tool call being updated.
+	ToolCallID string `json:"tool_call_id"`
+
+	// ToolName is the name of the tool being called.
+	ToolName string `json:"tool_name"`
+
+	// Status is the current status of the tool call (e.g., "running", "completed").
+	Status string `json:"status,omitempty"`
+
+	// Arguments contains the tool call arguments (may be partial during streaming).
+	Arguments string `json:"arguments,omitempty"`
 }
 
 // NewContentEvent creates a new content event.
@@ -143,6 +185,16 @@ func NewErrorEvent(err error) Event {
 		Type:     EventTypeError,
 		Error:    err,
 		ErrorMsg: msg,
+	}
+}
+
+// NewTruncatedEvent creates a new truncated event when response is cut off due to token limits.
+func NewTruncatedEvent(reason string, pendingToolCalls int, usage *Usage) Event {
+	return Event{
+		Type:             EventTypeTruncated,
+		TruncatedReason:  reason,
+		PendingToolCalls: pendingToolCalls,
+		Usage:            usage,
 	}
 }
 

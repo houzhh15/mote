@@ -20,18 +20,30 @@ func TestGetModelInfo(t *testing.T) {
 			wantFree: true,
 		},
 		{
-			name:     "claude-sonnet-4",
-			modelID:  "claude-sonnet-4",
+			name:     "gpt-4o",
+			modelID:  "gpt-4o",
 			wantNil:  false,
-			wantID:   "claude-sonnet-4",
-			wantFree: false,
+			wantID:   "gpt-4o",
+			wantFree: true,
 		},
 		{
-			name:     "gemini-2.5-pro",
-			modelID:  "gemini-2.5-pro",
+			name:     "gpt-5-mini",
+			modelID:  "gpt-5-mini",
 			wantNil:  false,
-			wantID:   "gemini-2.5-pro",
-			wantFree: false, // gemini-2.5-pro is premium 1x
+			wantID:   "gpt-5-mini",
+			wantFree: true,
+		},
+		{
+			name:     "grok-code-fast-1",
+			modelID:  "grok-code-fast-1",
+			wantNil:  false,
+			wantID:   "grok-code-fast-1",
+			wantFree: true,
+		},
+		{
+			name:    "ACP model not in API registry",
+			modelID: "claude-sonnet-4.5",
+			wantNil: true,
 		},
 		{
 			name:    "unknown model",
@@ -88,8 +100,8 @@ func TestListModels(t *testing.T) {
 		}
 	}
 
-	// Check that expected models are present
-	expectedModels := []string{"gpt-4.1", "claude-sonnet-4", "gemini-2.5-pro"}
+	// Check that expected API models are present
+	expectedModels := []string{"gpt-4.1", "gpt-4o", "gpt-5-mini", "grok-code-fast-1"}
 	for _, expected := range expectedModels {
 		found := false
 		for _, m := range models {
@@ -134,8 +146,9 @@ func TestListFreeModels(t *testing.T) {
 func TestListPremiumModels(t *testing.T) {
 	premiumModels := ListPremiumModels()
 
-	if len(premiumModels) == 0 {
-		t.Fatal("ListPremiumModels() returned empty list")
+	// All API models are free, so premium list should be empty
+	if len(premiumModels) != 0 {
+		t.Errorf("ListPremiumModels() returned %d models, want 0 (all API models are free)", len(premiumModels))
 	}
 
 	// Verify all returned models are actually premium
@@ -164,8 +177,8 @@ func TestListModelsByFamily(t *testing.T) {
 		wantNotEmpty bool
 	}{
 		{FamilyOpenAI, true},
-		{FamilyAnthropic, true},
-		{FamilyGoogle, true},
+		{FamilyAnthropic, false}, // Anthropic models are in ACP registry
+		{FamilyGoogle, false},    // Google models are in ACP registry
 		{FamilyXAI, true},
 		{ModelFamily("unknown"), false},
 	}
@@ -201,11 +214,12 @@ func TestGetModelMultiplier(t *testing.T) {
 		modelID string
 		want    int
 	}{
-		{"gpt-4.1", 0},         // free
-		{"gpt-5", 1},           // 1x premium (updated from 5x)
-		{"claude-sonnet-4", 1}, // 1x premium
-		{"claude-opus-4.5", 3}, // 3x premium (updated from 50x)
-		{"unknown", -1},        // not found
+		{"gpt-4.1", 0},            // free
+		{"gpt-4o", 0},             // free
+		{"gpt-5-mini", 0},         // free
+		{"grok-code-fast-1", 0},   // free
+		{"unknown", -1},           // not found
+		{"claude-sonnet-4.5", -1}, // ACP model, not in API registry
 	}
 
 	for _, tt := range tests {
@@ -224,8 +238,9 @@ func TestIsModelSupported(t *testing.T) {
 		want    bool
 	}{
 		{"gpt-4.1", true},
-		{"claude-sonnet-4", true},
-		{"gemini-2.5-pro", true}, // updated from gemini-2.0-flash
+		{"gpt-4o", true},
+		{"grok-code-fast-1", true},
+		{"claude-sonnet-4.5", false}, // ACP model, not in API registry
 		{"unknown-model", false},
 		{"", false},
 	}

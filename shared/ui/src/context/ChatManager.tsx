@@ -7,17 +7,23 @@
  * 3. 返回页面时可以查看进度
  */
 
-import React, { createContext, useContext, useRef, useCallback, useState } from 'react';
+import React, { createContext, useContext, useRef, useCallback } from 'react';
 import type { ChatRequest, StreamEvent, Message, ToolCallResult, ErrorDetail } from '../types';
 
 export interface ChatState {
   sessionId: string;
   streaming: boolean;
   currentContent: string;
-  currentToolCalls: { [key: string]: { name: string; result?: unknown; error?: string } };
+  currentThinking: string;  // Temporary thinking content (cleared when other output arrives)
+  currentToolCalls: { [key: string]: { name: string; status?: string; arguments?: string; result?: unknown; error?: string } };
   messages: Message[];
+  finalMessage?: Message;  // Set when streaming completes, contains the final assistant message
   error?: string;
   errorDetail?: ErrorDetail;  // Structured error info
+  // Truncation info - when response is cut off due to max_tokens
+  truncated?: boolean;
+  truncatedReason?: string;
+  pendingToolCalls?: number;
 }
 
 export interface ChatManagerContextType {
@@ -50,16 +56,59 @@ export const ChatManagerProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const activeChatsRef = useRef<Map<string, ActiveChat>>(new Map());
   // 预注册的订阅者（在 startChat 之前订阅的）
   const pendingSubscribersRef = useRef<Map<string, Set<(state: ChatState) => void>>>(new Map());
-  // 强制更新用的状态
-  const [, forceUpdate] = useState(0);
+  
+  // RAF 节流相关：每个 session 的待更新标记和 RAF id
+  const pendingUpdatesRef = useRef<Map<string, boolean>>(new Map());
+  const rafIdsRef = useRef<Map<string, number>>(new Map());
 
-  const notifySubscribers = useCallback((sessionId: string) => {
+  // 立即通知订阅者（用于关键事件如 done, error）
+  const notifySubscribersImmediate = useCallback((sessionId: string) => {
+    // 取消该 session 的待处理 RAF
+    const rafId = rafIdsRef.current.get(sessionId);
+    if (rafId) {
+      cancelAnimationFrame(rafId);
+      rafIdsRef.current.delete(sessionId);
+    }
+    pendingUpdatesRef.current.delete(sessionId);
+    
     const chat = activeChatsRef.current.get(sessionId);
     if (chat) {
       chat.subscribers.forEach(cb => cb({ ...chat.state }));
     }
-    forceUpdate(n => n + 1);
+    // 不再调用 forceUpdate，订阅者已经被通知
   }, []);
+
+  // RAF 节流版本的通知（用于高频内容更新）
+  const notifySubscribers = useCallback((sessionId: string, immediate = false) => {
+    if (immediate) {
+      notifySubscribersImmediate(sessionId);
+      return;
+    }
+    
+    // 标记有待更新
+    pendingUpdatesRef.current.set(sessionId, true);
+    
+    // 如果已经有 RAF 在排队，不重复请求
+    if (rafIdsRef.current.has(sessionId)) {
+      return;
+    }
+    
+    // 请求下一帧更新
+    const rafId = requestAnimationFrame(() => {
+      rafIdsRef.current.delete(sessionId);
+      
+      if (pendingUpdatesRef.current.get(sessionId)) {
+        pendingUpdatesRef.current.delete(sessionId);
+        const chat = activeChatsRef.current.get(sessionId);
+        if (chat) {
+          chat.subscribers.forEach(cb => cb({ ...chat.state }));
+        }
+        // 不再调用 forceUpdate，订阅者已经被通知
+      }
+    });
+    
+    rafIdsRef.current.set(sessionId, rafId);
+  }, [notifySubscribersImmediate]);
 
   const getChatState = useCallback((sessionId: string): ChatState | undefined => {
     return activeChatsRef.current.get(sessionId)?.state;
@@ -123,6 +172,7 @@ export const ChatManagerProvider: React.FC<{ children: React.ReactNode }> = ({ c
       sessionId,
       streaming: true,
       currentContent: '',
+      currentThinking: '',
       currentToolCalls: {},
       messages: [],
     };
@@ -144,7 +194,8 @@ export const ChatManagerProvider: React.FC<{ children: React.ReactNode }> = ({ c
     notifySubscribers(sessionId);
 
     let accumulatedContent = '';
-    let accumulatedToolCalls: { [key: string]: { name: string; arguments?: string; result?: unknown; error?: string } } = {};
+    let accumulatedThinking = '';  // 累积 thinking 内容
+    let accumulatedToolCalls: { [key: string]: { name: string; status?: string; arguments?: string; result?: unknown; error?: string } } = {};
     let isFinalized = false;
 
     const handleEvent = (event: StreamEvent) => {
@@ -154,13 +205,46 @@ export const ChatManagerProvider: React.FC<{ children: React.ReactNode }> = ({ c
       if (event.type === 'content' && content) {
         accumulatedContent += content;
         state.currentContent = accumulatedContent;
+        // Clear thinking when content arrives
+        accumulatedThinking = '';
+        state.currentThinking = '';
+        // 使用 RAF 节流，减少高频更新
+        notifySubscribers(sessionId);
+      } else if (event.type === 'thinking' && event.thinking) {
+        // Accumulate thinking content (append instead of replace)
+        accumulatedThinking += event.thinking;
+        state.currentThinking = accumulatedThinking;
+        // thinking 也使用节流
         notifySubscribers(sessionId);
       } else if (event.type === 'tool_call' && event.tool_call) {
         const toolName = event.tool_call.name;
         const toolArgs = event.tool_call.arguments;
         if (toolName) {
-          accumulatedToolCalls[toolName] = { name: toolName, arguments: toolArgs };
+          accumulatedToolCalls[toolName] = { name: toolName, status: 'running', arguments: toolArgs };
           state.currentToolCalls = { ...accumulatedToolCalls };
+          // Clear thinking when tool call starts
+          accumulatedThinking = '';
+          state.currentThinking = '';
+          // 工具调用开始时立即通知
+          notifySubscribers(sessionId, true);
+        }
+      } else if (event.type === 'tool_call_update' && event.tool_call_update) {
+        const toolName = event.tool_call_update.tool_name;
+        const status = event.tool_call_update.status;
+        const args = event.tool_call_update.arguments;
+        if (toolName) {
+          const existing = accumulatedToolCalls[toolName];
+          accumulatedToolCalls[toolName] = {
+            ...existing,
+            name: toolName,
+            status: status || existing?.status,
+            arguments: args || existing?.arguments,
+          };
+          state.currentToolCalls = { ...accumulatedToolCalls };
+          // Clear thinking when tool call updates
+          accumulatedThinking = '';
+          state.currentThinking = '';
+          // 工具更新使用节流
           notifySubscribers(sessionId);
         }
       } else if (event.type === 'tool_result' && event.tool_result) {
@@ -183,8 +267,14 @@ export const ChatManagerProvider: React.FC<{ children: React.ReactNode }> = ({ c
       } else if (event.type === 'done' && !isFinalized) {
         isFinalized = true;
         state.streaming = false;
-        state.currentContent = '';
-        state.currentToolCalls = {};
+        
+        // Keep the final content visible (don't clear it immediately)
+        // ChatPage will handle clearing after adding to messages list
+        state.currentContent = accumulatedContent;
+        accumulatedThinking = '';
+        state.currentThinking = '';
+        // Keep tool calls visible until ChatPage processes them
+        // state.currentToolCalls = {}; // Don't clear - let ChatPage handle it
 
         const toolCallsArray: ToolCallResult[] = Object.values(accumulatedToolCalls).filter(tc => tc.name);
         
@@ -199,8 +289,20 @@ export const ChatManagerProvider: React.FC<{ children: React.ReactNode }> = ({ c
         }
 
         state.messages = [assistantMessage];
-        notifySubscribers(sessionId);
+        state.finalMessage = assistantMessage; // Mark completion with final message
+        // done 事件立即通知
+        notifySubscribers(sessionId, true);
         onComplete?.(assistantMessage);
+      } else if (event.type === 'truncated') {
+        // Response hit max_tokens limit but execution continues
+        // Just update the warning counter, don't stop streaming
+        state.truncated = true;
+        state.truncatedReason = event.truncated_reason || 'length';
+        // Accumulate the count of truncation events
+        state.pendingToolCalls = (state.pendingToolCalls || 0) + 1;
+        // truncated 立即通知
+        notifySubscribers(sessionId, true);
+        // Don't stop streaming - execution continues automatically
       } else if (event.type === 'error') {
         state.streaming = false;
         state.error = event.error;
@@ -208,7 +310,8 @@ export const ChatManagerProvider: React.FC<{ children: React.ReactNode }> = ({ c
         if (event.error_detail) {
           state.errorDetail = event.error_detail;
         }
-        notifySubscribers(sessionId);
+        // error 立即通知
+        notifySubscribers(sessionId, true);
         onComplete?.(null, event.error);
       }
     };
