@@ -165,6 +165,27 @@ export const createHttpAdapter = (options: HttpAdapterOptions = {}): APIAdapter 
       });
     },
 
+    // ============== Pause Control Service ==============
+    pauseSession: async (sessionId: string): Promise<void> => {
+      await fetchJSON('/api/v1/pause', {
+        method: 'POST',
+        body: JSON.stringify({ session_id: sessionId }),
+      });
+    },
+
+    resumeSession: async (sessionId: string, userInput?: string): Promise<void> => {
+      await fetchJSON('/api/v1/resume', {
+        method: 'POST',
+        body: JSON.stringify({ session_id: sessionId, user_input: userInput }),
+      });
+    },
+
+    getPauseStatus: async (sessionId: string): Promise<{ paused: boolean; paused_at?: string; timeout_remaining?: number; pending_tools?: string[] }> => {
+      return fetchJSON<{ paused: boolean; paused_at?: string; timeout_remaining?: number; pending_tools?: string[] }>(
+        `/api/v1/pause/status?session_id=${encodeURIComponent(sessionId)}`
+      );
+    },
+
     // ============== Memory Service ==============
     getMemories: async (options?: { limit?: number; offset?: number }): Promise<{ memories: Memory[]; total: number; limit: number; offset: number }> => {
       const params = new URLSearchParams();
@@ -458,6 +479,33 @@ export const createHttpAdapter = (options: HttpAdapterOptions = {}): APIAdapter 
         method: 'POST',
         body: JSON.stringify({ name, target }),
       });
+    },
+
+    checkSkillUpdates: async () => {
+      const data = await fetchJSON<{ success: boolean; data: { total_checked: number; updates_available: Array<{ skill_id: string; local_version: string; embed_version: string; update_available: boolean; local_modified: boolean; description?: string; checked_at: string }> } }>('/api/v1/skills/check-updates', {
+        method: 'POST',
+      });
+      // Map backend response to frontend expected format
+      return {
+        updates: data.data.updates_available || [],
+        total: data.data.total_checked || 0,
+        updated_at: data.data.updates_available?.[0]?.checked_at || new Date().toISOString(),
+      };
+    },
+
+    updateSkill: async (skillId: string, options?: { force?: boolean; backup?: boolean }) => {
+      const data = await fetchJSON<{ success: boolean; data: { skill_id: string; old_version: string; new_version: string; backup_path?: string; reloaded: boolean; duration: string } }>(`/api/v1/skills/${skillId}/update`, {
+        method: 'POST',
+        body: JSON.stringify(options || {}),
+      });
+      // Map backend response to frontend expected format
+      return {
+        success: data.success,
+        skill_id: data.data.skill_id,
+        old_version: data.data.old_version,
+        new_version: data.data.new_version,
+        backup_path: data.data.backup_path,
+      };
     },
 
     // ============== Tools Service (Extended) ==============

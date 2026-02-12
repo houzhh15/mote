@@ -581,7 +581,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
       
       {/* Scrollable Content */}
       <div style={{ flex: 1, overflow: 'auto', padding: 24 }}>
-        <div style={{ maxWidth: 800 }}>
+        <div style={{ maxWidth: 900 }}>
         {/* Service Status */}
         {!hideStatusCard && (
         <Card style={{ marginBottom: 24 }}>

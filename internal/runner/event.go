@@ -1,6 +1,9 @@
 package runner
 
-import "mote/internal/storage"
+import (
+	"mote/internal/provider"
+	"mote/internal/storage"
+)
 
 // EventType represents the type of event emitted during execution.
 type EventType int
@@ -25,6 +28,12 @@ const (
 	EventTypeThinking
 	// EventTypeToolCallUpdate indicates tool call progress update.
 	EventTypeToolCallUpdate
+	// EventTypePause indicates execution has been paused before tool execution.
+	EventTypePause
+	// EventTypePauseTimeout indicates a pause has timed out.
+	EventTypePauseTimeout
+	// EventTypePauseResumed indicates execution has resumed after a pause.
+	EventTypePauseResumed
 )
 
 // String returns the string representation of the event type.
@@ -48,6 +57,12 @@ func (t EventType) String() string {
 		return "thinking"
 	case EventTypeToolCallUpdate:
 		return "tool_call_update"
+	case EventTypePause:
+		return "pause"
+	case EventTypePauseTimeout:
+		return "pause_timeout"
+	case EventTypePauseResumed:
+		return "pause_resumed"
 	default:
 		return "unknown"
 	}
@@ -58,6 +73,18 @@ type Usage struct {
 	PromptTokens     int `json:"prompt_tokens"`
 	CompletionTokens int `json:"completion_tokens"`
 	TotalTokens      int `json:"total_tokens"`
+}
+
+// PauseEventData contains pause-specific information.
+type PauseEventData struct {
+	// SessionID is the ID of the paused session.
+	SessionID string `json:"session_id"`
+
+	// PendingTools is a list of tool calls that were about to be executed.
+	PendingTools []ToolInfo `json:"pending_tools,omitempty"`
+
+	// HasUserInput indicates if user provided input during pause resume.
+	HasUserInput bool `json:"has_user_input,omitempty"`
 }
 
 // Event represents an event emitted during agent execution.
@@ -102,6 +129,9 @@ type Event struct {
 
 	// PendingToolCalls indicates the number of pending tool calls when truncated.
 	PendingToolCalls int `json:"pending_tool_calls,omitempty"`
+
+	// PauseData contains pause-specific information for pause events.
+	PauseData *PauseEventData `json:"pause_data,omitempty"`
 }
 
 // ToolResultEvent represents the result of a tool execution.
@@ -202,5 +232,50 @@ func NewTruncatedEvent(reason string, pendingToolCalls int, usage *Usage) Event 
 func NewHeartbeatEvent() Event {
 	return Event{
 		Type: EventTypeHeartbeat,
+	}
+}
+
+// NewPauseEvent creates a new pause event when execution is paused before tool execution.
+func NewPauseEvent(toolCalls []provider.ToolCall) Event {
+	tools := make([]ToolInfo, len(toolCalls))
+	for i, tc := range toolCalls {
+		// Arguments is string in provider.ToolCall, store as string in map
+		var args map[string]any
+		if tc.Arguments != "" {
+			args = map[string]any{"raw": tc.Arguments}
+		}
+		tools[i] = ToolInfo{
+			ID:        tc.ID,
+			Name:      tc.Name,
+			Arguments: args,
+		}
+	}
+
+	return Event{
+		Type: EventTypePause,
+		PauseData: &PauseEventData{
+			PendingTools: tools,
+		},
+	}
+}
+
+// NewPauseTimeoutEvent creates a new pause timeout event.
+func NewPauseTimeoutEvent(sessionID string) Event {
+	return Event{
+		Type: EventTypePauseTimeout,
+		PauseData: &PauseEventData{
+			SessionID: sessionID,
+		},
+	}
+}
+
+// NewPauseResumedEvent creates a new pause resumed event.
+func NewPauseResumedEvent(sessionID string, hasUserInput bool) Event {
+	return Event{
+		Type: EventTypePauseResumed,
+		PauseData: &PauseEventData{
+			SessionID:    sessionID,
+			HasUserInput: hasUserInput,
+		},
 	}
 }

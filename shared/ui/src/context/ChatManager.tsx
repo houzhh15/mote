@@ -24,6 +24,10 @@ export interface ChatState {
   truncated?: boolean;
   truncatedReason?: string;
   pendingToolCalls?: number;
+  // Pause info - when execution is paused
+  paused?: boolean;
+  pausedAt?: Date;
+  pausePendingTools?: string[];  // Names of tools about to be executed
 }
 
 export interface ChatManagerContextType {
@@ -313,6 +317,32 @@ export const ChatManagerProvider: React.FC<{ children: React.ReactNode }> = ({ c
         // error 立即通知
         notifySubscribers(sessionId, true);
         onComplete?.(null, event.error);
+      } else if (event.type === 'pause') {
+        // Execution paused before tool call
+        state.paused = true;
+        state.pausedAt = new Date();
+        if (event.pause_data?.pending_tools) {
+          state.pausePendingTools = event.pause_data.pending_tools.map(t => t.name);
+        }
+        // Clear thinking when paused
+        accumulatedThinking = '';
+        state.currentThinking = '';
+        // pause 立即通知
+        notifySubscribers(sessionId, true);
+      } else if (event.type === 'pause_timeout') {
+        // Pause timed out, execution will continue
+        state.paused = false;
+        state.pausedAt = undefined;
+        state.pausePendingTools = undefined;
+        // pause_timeout 立即通知
+        notifySubscribers(sessionId, true);
+      } else if (event.type === 'pause_resumed') {
+        // Execution resumed after pause
+        state.paused = false;
+        state.pausedAt = undefined;
+        state.pausePendingTools = undefined;
+        // pause_resumed 立即通知
+        notifySubscribers(sessionId, true);
       }
     };
 

@@ -299,6 +299,7 @@ export const CronPage: React.FC = () => {
 
       {/* Scrollable Content */}
       <div style={{ flex: 1, overflow: 'auto', padding: 24 }}>
+        <div style={{ maxWidth: 900 }}>
         <Spin spinning={loading}>
         {jobs.length === 0 ? (
           <Empty description="暂无定时任务" />
@@ -370,6 +371,7 @@ export const CronPage: React.FC = () => {
           />
         )}
       </Spin>
+        </div>
       </div>
 
       <Modal

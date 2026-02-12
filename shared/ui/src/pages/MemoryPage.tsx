@@ -411,6 +411,7 @@ export const MemoryPage: React.FC = () => {
 
       {/* Scrollable Content */}
       <div style={{ flex: 1, overflow: 'auto', padding: 24 }}>
+        <div style={{ maxWidth: 900 }}>
         <Spin spinning={loading}>
           {memoryGroups.length === 0 ? (
             <Empty description="暂无记忆" />
@@ -441,6 +442,7 @@ export const MemoryPage: React.FC = () => {
             </div>
           )}
         </Spin>
+        </div>
       </div>
 
       {/* View Memory Modal */}

@@ -83,6 +83,10 @@ type Runner struct {
 
 	// Channel system integration
 	channelRegistry *internalChannel.Registry
+
+	// Pause control
+	pauseController PauseController
+	pauseMu         sync.RWMutex
 }
 
 // NewRunner creates a new Runner with a single provider.
@@ -586,6 +590,9 @@ func (r *Runner) Run(ctx context.Context, sessionID, userInput string) (<-chan E
 		return nil, ErrNoProvider
 	}
 
+	// Initialize pause controller if not already done
+	r.initPauseController()
+
 	// Apply timeout - cancel must be deferred inside the goroutine, not here
 	var cancel context.CancelFunc
 	if r.config.Timeout > 0 {
@@ -622,6 +629,9 @@ func (r *Runner) RunWithModel(ctx context.Context, sessionID, userInput, model, 
 	if r.provider == nil && r.providerPool == nil {
 		return nil, ErrNoProvider
 	}
+
+	// Initialize pause controller if not already done
+	r.initPauseController()
 
 	// Apply timeout - cancel must be deferred inside the goroutine, not here
 	var cancel context.CancelFunc
@@ -950,6 +960,46 @@ func (r *Runner) runLoopCore(ctx context.Context, cached *scheduler.CachedSessio
 		}
 		messages = append(messages, assistantMsg)
 
+		// Check for pause before executing tools (API mode only)
+		if r.pauseController != nil {
+			if apiCtrl, ok := r.pauseController.(*APIPauseController); ok {
+				if state, shouldPause := apiCtrl.ShouldPauseBeforeTools(sessionID, resp.ToolCalls); shouldPause {
+					// Send pause event
+					events <- NewPauseEvent(resp.ToolCalls)
+
+					// Block until resume
+					userInput, timedOut := state.Activate()
+
+					if timedOut {
+						// Send timeout event
+						events <- NewPauseTimeoutEvent(sessionID)
+						slog.Warn("pause timed out", "sessionID", sessionID)
+						// Continue with original tool execution
+					} else if userInput != "" {
+						// User provided input - inject as tool result
+						events <- NewPauseResumedEvent(sessionID, true)
+						slog.Info("pause resumed with user input", "sessionID", sessionID, "inputLen", len(userInput))
+
+						// Create mock tool result message
+						mockResult := provider.Message{
+							Role:       provider.RoleTool,
+							Content:    userInput,
+							ToolCallID: resp.ToolCalls[0].ID, // Use first tool call ID
+						}
+						messages = append(messages, mockResult)
+
+						// Skip actual tool execution, continue to next iteration
+						consecutiveToolErrors = 0
+						continue
+					} else {
+						// Resumed without user input - continue normally
+						events <- NewPauseResumedEvent(sessionID, false)
+						slog.Info("pause resumed without user input", "sessionID", sessionID)
+					}
+				}
+			}
+		}
+
 		// Execute tools and add results (with session context for skill tools)
 		slog.Info("runLoopCore: executing tools", "sessionID", sessionID, "iteration", iteration, "toolCount", len(resp.ToolCalls))
 		toolResults := r.executeToolsWithSession(ctx, resp.ToolCalls, events, sessionID, "")
@@ -1012,9 +1062,10 @@ func (r *Runner) runLoopCore(ctx context.Context, cached *scheduler.CachedSessio
 
 // runACPMode handles execution for ACP providers.
 // ACP providers handle tool call loops internally, so we only need to:
-// 1. Send the user message
-// 2. Forward streaming events from the provider
-// 3. Save the final response
+// 1. Build system message with skills injection
+// 2. Send the user message
+// 3. Forward streaming events from the provider
+// 4. Save the final response
 //
 // This is more efficient for quota usage as it counts as a single premium request
 // regardless of how many tool calls are executed internally.
@@ -1026,13 +1077,39 @@ func (r *Runner) runACPMode(ctx context.Context, cached *scheduler.CachedSession
 		return
 	}
 
-	// Build a simple request - ACP doesn't need full message history since
-	// it maintains its own session context
+	// Build system message with skills injection for ACP mode
+	// ACP maintains its own conversation context, but we need to inject skills
+	// on each request to ensure the LLM knows about available tools
+	var sysPromptContent string
+	if r.skillManager != nil {
+		skillsSection := skills.NewPromptSection(r.skillManager)
+		// Apply session-level skill selection filter
+		if cached.Session != nil && len(cached.Session.SelectedSkills) > 0 {
+			skillsSection.WithSelectedSkills(cached.Session.SelectedSkills)
+			slog.Info("runACPMode: applying selected skills filter", "sessionID", sessionID, "selectedSkills", cached.Session.SelectedSkills)
+		}
+		if section := skillsSection.Build(); section != "" {
+			sysPromptContent += section
+		}
+		if activePrompts := skillsSection.BuildActivePrompts(); activePrompts != "" {
+			sysPromptContent += "\n" + activePrompts
+		}
+	}
+
+	// Build request with system message (if skills injected) and user message
+	var messages []provider.Message
+	if sysPromptContent != "" {
+		messages = append(messages, provider.Message{
+			Role:    provider.RoleSystem,
+			Content: sysPromptContent,
+		})
+		slog.Info("runACPMode: injected skills into system message", "sessionID", sessionID, "sysPromptLen", len(sysPromptContent))
+	}
+	messages = append(messages, provider.Message{Role: provider.RoleUser, Content: userInput})
+
 	req := provider.ChatRequest{
-		Model: cached.Session.Model,
-		Messages: []provider.Message{
-			{Role: provider.RoleUser, Content: userInput},
-		},
+		Model:          cached.Session.Model,
+		Messages:       messages,
 		Stream:         true,
 		ConversationID: sessionID,
 	}
@@ -1892,4 +1969,93 @@ func (r *Runner) executeMemoryFlush(ctx context.Context, sessionID string, event
 		"toolCalls", len(resp.ToolCalls))
 
 	return nil
+}
+
+// PauseSession 暂停指定会话的执行
+func (r *Runner) PauseSession(sessionID string) error {
+	r.pauseMu.RLock()
+	ctrl := r.pauseController
+	r.pauseMu.RUnlock()
+
+	if ctrl == nil {
+		return fmt.Errorf("pause controller not initialized")
+	}
+
+	return ctrl.Pause(sessionID)
+}
+
+// ResumeSession 恢复指定会话的执行
+func (r *Runner) ResumeSession(sessionID string, userInput string) error {
+	r.pauseMu.RLock()
+	ctrl := r.pauseController
+	r.pauseMu.RUnlock()
+
+	if ctrl == nil {
+		return fmt.Errorf("pause controller not initialized")
+	}
+
+	return ctrl.Resume(sessionID, userInput)
+}
+
+// GetPauseStatus 获取会话的暂停状态
+func (r *Runner) GetPauseStatus(sessionID string) (*PauseStatus, error) {
+	r.pauseMu.RLock()
+	ctrl := r.pauseController
+	r.pauseMu.RUnlock()
+
+	if ctrl == nil {
+		return &PauseStatus{Paused: false}, nil
+	}
+
+	return ctrl.GetStatus(sessionID)
+}
+
+// initPauseController 初始化暂停控制器
+// 根据 provider 类型选择合适的控制器实现
+func (r *Runner) initPauseController() {
+	r.pauseMu.Lock()
+	defer r.pauseMu.Unlock()
+
+	// 如果已初始化，直接返回
+	if r.pauseController != nil {
+		return
+	}
+
+	// 检测使用的 Provider 类型
+	// 优先检查 multiPool，其次 providerPool，最后 provider
+	var prov provider.Provider
+	if r.multiPool != nil {
+		// 从 multiPool 获取默认 provider
+		prov, _ = r.GetProvider("")
+	} else if r.providerPool != nil {
+		prov, _ = r.GetProvider("")
+	} else {
+		prov = r.provider
+	}
+
+	if prov == nil {
+		slog.Warn("cannot initialize pause controller: no provider available")
+		return
+	}
+
+	// 检查是否为 ACP provider
+	if acpCapable, ok := prov.(provider.ACPCapable); ok && acpCapable.IsACPProvider() {
+		// 需要获取 ACPProvider 实例来传递给 ACPPauseController
+		// 但由于循环依赖问题，这里暂时使用 API 模式控制器
+		// TODO: 在 step-09 中解决 ACP 模式的集成
+		slog.Info("detected ACP provider, using API pause controller temporarily")
+		r.pauseController = NewAPIPauseController(5 * time.Minute)
+	} else {
+		// API 模式
+		slog.Info("using API pause controller")
+		r.pauseController = NewAPIPauseController(5 * time.Minute)
+	}
+}
+
+// SetPauseController 设置暂停控制器（用于外部注入）
+func (r *Runner) SetPauseController(ctrl PauseController) {
+	r.pauseMu.Lock()
+	defer r.pauseMu.Unlock()
+	r.pauseController = ctrl
+	slog.Info("pause controller set externally")
 }

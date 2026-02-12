@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/viper"
 
 	v1 "mote/api/v1"
+	"mote/internal/cli/defaults"
 	"mote/internal/compaction"
 	"mote/internal/config"
 	"mote/internal/cron"
@@ -412,6 +413,28 @@ func (s *Server) run() {
 	if err := skills.EnsureBuiltinSkills(skillsDir); err != nil {
 		s.logger.Warn().Err(err).Msg("Failed to install builtin skills")
 	}
+	
+	// Initialize version checker for builtin skills
+	embedFS := defaults.GetDefaultsFS()
+	versionChecker := skills.NewVersionChecker(embedFS, s.logger)
+	
+	// Check for updates on startup
+	result, err := versionChecker.CheckAllVersions(skillsDir)
+	if err != nil {
+		s.logger.Warn().Err(err).Msg("Failed to check builtin skill versions")
+	} else if len(result.UpdatesAvailable) > 0 {
+		s.logger.Info().
+			Int("count", len(result.UpdatesAvailable)).
+			Msg("Builtin skill updates available")
+		for _, info := range result.UpdatesAvailable {
+			s.logger.Info().
+				Str("skill", info.SkillID).
+				Str("current", info.LocalVersion).
+				Str("latest", info.EmbedVersion).
+				Msg("Update available for builtin skill")
+		}
+	}
+	
 	skillManager := skills.NewManager(skills.ManagerConfig{SkillsDir: skillsDir})
 	skillManager.SetToolRegistry(toolRegistry)
 	skillManager.SetJSRuntime(jsvmRuntime)
@@ -419,11 +442,21 @@ func (s *Server) run() {
 	if err := skillManager.ScanDirectory(skillsDir); err != nil {
 		s.logger.Warn().Err(err).Msg("Failed to scan skills directory")
 	}
-	for _, skillID := range []string{"mote-mcp-config", "mote-self", "mote-memory", "mote-cron"} {
-		if err := skillManager.Activate(skillID, nil); err != nil {
-			s.logger.Debug().Str("skill", skillID).Err(err).Msg("Failed to auto-activate skill")
+	// Auto-activate all scanned skills
+	allSkills := skillManager.ListSkills()
+	for _, status := range allSkills {
+		if status.Skill != nil {
+			if err := skillManager.Activate(status.Skill.ID, nil); err != nil {
+				s.logger.Debug().Str("skill", status.Skill.ID).Err(err).Msg("Failed to auto-activate skill")
+			} else {
+				s.logger.Info().Str("skill", status.Skill.ID).Msg("Auto-activated skill")
+			}
 		}
 	}
+	
+	// Create skill updater
+	skillUpdater := skills.NewSkillUpdater(embedFS, skillsDir, versionChecker, skillManager, s.logger)
+	
 	agentRunner.SetSkillManager(skillManager)
 	s.skillManager = skillManager
 
@@ -447,6 +480,8 @@ func (s *Server) run() {
 	s.gatewayServer.SetPolicyExecutor(policyExecutor)
 	s.gatewayServer.SetApprovalManager(approvalManager)
 	s.gatewayServer.SetSkillManager(skillManager)
+	s.gatewayServer.SetVersionChecker(versionChecker)
+	s.gatewayServer.SetSkillUpdater(skillUpdater)
 
 	// Initialize Workspace Manager
 	workspaceManager := workspace.NewWorkspaceManager()

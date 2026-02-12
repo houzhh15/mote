@@ -21,6 +21,13 @@ import (
 // a subsequent Stream goroutine for the same conversationID.
 var sessionEntryCounter int64
 
+// PauseControllerInterface defines minimal pause control interface needed by ACPProvider.
+// This avoids circular dependency between runner and provider packages.
+type PauseControllerInterface interface {
+	IsPaused(sessionID string) bool
+	WaitForResume(ctx context.Context, sessionID string, toolName string, toolCallID string) (userInput string, wasPaused bool, timedOut bool)
+}
+
 // ACPProvider implements the Provider interface using ACP protocol.
 // This provider communicates with Copilot CLI via JSON-RPC 2.0 over stdio.
 //
@@ -45,6 +52,11 @@ type ACPProvider struct {
 
 	mu          sync.Mutex
 	initialized bool
+	restarting  atomic.Bool // Flag to prevent concurrent initialization during restart
+
+	// Pause controller for ACP mode (injected by Runner)
+	pauseController PauseControllerInterface
+	pauseMu         sync.RWMutex
 }
 
 // sessionEventEntry holds the event channel and metadata for a conversation session.
@@ -127,6 +139,21 @@ func (p *ACPProvider) Models() []string {
 
 // ensureInitialized ensures the ACP connection is initialized.
 func (p *ACPProvider) ensureInitialized(ctx context.Context) error {
+	// Wait if CLI is currently restarting to avoid concurrent initialization
+	maxWaitTime := 10 * time.Second
+	waitStart := time.Now()
+	for p.restarting.Load() {
+		if time.Since(waitStart) > maxWaitTime {
+			return fmt.Errorf("timeout waiting for CLI restart to complete")
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+			// Continue waiting
+		}
+	}
+
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -136,6 +163,7 @@ func (p *ACPProvider) ensureInitialized(ctx context.Context) error {
 
 	// Check if client is closed
 	if p.client.IsClosed() {
+		logger.Info().Msg("ACP client is closed, recreating...")
 		// Recreate the client
 		client, err := NewACPClient(p.config)
 		if err != nil {
@@ -145,6 +173,7 @@ func (p *ACPProvider) ensureInitialized(ctx context.Context) error {
 	}
 
 	// Initialize
+	logger.Info().Msg("Initializing ACP client...")
 	_, err := p.client.Initialize(ctx)
 	if err != nil {
 		return fmt.Errorf("ACP initialize failed: %w", err)
@@ -271,10 +300,14 @@ func (p *ACPProvider) ensureSession(ctx context.Context, conversationID string, 
 		}
 	}
 
+	// Load latest MCP configuration dynamically
+	// This ensures new MCP servers added via mcp_add are visible to new sessions
+	mcpServers := p.loadLatestMCPConfig()
+
 	params := CreateSessionParams{
 		Model:             effectiveModel,
 		WorkingDirectory:  cwd,
-		MCPServers:        p.config.MCPServers,
+		MCPServers:        mcpServers,
 		SystemMessage:     p.config.SystemMessage,
 		Streaming:         boolPtr(true),
 		RequestPermission: boolPtr(false), // Disable permission requests - mote handles its own security
@@ -358,6 +391,10 @@ func (p *ACPProvider) resetConversationSession(conversationID string) {
 // This is the nuclear option for when the CLI is stuck processing an old prompt
 // and cannot accept new requests (e.g., user clicked Stop during a long task).
 func (p *ACPProvider) restartClient() {
+	// Set restarting flag to block concurrent initialization attempts
+	p.restarting.Store(true)
+	defer p.restarting.Store(false)
+
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -640,6 +677,47 @@ func (p *ACPProvider) handleHooksInvoke(req HooksInvokeRequest) (any, error) {
 
 		logger.Debug().Str("tool", input.ToolName).Msg("Hooks: preToolUse check")
 
+		// Check for pause before tool execution
+		p.pauseMu.RLock()
+		pauseCtrl := p.pauseController
+		p.pauseMu.RUnlock()
+
+		if pauseCtrl != nil {
+			// Extract conversationID from ACP session ID
+			convID := p.getConversationID(req.SessionID)
+			if convID == "" {
+				logger.Warn().Str("acpSessionID", req.SessionID).Msg("No conversation ID mapping found for pause check")
+			} else {
+				// Check if this session is paused
+				if pauseCtrl.IsPaused(convID) {
+					logger.Info().Str("convID", convID).Str("tool", input.ToolName).Msg("Session paused, waiting for resume")
+
+					// Block until resumed
+					// Note: ToolCallID is not available in PreToolUseInput, pass empty string
+					userInput, wasPaused, timedOut := pauseCtrl.WaitForResume(context.Background(), convID, input.ToolName, "")
+
+					if timedOut {
+						logger.Warn().Str("convID", convID).Msg("Pause timed out")
+						// Allow tool execution to continue
+						return &PreToolUseOutput{PermissionDecision: "allow"}, nil
+					}
+
+					if wasPaused && userInput != "" {
+						// User provided input - deny tool execution
+						// ACP doesn't support direct result injection via hooks, so we deny with explanation
+						logger.Info().Str("convID", convID).Int("inputLen", len(userInput)).Msg("User input provided, denying tool execution")
+						return &PreToolUseOutput{
+							PermissionDecision: "deny",
+							DenyReason:         fmt.Sprintf("User provided input: %s", userInput),
+						}, nil
+					}
+
+					// Resumed without user input - continue normally
+					logger.Info().Str("convID", convID).Msg("Pause resumed, continuing tool execution")
+				}
+			}
+		}
+
 		// Default: allow all tool calls.
 		// When PolicyExecutor is integrated via ACPConfig, this will perform actual checks.
 		return &PreToolUseOutput{PermissionDecision: "allow"}, nil
@@ -713,6 +791,30 @@ func (p *ACPProvider) handleSessionUpdate(convID string, params SessionUpdatePar
 				Str("toolId", toolCallID).
 				Str("toolName", toolName).
 				Msg("Tool call started")
+
+			// Check for pause before emitting tool call events
+			p.pauseMu.RLock()
+			pauseCtrl := p.pauseController
+			p.pauseMu.RUnlock()
+
+			if pauseCtrl != nil && pauseCtrl.IsPaused(convID) {
+				logger.Info().Str("convID", convID).Str("tool", toolName).Msg("Session paused before tool call, waiting for resume")
+
+				// Block until resumed
+				userInput, wasPaused, timedOut := pauseCtrl.WaitForResume(context.Background(), convID, toolName, toolCallID)
+
+				if timedOut {
+					logger.Warn().Str("convID", convID).Msg("Pause timed out before tool call")
+					// Continue with tool call emission after timeout
+				} else if wasPaused && userInput != "" {
+					logger.Info().Str("convID", convID).Int("inputLen", len(userInput)).Msg("User input provided during pause, skipping tool call emission")
+					// User provided input - skip emitting tool call events
+					// The input will be handled by the hook layer
+					return
+				} else {
+					logger.Info().Str("convID", convID).Msg("Pause resumed, continuing with tool call")
+				}
+			}
 
 			// Send tool_call event for the initial call
 			p.safeSendEvent(convID, provider.ChatEvent{
@@ -919,11 +1021,18 @@ func (p *ACPProvider) buildPrompt(messages []provider.Message) string {
 }
 
 // buildPromptWithAttachments builds ACP prompt content array from messages and attachments.
+// It includes system messages (e.g., skills) as a prefix to the user message.
 func (p *ACPProvider) buildPromptWithAttachments(messages []provider.Message, attachments []provider.Attachment) []PromptContent {
 	var promptContent []PromptContent
 
-	// 1. Find last user message
+	// 1. Find system message (skills injection) and last user message
+	var systemMessage string
 	var userMessage string
+	for _, msg := range messages {
+		if msg.Role == provider.RoleSystem && msg.Content != "" {
+			systemMessage = msg.Content
+		}
+	}
 	for i := len(messages) - 1; i >= 0; i-- {
 		if messages[i].Role == provider.RoleUser {
 			userMessage = messages[i].Content
@@ -931,11 +1040,22 @@ func (p *ACPProvider) buildPromptWithAttachments(messages []provider.Message, at
 		}
 	}
 
-	// 2. Add text content
-	if userMessage != "" {
+	// 2. Build combined text content: system message (skills) + user message
+	var combinedText string
+	if systemMessage != "" {
+		// Prefix with system message containing skills
+		combinedText = systemMessage + "\n\n---\n\n" + userMessage
+		slog.Info("ACP buildPromptWithAttachments: injected system message",
+			"systemMsgLen", len(systemMessage),
+			"userMsgLen", len(userMessage))
+	} else {
+		combinedText = userMessage
+	}
+
+	if combinedText != "" {
 		promptContent = append(promptContent, PromptContent{
 			Type: "text",
-			Text: userMessage,
+			Text: combinedText,
 		})
 	}
 
@@ -1099,6 +1219,76 @@ func ConvertMCPServers(persisted []MCPServerPersistInfo) map[string]MCPServerCon
 	return result
 }
 
+// loadLatestMCPConfig dynamically loads the latest MCP configuration from mcp_servers.json.
+// This allows new sessions to see MCP servers added after the provider was initialized.
+// Falls back to the initial config if loading fails.
+func (p *ACPProvider) loadLatestMCPConfig() map[string]MCPServerConfig {
+	// Import is here to avoid import cycle
+	// We'll need to access v1.LoadMCPServersConfigPublic
+	// But we can't import api/v1 from provider package
+	// So we'll use a different approach: read the file directly
+	
+	// Try to load from the same location as api/v1 does
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		logger.Warn().Err(err).Msg("Failed to get home dir, using fallback MCP config")
+		return p.config.MCPServers
+	}
+	
+	configPath := homeDir + "/.mote/mcp_servers.json"
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			logger.Warn().Err(err).Str("path", configPath).Msg("Failed to read MCP config, using fallback")
+		}
+		return p.config.MCPServers
+	}
+	
+	// Parse the JSON
+	var servers []struct {
+		Name    string            `json:"name"`
+		Type    string            `json:"type"`
+		URL     string            `json:"url,omitempty"`
+		Headers map[string]string `json:"headers,omitempty"`
+		Command string            `json:"command,omitempty"`
+		Args    []string          `json:"args,omitempty"`
+	}
+	
+	if err := json.Unmarshal(data, &servers); err != nil {
+		logger.Warn().Err(err).Msg("Failed to parse MCP config, using fallback")
+		return p.config.MCPServers
+	}
+	
+	if len(servers) == 0 {
+		return p.config.MCPServers
+	}
+	
+	// Convert to our format
+	infos := make([]MCPServerPersistInfo, len(servers))
+	for i, s := range servers {
+		infos[i] = MCPServerPersistInfo{
+			Name:    s.Name,
+			Type:    s.Type,
+			URL:     s.URL,
+			Headers: s.Headers,
+			Command: s.Command,
+			Args:    s.Args,
+		}
+	}
+	
+	result := ConvertMCPServers(infos)
+	
+	// Log the difference if configuration changed
+	if len(result) != len(p.config.MCPServers) {
+		logger.Info().
+			Int("previousCount", len(p.config.MCPServers)).
+			Int("currentCount", len(result)).
+			Msg("MCP configuration updated dynamically")
+	}
+	
+	return result
+}
+
 // BuildACPSystemMessage 构建 ACP 的 System Message。
 // 包含自定义提示词、工作区规则、MCP 服务器信息和技能提示词。
 func BuildACPSystemMessage(customPrompt, workspaceRules string, mcpServerNames []string, skillsPrompt string) *SystemMessageConfig {
@@ -1189,4 +1379,21 @@ func ACPFactoryWithConfigFunc(configFunc func() ACPConfig) provider.ProviderFact
 		}
 		return NewACPProvider(cfg)
 	}
+}
+
+// SetPauseController sets the pause controller for ACP mode.
+// This is called by Runner during initialization to enable pause functionality.
+func (p *ACPProvider) SetPauseController(ctrl PauseControllerInterface) {
+	p.pauseMu.Lock()
+	defer p.pauseMu.Unlock()
+	p.pauseController = ctrl
+	slog.Info("ACP pause controller set")
+}
+
+// getConversationID retrieves the mote conversation ID from ACP session ID.
+func (p *ACPProvider) getConversationID(acpSessionID string) string {
+	if val, ok := p.reverseSessionMap.Load(acpSessionID); ok {
+		return val.(string)
+	}
+	return ""
 }

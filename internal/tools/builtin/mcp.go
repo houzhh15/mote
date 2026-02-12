@@ -181,6 +181,10 @@ func (t *MCPAddTool) Execute(ctx context.Context, args map[string]any) (tools.To
 		result["status"] = "connected"
 		result["message"] = fmt.Sprintf("Successfully connected to MCP server '%s'", name)
 	}
+	
+	// Add note about ACP sessions
+	result["note"] = "If you're using ACP mode (premium models), this MCP server will be available in NEW conversations. Existing conversations will continue to use their original MCP configuration."
+	
 	content, _ := json.MarshalIndent(result, "", "  ")
 	return tools.NewSuccessResult(string(content)), nil
 }
@@ -423,6 +427,7 @@ func (t *MCPRemoveTool) Execute(ctx context.Context, args map[string]any) (tools
 	result := map[string]any{
 		"success": true,
 		"message": fmt.Sprintf("Successfully disconnected from MCP server '%s'", name),
+		"note":    "If you're using ACP mode (premium models), this change will take effect in NEW conversations. Existing conversations will continue with their original MCP configuration.",
 	}
 	content, _ := json.MarshalIndent(result, "", "  ")
 	return tools.NewSuccessResult(string(content)), nil
@@ -545,6 +550,7 @@ func (t *MCPUpdateTool) Execute(ctx context.Context, args map[string]any) (tools
 			result["status"] = "connected"
 			result["message"] = fmt.Sprintf("MCP server '%s' configuration updated and reconnected successfully", name)
 		}
+		result["note"] = "If you're using ACP mode (premium models), this update will take effect in NEW conversations. Existing conversations will continue with their previous configuration."
 		content, _ := json.MarshalIndent(result, "", "  ")
 		return tools.NewSuccessResult(string(content)), nil
 	}
@@ -555,6 +561,7 @@ func (t *MCPUpdateTool) Execute(ctx context.Context, args map[string]any) (tools
 		"url":         found.URL,
 		"headers_set": len(found.Headers) > 0,
 		"message":     fmt.Sprintf("MCP server '%s' configuration updated", name),
+		"note":        "If you're using ACP mode (premium models), this update will take effect in NEW conversations.",
 	}
 	content, _ := json.MarshalIndent(result, "", "  ")
 	return tools.NewSuccessResult(string(content)), nil

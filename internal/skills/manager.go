@@ -183,9 +183,22 @@ func (m *Manager) ScanDirectory(dir string) error {
 	defer m.mu.Unlock()
 
 	for _, skill := range skills {
+		// Preserve state if skill is already active
+		state := SkillStateRegistered
+		var activatedAt *time.Time
+		var config map[string]any
+		if existing, exists := m.registry[skill.ID]; exists {
+			if _, active := m.active[skill.ID]; active {
+				state = existing.State
+				activatedAt = existing.ActivatedAt
+				config = existing.Config
+			}
+		}
 		m.registry[skill.ID] = &SkillStatus{
-			Skill: skill,
-			State: SkillStateRegistered,
+			Skill:       skill,
+			State:       state,
+			ActivatedAt: activatedAt,
+			Config:      config,
 		}
 		log.Info().
 			Str("skill_id", skill.ID).
@@ -203,9 +216,22 @@ func (m *Manager) ScanDirectory(dir string) error {
 		for _, entry := range skillMDEntries {
 			// Convert SkillEntry to Skill so it can be activated
 			skill := ConvertSkillEntryToSkill(entry)
+			// Preserve state if skill is already active
+			state := SkillStateRegistered
+			var activatedAt *time.Time
+			var config map[string]any
+			if existing, exists := m.registry[skill.ID]; exists {
+				if _, active := m.active[skill.ID]; active {
+					state = existing.State
+					activatedAt = existing.ActivatedAt
+					config = existing.Config
+				}
+			}
 			m.registry[skill.ID] = &SkillStatus{
-				Skill: skill,
-				State: SkillStateRegistered,
+				Skill:       skill,
+				State:       state,
+				ActivatedAt: activatedAt,
+				Config:      config,
 			}
 			log.Info().
 				Str("skill_id", skill.ID).

@@ -149,6 +149,7 @@ export const WorkspacePage: React.FC = () => {
 
       {/* Scrollable Content */}
       <div style={{ flex: 1, overflow: 'auto', padding: 24 }}>
+        <div style={{ maxWidth: 900 }}>
         <div style={{ marginBottom: 16 }}>
           <Text type="secondary">
             工作区是项目级别的配置单元，包含技能、工具、提示词和 Hooks
@@ -360,6 +361,7 @@ export const WorkspacePage: React.FC = () => {
           </Form.Item>
         </Form>
       </Modal>
+        </div>
       </div>
     </div>
   );

@@ -221,7 +221,7 @@ export interface ErrorDetail {
 
 // Streaming event types
 export interface StreamEvent {
-  type: 'content' | 'tool_call' | 'tool_call_update' | 'tool_result' | 'thinking' | 'error' | 'done' | 'truncated' | 'heartbeat';
+  type: 'content' | 'tool_call' | 'tool_call_update' | 'tool_result' | 'thinking' | 'error' | 'done' | 'truncated' | 'heartbeat' | 'pause' | 'pause_timeout' | 'pause_resumed';
   delta?: string;  // Content delta from backend
   content?: string;  // Also support content for compatibility
   thinking?: string;  // Thinking/reasoning content (temporary display)
@@ -251,6 +251,12 @@ export interface StreamEvent {
   // For truncated events
   truncated_reason?: string;  // e.g., "length" for max_tokens limit
   pending_tool_calls?: number;  // Number of pending tool calls when truncated
+  // For pause events
+  pause_data?: {
+    session_id: string;
+    pending_tools?: Array<{ id: string; name: string; arguments?: any }>;
+    has_user_input?: boolean;
+  };
 }
 
 // ================================================================
@@ -334,6 +340,36 @@ export interface Skill {
 export interface SkillListResponse {
   skills: Skill[];
   count: number;
+}
+
+// Skill Update Types
+export interface SkillVersionInfo {
+  skill_id: string;
+  local_version: string;
+  embed_version: string;
+  update_available: boolean;
+  local_modified: boolean;
+  description?: string;
+}
+
+export interface VersionCheckResult {
+  updates: SkillVersionInfo[];
+  total: number;
+  updated_at: string;
+}
+
+export interface UpdateOptions {
+  force?: boolean;
+  backup?: boolean;
+}
+
+export interface UpdateResult {
+  success: boolean;
+  skill_id: string;
+  old_version: string;
+  new_version: string;
+  backup_path?: string;
+  error?: string;
 }
 
 // ================================================================

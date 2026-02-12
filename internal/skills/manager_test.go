@@ -611,3 +611,38 @@ func TestManager_ScanAllPaths_EmptyPaths(t *testing.T) {
 		t.Errorf("ScanAllPaths() loaded %d skills with empty paths, want 0", len(skills))
 	}
 }
+
+// TestManager_RescanPreservesActiveState tests that rescanning skills preserves active state
+func TestManager_RescanPreservesActiveState(t *testing.T) {
+	// Create manager and scan existing testdata
+	mgr := NewManager(ManagerConfig{SkillsDir: "testdata"})
+	if err := mgr.ScanDirectory("testdata"); err != nil {
+		t.Fatalf("Initial scan failed: %v", err)
+	}
+	
+	// Activate a test skill
+	if err := mgr.Activate("example-skill", nil); err != nil {
+		t.Fatalf("Failed to activate skill: %v", err)
+	}
+	
+	// Verify it's active
+	if !mgr.IsActive("example-skill") {
+		t.Fatal("Skill should be active after activation")
+	}
+	
+	// Rescan the directory (simulating reload)
+	if err := mgr.ScanDirectory("testdata"); err != nil {
+		t.Fatalf("Rescan failed: %v", err)
+	}
+	
+	// Verify skill is still marked as active
+	if !mgr.IsActive("example-skill") {
+		t.Fatal("Skill should still be active after rescan")
+	}
+	
+	// Trying to activate again should return ErrSkillAlreadyActive
+	err := mgr.Activate("example-skill", nil)
+	if err != ErrSkillAlreadyActive {
+		t.Fatalf("Expected ErrSkillAlreadyActive, got: %v", err)
+	}
+}

@@ -29,6 +29,9 @@ import type {
   MCPPromptContent,
   ReconfigureSessionRequest,
   ReconfigureSessionResponse,
+  VersionCheckResult,
+  UpdateOptions,
+  UpdateResult,
 } from '../types';
 
 /**
@@ -60,6 +63,20 @@ export interface APIAdapter {
   createSession(title?: string, scenario?: string): Promise<Session>;
   updateSession?(sessionId: string, updates: { title?: string }): Promise<Session>;
   deleteSession(sessionId: string): Promise<void>;
+  
+  // ============== Pause Control Service ==============
+  /**
+   * Pause execution before next tool call
+   */
+  pauseSession?(sessionId: string): Promise<void>;
+  /**
+   * Resume execution (optionally with user input)
+   */
+  resumeSession?(sessionId: string, userInput?: string): Promise<void>;
+  /**
+   * Get pause status of a session
+   */
+  getPauseStatus?(sessionId: string): Promise<{ paused: boolean; paused_at?: string; timeout_remaining?: number; pending_tools?: string[] }>;
   
   // ============== Memory Service ==============
   getMemories(options?: { limit?: number; offset?: number }): Promise<{ memories: Memory[]; total: number; limit: number; offset: number }>;
@@ -209,6 +226,16 @@ export interface APIAdapter {
    * Create a new skill template
    */
   createSkill?(name: string, target: 'user' | 'workspace'): Promise<{ path: string }>;
+  
+  /**
+   * Check for available updates for builtin skills
+   */
+  checkSkillUpdates?(): Promise<VersionCheckResult>;
+  
+  /**
+   * Update a builtin skill to the latest embedded version
+   */
+  updateSkill?(skillId: string, options?: UpdateOptions): Promise<UpdateResult>;
   
   // ============== Workspace Service ==============
   /**

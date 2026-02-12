@@ -3,12 +3,72 @@
 // ================================================================
 
 import { useState, useEffect, forwardRef, useImperativeHandle } from 'react';
-import { Typography, List, Card, Tag, Spin, Empty, message, Button, Modal, Descriptions, Space, Tooltip, Input } from 'antd';
-import { ThunderboltOutlined, PlayCircleOutlined, PauseCircleOutlined, ReloadOutlined, InfoCircleOutlined, FolderOpenOutlined, PlusOutlined } from '@ant-design/icons';
+import { Typography, List, Card, Tag, Spin, Empty, message, Button, Modal, Descriptions, Space, Tooltip, Input, Alert, Badge } from 'antd';
+import { ThunderboltOutlined, PlayCircleOutlined, PauseCircleOutlined, ReloadOutlined, InfoCircleOutlined, FolderOpenOutlined, PlusOutlined, UploadOutlined } from '@ant-design/icons';
 import { useAPI } from '../context/APIContext';
-import type { Skill } from '../types';
+import type { Skill, SkillVersionInfo } from '../types';
 
 const { Text, Paragraph } = Typography;
+
+// Update Confirm Dialog Component
+interface UpdateConfirmDialogProps {
+  skill: Skill;
+  versionInfo: SkillVersionInfo;
+  visible: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+  loading?: boolean;
+}
+
+const UpdateConfirmDialog: React.FC<UpdateConfirmDialogProps> = ({
+  skill,
+  versionInfo,
+  visible,
+  onConfirm,
+  onCancel,
+  loading = false,
+}) => {
+  return (
+    <Modal
+      title={`更新 ${skill.name}`}
+      open={visible}
+      onOk={onConfirm}
+      onCancel={onCancel}
+      okText={loading ? '更新中...' : '确认更新'}
+      cancelText="取消"
+      confirmLoading={loading}
+      okButtonProps={{ disabled: loading }}
+    >
+      <div style={{ marginBottom: 16 }}>
+        <Descriptions column={1} size="small">
+          <Descriptions.Item label="当前版本">
+            <strong>v{versionInfo.local_version}</strong>
+          </Descriptions.Item>
+          <Descriptions.Item label="最新版本">
+            <strong style={{ color: '#52c41a' }}>v{versionInfo.embed_version}</strong>
+          </Descriptions.Item>
+        </Descriptions>
+      </div>
+
+      {versionInfo.local_modified && (
+        <Alert
+          message="警告"
+          description="检测到本地文件已被修改，更新将覆盖您的修改。系统会自动备份旧版本。"
+          type="warning"
+          showIcon
+          style={{ marginBottom: 16 }}
+        />
+      )}
+
+      {versionInfo.description && (
+        <div>
+          <Text type="secondary">更新说明:</Text>
+          <Paragraph style={{ marginTop: 8 }}>{versionInfo.description}</Paragraph>
+        </div>
+      )}
+    </Modal>
+  );
+};
 
 export interface SkillsPageProps {
   hideToolbar?: boolean;
@@ -30,12 +90,20 @@ export const SkillsPage = forwardRef<SkillsPageRef, SkillsPageProps>(({ hideTool
   const [createModalVisible, setCreateModalVisible] = useState(false);
   const [newSkillName, setNewSkillName] = useState('');
   const [newSkillTarget] = useState<'user'>('user');
+  
+  // Version update states
+  const [versionInfoMap, setVersionInfoMap] = useState<Record<string, SkillVersionInfo>>({});
+  const [updateDialogVisible, setUpdateDialogVisible] = useState(false);
+  const [skillToUpdate, setSkillToUpdate] = useState<Skill | null>(null);
+  const [updateLoading, setUpdateLoading] = useState(false);
 
   const fetchSkills = async () => {
     setLoading(true);
     try {
       const data = await api.getSkills?.() ?? [];
-      setSkills(data);
+      // Sort skills by name for consistent ordering
+      const sortedData = [...data].sort((a, b) => a.name.localeCompare(b.name));
+      setSkills(sortedData);
     } catch (error) {
       console.error('Failed to fetch skills:', error);
       message.error('获取技能列表失败');
@@ -44,8 +112,25 @@ export const SkillsPage = forwardRef<SkillsPageRef, SkillsPageProps>(({ hideTool
     }
   };
 
+  const checkUpdates = async () => {
+    if (api.checkSkillUpdates) {
+      try {
+        const result = await api.checkSkillUpdates();
+        const versionMap: Record<string, SkillVersionInfo> = {};
+        result.updates.forEach(info => {
+          versionMap[info.skill_id] = info;
+        });
+        setVersionInfoMap(versionMap);
+      } catch (error) {
+        console.error('Failed to check skill updates:', error);
+        // Don't show error message for version check failure
+      }
+    }
+  };
+
   useEffect(() => {
     fetchSkills();
+    checkUpdates();
   }, []);
 
   const handleActivate = async (skill: Skill) => {
@@ -81,7 +166,26 @@ export const SkillsPage = forwardRef<SkillsPageRef, SkillsPageProps>(({ hideTool
     try {
       await api.reloadSkills?.();
       message.success('技能已重新加载');
-      fetchSkills();
+      await fetchSkills();
+      
+      // Check for updates
+      if (api.checkSkillUpdates) {
+        try {
+          const result = await api.checkSkillUpdates();
+          const versionMap: Record<string, SkillVersionInfo> = {};
+          result.updates.forEach(info => {
+            versionMap[info.skill_id] = info;
+          });
+          setVersionInfoMap(versionMap);
+          
+          const updateCount = result.updates.filter(info => info.update_available).length;
+          if (updateCount > 0) {
+            message.info(`发现 ${updateCount} 个技能有可用更新`);
+          }
+        } catch (error) {
+          console.error('Failed to check skill updates:', error);
+        }
+      }
     } catch (error) {
       console.error('Failed to reload skills:', error);
       message.error('重新加载技能失败');
@@ -98,6 +202,41 @@ export const SkillsPage = forwardRef<SkillsPageRef, SkillsPageProps>(({ hideTool
       console.error('Failed to open skills dir:', error);
       message.error('打开目录失败');
     }
+  };
+
+  const handleShowUpdateDialog = (skill: Skill) => {
+    setSkillToUpdate(skill);
+    setUpdateDialogVisible(true);
+  };
+
+  const handleConfirmUpdate = async () => {
+    if (!skillToUpdate || !api.updateSkill) return;
+
+    setUpdateLoading(true);
+    try {
+      const result = await api.updateSkill(skillToUpdate.id, { backup: true });
+      
+      if (result.success) {
+        message.success(`技能 ${skillToUpdate.name} 已更新至 v${result.new_version}`);
+        setUpdateDialogVisible(false);
+        setSkillToUpdate(null);
+        
+        // Refresh skills and version info
+        await handleReload();
+      } else {
+        message.error(`更新失败: ${result.error || '未知错误'}`);
+      }
+    } catch (error) {
+      console.error('Failed to update skill:', error);
+      message.error('更新技能失败');
+    } finally {
+      setUpdateLoading(false);
+    }
+  };
+
+  const handleCancelUpdate = () => {
+    setUpdateDialogVisible(false);
+    setSkillToUpdate(null);
   };
 
   // Expose methods to parent via ref
@@ -176,24 +315,38 @@ export const SkillsPage = forwardRef<SkillsPageRef, SkillsPageProps>(({ hideTool
           <Empty description="暂无技能" />
         ) : (
           <List
-            grid={{ gutter: 16, xs: 1, sm: 2, md: 2, lg: 3, xl: 3, xxl: 4 }}
+            grid={{ gutter: 8, xs: 1, sm: 2, md: 2, lg: 3, xl: 3, xxl: 4 }}
             dataSource={skills}
-            style={{ maxWidth: '100%', overflow: 'hidden' }}
+            style={{ maxWidth: '100%', overflow: 'hidden', padding: '0 8px' }}
             renderItem={(skill) => (
-              <List.Item style={{ maxWidth: '100%' }}>
+              <List.Item style={{ display: 'flex' }}>
                 <Card
                   size="small"
+                  style={{ width: '100%', minWidth: 220, height: '100%', display: 'flex', flexDirection: 'column' }}
+                  styles={{ body: { flex: 1, display: 'flex', flexDirection: 'column' } }}
                   title={
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                       <ThunderboltOutlined />
                       <Text strong ellipsis style={{ flex: 1 }}>{skill.name}</Text>
+                      {versionInfoMap[skill.id]?.update_available && (
+                        <Badge count="更新" style={{ backgroundColor: '#1890ff' }} />
+                      )}
                     </div>
                   }
                   extra={<Tag color={getStateColor(skill.state)}>{getStateText(skill.state)}</Tag>}
                   actions={[
-                    <Tooltip title="详情" key="detail">
-                      <InfoCircleOutlined onClick={() => showDetail(skill)} />
-                    </Tooltip>,
+                    versionInfoMap[skill.id]?.update_available ? (
+                      <Tooltip title={`v${versionInfoMap[skill.id].local_version} → v${versionInfoMap[skill.id].embed_version}`} key="update">
+                        <UploadOutlined 
+                          onClick={() => handleShowUpdateDialog(skill)}
+                          style={{ color: '#1890ff', fontSize: 16 }}
+                        />
+                      </Tooltip>
+                    ) : (
+                      <Tooltip title="详情" key="detail">
+                        <InfoCircleOutlined onClick={() => showDetail(skill)} />
+                      </Tooltip>
+                    ),
                     skill.state === 'active' ? (
                       <Tooltip title="停用" key="deactivate">
                         <PauseCircleOutlined
@@ -211,9 +364,11 @@ export const SkillsPage = forwardRef<SkillsPageRef, SkillsPageProps>(({ hideTool
                     ),
                   ]}
                 >
-                  <Paragraph ellipsis={{ rows: 2 }} style={{ marginBottom: 8 }}>
-                    {skill.description || '无描述'}
-                  </Paragraph>
+                  <div style={{ flex: 1 }}>
+                    <Paragraph ellipsis={{ rows: 2 }} style={{ marginBottom: 8, minHeight: '2.8em' }}>
+                      {skill.description || '无描述'}
+                    </Paragraph>
+                  </div>
                   <Space size="small">
                     <Text type="secondary" style={{ fontSize: 12 }}>
                       v{skill.version}
@@ -273,6 +428,18 @@ export const SkillsPage = forwardRef<SkillsPageRef, SkillsPageProps>(({ hideTool
           </Descriptions>
         )}
       </Modal>
+
+      {/* Update Confirm Dialog */}
+      {skillToUpdate && versionInfoMap[skillToUpdate.id] && (
+        <UpdateConfirmDialog
+          skill={skillToUpdate}
+          versionInfo={versionInfoMap[skillToUpdate.id]}
+          visible={updateDialogVisible}
+          onConfirm={handleConfirmUpdate}
+          onCancel={handleCancelUpdate}
+          loading={updateLoading}
+        />
+      )}
 
       {/* Create Skill Modal */}
       <Modal

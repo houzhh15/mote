@@ -40,7 +40,9 @@ export const PromptsPage = forwardRef<PromptsPageRef, PromptsPageProps>(({ hideT
       await api.reloadPrompts?.();
       // Then fetch the updated list
       const data = await api.getPrompts?.() ?? [];
-      setPrompts(data);
+      // Sort prompts by name for consistent ordering
+      const sortedData = [...data].sort((a, b) => a.name.localeCompare(b.name));
+      setPrompts(sortedData);
     } catch (error) {
       console.error('Failed to fetch prompts:', error);
       message.error('获取提示词列表失败');
@@ -181,12 +183,15 @@ export const PromptsPage = forwardRef<PromptsPageRef, PromptsPageProps>(({ hideT
           <Empty description="暂无提示词" />
         ) : (
           <List
-            grid={{ gutter: 16, xs: 1, sm: 2, md: 2, lg: 3, xl: 3, xxl: 4 }}
+            grid={{ gutter: 8, xs: 1, sm: 2, md: 2, lg: 3, xl: 3, xxl: 4 }}
             dataSource={prompts}
+            style={{ padding: '0 8px' }}
             renderItem={(prompt) => (
-              <List.Item>
+              <List.Item style={{ display: 'flex' }}>
                 <Card
                   size="small"
+                  style={{ width: '100%', minWidth: 220, minHeight: 200, height: '100%', display: 'flex', flexDirection: 'column' }}
+                  styles={{ body: { flex: 1, display: 'flex', flexDirection: 'column' } }}
                   title={
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                       <FileTextOutlined />
@@ -221,9 +226,11 @@ export const PromptsPage = forwardRef<PromptsPageRef, PromptsPageProps>(({ hideT
                     </Popconfirm>,
                   ]}
                 >
-                  <Paragraph ellipsis={{ rows: 3 }} style={{ marginBottom: 8 }}>
-                    {prompt.content || '无内容'}
-                  </Paragraph>
+                  <div style={{ flex: 1 }}>
+                    <Paragraph ellipsis={{ rows: 3 }} style={{ marginBottom: 8, minHeight: '4.2em' }}>
+                      {prompt.content || '无内容'}
+                    </Paragraph>
+                  </div>
                   {prompt.priority !== undefined && prompt.priority > 0 && (
                     <Text type="secondary" style={{ fontSize: 12 }}>
                       优先级: {prompt.priority}

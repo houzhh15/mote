@@ -36,6 +36,9 @@ import type {
   BrowseDirectoryResult,
   ReconfigureSessionRequest,
   ReconfigureSessionResponse,
+  VersionCheckResult,
+  UpdateOptions,
+  UpdateResult,
 } from '../types';
 
 // Extend window with Wails runtime
@@ -364,6 +367,28 @@ export function createWailsAdapter(app: WailsApp): APIAdapter {
       return callAPI('POST', '/api/v1/skills/create', { name, target });
     },
 
+    checkSkillUpdates: async (): Promise<VersionCheckResult> => {
+      const data = await callAPI<{ success: boolean; data: { total_checked: number; updates_available: Array<{ skill_id: string; local_version: string; embed_version: string; update_available: boolean; local_modified: boolean; description?: string; checked_at: string }> } }>('POST', '/api/v1/skills/check-updates');
+      // Map backend response to frontend expected format
+      return {
+        updates: data.data.updates_available || [],
+        total: data.data.total_checked || 0,
+        updated_at: data.data.updates_available?.[0]?.checked_at || new Date().toISOString(),
+      };
+    },
+
+    updateSkill: async (skillId: string, options?: UpdateOptions): Promise<UpdateResult> => {
+      const data = await callAPI<{ success: boolean; data: { skill_id: string; old_version: string; new_version: string; backup_path?: string; reloaded: boolean; duration: string } }>('POST', `/api/v1/skills/${skillId}/update`, options || {});
+      // Map backend response to frontend expected format
+      return {
+        success: data.success,
+        skill_id: data.data.skill_id,
+        old_version: data.data.old_version,
+        new_version: data.data.new_version,
+        backup_path: data.data.backup_path,
+      };
+    },
+
     // ============== Cron Service ==============
     getCronJobs: async (): Promise<CronJob[]> => {
       const data = await callAPI<{ jobs: CronJob[] }>('GET', '/api/v1/cron/jobs');
@@ -619,6 +644,15 @@ export function createWailsAdapter(app: WailsApp): APIAdapter {
 
     stopChannel: async (channelType: string): Promise<void> => {
       await callAPI('POST', `/api/v1/channels/${channelType}/stop`);
+    },
+
+    // ============== Pause Control Service ==============
+    pauseSession: async (sessionId: string): Promise<void> => {
+      await callAPI('POST', '/api/v1/pause', { session_id: sessionId });
+    },
+
+    resumeSession: async (sessionId: string, userInput?: string): Promise<void> => {
+      await callAPI('POST', '/api/v1/resume', { session_id: sessionId, user_input: userInput });
     },
 
     // ============== Mode Detection ==============

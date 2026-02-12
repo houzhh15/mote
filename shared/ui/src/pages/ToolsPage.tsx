@@ -33,7 +33,9 @@ export const ToolsPage = forwardRef<ToolsPageRef, ToolsPageProps>(({ hideToolbar
     setLoading(true);
     try {
       const data = await api.getTools();
-      setTools(data);
+      // Sort tools by name for consistent ordering
+      const sortedData = [...data].sort((a, b) => a.name.localeCompare(b.name));
+      setTools(sortedData);
     } catch (error) {
       console.error('Failed to fetch tools:', error);
       message.error('获取工具列表失败');
@@ -119,12 +121,15 @@ export const ToolsPage = forwardRef<ToolsPageRef, ToolsPageProps>(({ hideToolbar
           <Empty description="暂无工具" />
         ) : (
           <List
-            grid={{ gutter: 16, xs: 1, sm: 2, md: 2, lg: 3, xl: 3, xxl: 4 }}
+            grid={{ gutter: 8, xs: 1, sm: 2, md: 2, lg: 3, xl: 3, xxl: 4 }}
             dataSource={tools}
+            style={{ padding: '0 8px' }}
             renderItem={(tool) => (
-              <List.Item>
+              <List.Item style={{ display: 'flex' }}>
                 <Card
                   size="small"
+                  style={{ width: '100%', minWidth: 220, minHeight: 160, height: '100%', display: 'flex', flexDirection: 'column' }}
+                  styles={{ body: { flex: 1, display: 'flex', flexDirection: 'column' } }}
                   title={
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                       <ToolOutlined />
@@ -133,9 +138,11 @@ export const ToolsPage = forwardRef<ToolsPageRef, ToolsPageProps>(({ hideToolbar
                   }
                   extra={<Tag color={getTypeColor(tool.type)}>{tool.type}</Tag>}
                 >
-                  <Paragraph ellipsis={{ rows: 2 }} style={{ marginBottom: 8 }}>
-                    {tool.description || '无描述'}
-                  </Paragraph>
+                  <div style={{ flex: 1 }}>
+                    <Paragraph ellipsis={{ rows: 2 }} style={{ marginBottom: 8, minHeight: '2.8em' }}>
+                      {tool.description || '无描述'}
+                    </Paragraph>
+                  </div>
                   {tool.source && (
                     <Text type="secondary" style={{ fontSize: 12 }}>
                       来源: {tool.source}

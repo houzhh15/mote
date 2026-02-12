@@ -60,6 +60,8 @@ type Server struct {
 	promptManager    *prompts.Manager
 	multiPool        *provider.MultiProviderPool
 	embeddedServer   v1.EmbeddedServerInterface
+	versionChecker   interface{} // *skills.VersionChecker
+	skillUpdater     interface{} // *skills.SkillUpdater
 }
 
 // NewServer creates a new gateway server.
@@ -152,6 +154,14 @@ func (s *Server) setupRoutes() {
 		EmbeddedServer:   s.embeddedServer,
 	}
 	s.apiRouter = v1.NewRouter(deps)
+
+	// Set additional dependencies that are not in RouterDeps
+	if s.versionChecker != nil {
+		s.apiRouter.SetVersionChecker(s.versionChecker)
+	}
+	if s.skillUpdater != nil {
+		s.apiRouter.SetSkillUpdater(s.skillUpdater)
+	}
 
 	// Register API v1 routes
 	s.apiRouter.RegisterRoutes(s.router)
@@ -443,6 +453,24 @@ func (s *Server) SetSkillManager(m *skills.Manager) {
 	// Also update the API router
 	if s.apiRouter != nil {
 		s.apiRouter.SetSkillManager(m)
+	}
+}
+
+// SetVersionChecker sets the version checker dependency.
+func (s *Server) SetVersionChecker(vc interface{}) {
+	s.versionChecker = vc
+	// Also update the API router
+	if s.apiRouter != nil {
+		s.apiRouter.SetVersionChecker(vc)
+	}
+}
+
+// SetSkillUpdater sets the skill updater dependency.
+func (s *Server) SetSkillUpdater(su interface{}) {
+	s.skillUpdater = su
+	// Also update the API router
+	if s.apiRouter != nil {
+		s.apiRouter.SetSkillUpdater(su)
 	}
 }
 

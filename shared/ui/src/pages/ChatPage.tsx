@@ -4,7 +4,7 @@
 
 import React, { useState, useRef, useEffect, useCallback, useMemo, memo } from 'react';
 import { Input, Button, Typography, Space, Spin, message, Select, Tooltip, Collapse, Modal, Tag, theme, Dropdown } from 'antd';
-import { SendOutlined, ClearOutlined, PlusOutlined, ToolOutlined, FolderOutlined, FolderOpenOutlined, LinkOutlined, DisconnectOutlined, GithubOutlined, StopOutlined, CopyOutlined, EditOutlined, DeleteOutlined, ThunderboltOutlined } from '@ant-design/icons';
+import { SendOutlined, ClearOutlined, PlusOutlined, ToolOutlined, FolderOutlined, FolderOpenOutlined, LinkOutlined, DisconnectOutlined, GithubOutlined, StopOutlined, CopyOutlined, EditOutlined, DeleteOutlined, ThunderboltOutlined, PauseOutlined, PlayCircleOutlined } from '@ant-design/icons';
 import ReactMarkdown from 'react-markdown';
 import { useAPI } from '../context/APIContext';
 import { useTheme } from '../context/ThemeContext';
@@ -724,6 +724,7 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
   const [inputValue, setInputValue] = useState('');
   const [loading, setLoading] = useState(false);
   const [streaming, setStreaming] = useState(false);
+  const [isInitializing, setIsInitializing] = useState(false); // Track ACP initialization state
   // 跟踪是否正在浏览历史记录
   const isNavigatingHistoryRef = useRef(false);
   const [sessionId, setSessionId] = useState<string | undefined>(initialSessionId);
@@ -757,6 +758,12 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
   const currentResponseRef = useRef('');
   // Stream error state
   const [streamError, setStreamError] = useState<ErrorDetail | null>(null);
+  // Pause control state
+  const [pauseInputModalVisible, setPauseInputModalVisible] = useState(false);
+  const [pauseInputValue, setPauseInputValue] = useState('');
+  // Pause state from ChatManager
+  const [paused, setPaused] = useState(false);
+  const [pausePendingTools, setPausePendingTools] = useState<string[]>([]);
   const lastScrollHeightRef = useRef(0);
   // Truncation state - when response is cut off due to max_tokens
   const [truncated, setTruncated] = useState(false);
@@ -806,19 +813,24 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
 
   // 流式内容滚动由 StreamingContent 组件的 onScrollRequest 回调处理
 
-  // Load models on mount
+  // Load models on mount - only set currentModel if no session will be loaded
+  // This avoids race condition where models API response overwrites session's model
   useEffect(() => {
     const loadModels = async () => {
       try {
         const response = await api.getModels();
         setModels(response.models || []);
-        setCurrentModel(response.current || response.default || '');
+        // Only set currentModel from models API if there's no initial session
+        // Session loading will set the correct model from session data
+        if (!initialSessionId) {
+          setCurrentModel(response.current || response.default || '');
+        }
       } catch (error) {
         console.error('Failed to load models:', error);
       }
     };
     loadModels();
-  }, [api]);
+  }, [api, initialSessionId]);
 
   // Load skills on mount
   useEffect(() => {
@@ -1013,6 +1025,26 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
           reason: state.truncatedReason || 'length',
           pendingToolCalls: state.pendingToolCalls || 0,
         });
+      }
+      
+      // Handle pause state
+      setPaused(state.paused || false);
+      setPausePendingTools(state.pausePendingTools || []);
+      
+      // Handle initialization state - check for specific error messages
+      if (state.error) {
+        const errorLower = state.error.toLowerCase();
+        if (errorLower.includes('initialize') || 
+            errorLower.includes('initializing') || 
+            errorLower.includes('starting') ||
+            errorLower.includes('restarting') ||
+            errorLower.includes('timeout waiting')) {
+          setIsInitializing(true);
+        } else {
+          setIsInitializing(false);
+        }
+      } else {
+        setIsInitializing(false);
       }
       
       // Handle errors with structured error detail
@@ -1268,8 +1300,8 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
     confirmAndReconfigure({ selected_skills: skillIds }, '技能选择已更新', setSkillsLoading);
   };
 
-  const handleSend = async () => {
-    if (!inputValue.trim() || loading || !sessionId) return;
+  const handleSendInternal = async (retryCount = 0) => {
+    if (!inputValue.trim() || loading || !sessionId || isInitializing) return;
 
     const userMessage: Message = {
       role: 'user',
@@ -1297,11 +1329,44 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
       api.chat,
       (_assistantMessage, error) => {
         if (error) {
-          message.error(`发送失败: ${error}`);
+          // Check if error is due to initialization delay and retry
+          const errorLower = error.toLowerCase();
+          const isInitError = errorLower.includes('initialize') || 
+                             errorLower.includes('initializing') || 
+                             errorLower.includes('starting') ||
+                             errorLower.includes('restarting') ||
+                             errorLower.includes('timeout waiting') ||
+                             errorLower.includes('not initialized');
+          
+          if (isInitError && retryCount < 3) {
+            // Retry with exponential backoff
+            const delay = 1000 * (retryCount + 1); // 1s, 2s, 3s
+            message.info(`CLI正在初始化，${delay/1000}秒后自动重试...`);
+            setIsInitializing(true);
+            setTimeout(() => {
+              setLoading(false);
+              setStreaming(false);
+              // Remove the user message before retry
+              setMessages((prev: Message[]) => prev.slice(0, -1));
+              // Re-add the input value for retry
+              setInputValue(userMessage.content);
+              // Retry
+              handleSendInternal(retryCount + 1);
+            }, delay);
+          } else {
+            message.error(`发送失败: ${error}`);
+            setIsInitializing(false);
+          }
+        } else {
+          setIsInitializing(false);
         }
         // 消息添加由 ChatManager 订阅回调处理
       }
     );
+  };
+
+  const handleSend = async () => {
+    await handleSendInternal(0);
   };
 
   // Handle dismiss truncation warning
@@ -1332,6 +1397,34 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
       setStreaming(false);
       currentResponseRef.current = '';
       message.info('已停止生成');
+    }
+  };
+
+  const handlePause = async () => {
+    if (!sessionId || !api.pauseSession) {
+      message.warning('暂停功能不可用');
+      return;
+    }
+    try {
+      await api.pauseSession(sessionId);
+      message.info('暂停请求已发送，执行将在下一次工具调用前暂停');
+    } catch (err: any) {
+      message.error(`暂停失败: ${err.message}`);
+    }
+  };
+
+  const handleResume = async (userInput?: string) => {
+    if (!sessionId || !api.resumeSession) {
+      message.warning('恢复功能不可用');
+      return;
+    }
+    try {
+      await api.resumeSession(sessionId, userInput);
+      message.success(userInput ? '已注入用户输入并恢复执行' : '已恢复执行');
+      setPauseInputModalVisible(false);
+      setPauseInputValue('');
+    } catch (err: any) {
+      message.error(`恢复失败: ${err.message}`);
     }
   };
 
@@ -1989,33 +2082,92 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
             value={inputValue}
             onChange={handleInputChange}
             onKeyDown={handleKeyPress}
-            placeholder="输入消息... (/ 引用提示词, @ 引用文件, Shift+Enter 换行)"
+            placeholder={isInitializing ? "CLI初始化中，请稍候..." : "输入消息... (/ 引用提示词, @ 引用文件, Shift+Enter 换行)"}
             autoSize={{ minRows: 1, maxRows: 10 }}
-            disabled={loading}
+            disabled={loading || isInitializing}
             style={{ resize: 'none' }}
             className="mote-input"
           />
-          {streaming ? (
-            <Button
-              type="primary"
-              danger
-              icon={<StopOutlined />}
-              onClick={handleStop}
-            >
-              停止
-            </Button>
+          {paused ? (
+            <>
+              <Button
+                type="primary"
+                icon={<PlayCircleOutlined />}
+                onClick={() => handleResume()}
+              >
+                继续
+              </Button>
+              <Button
+                onClick={() => setPauseInputModalVisible(true)}
+              >
+                注入输入
+              </Button>
+            </>
+          ) : streaming ? (
+            <>
+              {/* Hide pause button in ACP mode (Copilot models) as it doesn't work properly yet */}
+              {(() => {
+                const currentModelObj = models.find(m => m.id === currentModel);
+                const isACPMode = currentModelObj?.provider === 'copilot';
+                return !isACPMode && (
+                  <Button
+                    icon={<PauseOutlined />}
+                    onClick={handlePause}
+                    disabled={!api.pauseSession}
+                  >
+                    暂停
+                  </Button>
+                );
+              })()}
+              <Button
+                type="primary"
+                danger
+                icon={<StopOutlined />}
+                onClick={handleStop}
+              >
+                停止
+              </Button>
+            </>
           ) : (
             <Button
               type="primary"
               icon={<SendOutlined />}
               onClick={handleSend}
-              loading={loading}
-              disabled={!inputValue.trim()}
+              loading={loading || isInitializing}
+              disabled={!inputValue.trim() || isInitializing}
             >
-              发送
+              {isInitializing ? '初始化中...' : '发送'}
             </Button>
           )}
         </Space.Compact>
+
+        {/* Pause Input Modal */}
+        <Modal
+          title="注入用户输入"
+          open={pauseInputModalVisible}
+          onOk={() => handleResume(pauseInputValue)}
+          onCancel={() => {
+            setPauseInputModalVisible(false);
+            setPauseInputValue('');
+          }}
+          okText="注入并恢复"
+          cancelText="取消"
+        >
+          <p style={{ marginBottom: 12, color: tokenColors.colorTextSecondary }}>
+            输入内容将替代即将执行的工具调用结果，作为回复内容传递给 LLM。
+          </p>
+          {pausePendingTools.length > 0 && (
+            <p style={{ marginBottom: 12, fontSize: 12, color: tokenColors.colorWarning }}>
+              待执行工具: {pausePendingTools.join(', ')}
+            </p>
+          )}
+          <TextArea
+            value={pauseInputValue}
+            onChange={(e) => setPauseInputValue(e.target.value)}
+            placeholder="输入要注入的内容..."
+            autoSize={{ minRows: 3, maxRows: 10 }}
+          />
+        </Modal>
       </div>
     </div>
   );

@@ -88,6 +88,7 @@ export const SessionsPage: React.FC<SessionsPageProps> = ({ onSelectSession }) =
 
       {/* Scrollable Content */}
       <div style={{ flex: 1, overflow: 'auto', padding: 24 }}>
+        <div style={{ maxWidth: 900 }}>
       <Spin spinning={loading}>
         {sessions.length === 0 ? (
           <Empty description="暂无会话记录" />
@@ -152,6 +153,7 @@ export const SessionsPage: React.FC<SessionsPageProps> = ({ onSelectSession }) =
           />
         )}
       </Spin>
+        </div>
       </div>
     </div>
   );

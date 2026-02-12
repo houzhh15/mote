@@ -228,6 +228,7 @@ export const MCPPage: React.FC = () => {
 
       {/* Scrollable Content */}
       <div style={{ flex: 1, overflow: 'auto', padding: 24 }}>
+        <div style={{ maxWidth: 900 }}>
         <Spin spinning={loading}>
         {servers.length === 0 ? (
           <Empty description="暂无 MCP 服务器" />
@@ -326,6 +327,7 @@ export const MCPPage: React.FC = () => {
           />
         )}
       </Spin>
+        </div>
       </div>
 
       <Modal

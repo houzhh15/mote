@@ -3,7 +3,9 @@ package v1
 import (
 	"encoding/json"
 	"net/http"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 
 	"github.com/gorilla/mux"
@@ -250,17 +252,39 @@ func (r *Router) HandleReloadSkills(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	// Remember which skills were active before reload
+	activeSkills := make([]string, 0)
+	for _, status := range r.skillManager.ListSkills() {
+		if status.State == skills.SkillStateActive {
+			activeSkills = append(activeSkills, status.Skill.ID)
+		}
+	}
+
+	// Rescan all paths
 	if err := r.skillManager.ScanAllPaths(); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
+	// Reactivate all skills (previously active ones + any new ones)
+	activatedCount := 0
+	for _, status := range r.skillManager.ListSkills() {
+		if status.Skill != nil {
+			if err := r.skillManager.Activate(status.Skill.ID, nil); err != nil {
+				// Skill might already be active or have other issues, just continue
+				continue
+			}
+			activatedCount++
+		}
+	}
+
 	skillList := r.skillManager.ListSkills()
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"status":  "ok",
-		"message": "skills reloaded",
-		"count":   len(skillList),
+		"status":    "ok",
+		"message":   "skills reloaded and activated",
+		"count":     len(skillList),
+		"activated": activatedCount,
 	})
 }
 
@@ -366,5 +390,119 @@ func (r *Router) HandleOpenSkillsDir(w http.ResponseWriter, req *http.Request) {
 		"status":  "ok",
 		"message": "opened skills directory",
 		"path":    dir,
+	})
+}
+
+// HandleCheckSkillUpdates checks for available updates for builtin skills.
+func (r *Router) HandleCheckSkillUpdates(w http.ResponseWriter, req *http.Request) {
+	if r.skillManager == nil {
+		http.Error(w, "skill manager not initialized", http.StatusServiceUnavailable)
+		return
+	}
+
+	if r.versionChecker == nil {
+		http.Error(w, "version checker not initialized", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Type assert to *skills.VersionChecker
+	vc, ok := r.versionChecker.(*skills.VersionChecker)
+	if !ok {
+		http.Error(w, "invalid version checker type", http.StatusInternalServerError)
+		return
+	}
+
+	// Get skills directory
+	homeDir, _ := os.UserHomeDir()
+	skillsDir := filepath.Join(homeDir, ".mote", "skills")
+
+	// Check versions
+	result, err := vc.CheckAllVersions(skillsDir)
+	if err != nil {
+		http.Error(w, "failed to check versions: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"success": true,
+		"data":    result,
+	})
+}
+
+// UpdateSkillRequest is the request to update a builtin skill.
+type UpdateSkillRequest struct {
+	Force  bool `json:"force"`
+	Backup bool `json:"backup"`
+}
+
+// HandleUpdateSkill updates a single builtin skill.
+func (r *Router) HandleUpdateSkill(w http.ResponseWriter, req *http.Request) {
+	if r.skillManager == nil {
+		http.Error(w, "skill manager not initialized", http.StatusServiceUnavailable)
+		return
+	}
+
+	if r.skillUpdater == nil {
+		http.Error(w, "skill updater not initialized", http.StatusServiceUnavailable)
+		return
+	}
+
+	vars := mux.Vars(req)
+	skillID := vars["id"]
+
+	var updateReq UpdateSkillRequest
+	// Set defaults
+	updateReq.Backup = true
+	if req.Body != nil && req.ContentLength > 0 {
+		if err := json.NewDecoder(req.Body).Decode(&updateReq); err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+	}
+
+	// Type assert to *skills.SkillUpdater
+	su, ok := r.skillUpdater.(*skills.SkillUpdater)
+	if !ok {
+		http.Error(w, "invalid skill updater type", http.StatusInternalServerError)
+		return
+	}
+
+	// Perform update
+	opts := skills.UpdateOptions{
+		Force:  updateReq.Force,
+		Backup: updateReq.Backup,
+	}
+
+	result, err := su.UpdateSkill(skillID, opts)
+	if err != nil {
+		if err == skills.ErrNotBuiltinSkill {
+			http.Error(w, "skill is not a builtin skill", http.StatusBadRequest)
+			return
+		}
+		if err == skills.ErrNoUpdateAvailable {
+			http.Error(w, "no update available", http.StatusConflict)
+			return
+		}
+		if err == skills.ErrLocalModified {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusConflict)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"success": false,
+				"error": map[string]string{
+					"code":    "LOCAL_MODIFIED",
+					"message": "local files have been modified, use force=true to override",
+				},
+			})
+			return
+		}
+		http.Error(w, "update failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"success": true,
+		"data":    result,
 	})
 }

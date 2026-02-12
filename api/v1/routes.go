@@ -76,6 +76,8 @@ type Router struct {
 	promptManager    *prompts.Manager
 	multiPool        *provider.MultiProviderPool
 	embeddedServer   EmbeddedServerInterface
+	versionChecker   interface{} // *skills.VersionChecker
+	skillUpdater     interface{} // *skills.SkillUpdater
 }
 
 // NewRouter creates a new v1 API router.
@@ -143,6 +145,16 @@ func (r *Router) SetMultiPool(pool *provider.MultiProviderPool) {
 	r.multiPool = pool
 }
 
+// SetVersionChecker sets the version checker dependency.
+func (r *Router) SetVersionChecker(vc interface{}) {
+	r.versionChecker = vc
+}
+
+// SetSkillUpdater sets the skill updater dependency.
+func (r *Router) SetSkillUpdater(su interface{}) {
+	r.skillUpdater = su
+}
+
 // RegisterRoutes registers all v1 API routes.
 func (r *Router) RegisterRoutes(router *mux.Router) {
 	v1 := router.PathPrefix("/api/v1").Subrouter()
@@ -156,6 +168,11 @@ func (r *Router) RegisterRoutes(router *mux.Router) {
 	// Chat
 	v1.HandleFunc("/chat", r.HandleChat).Methods(http.MethodPost)
 	v1.HandleFunc("/chat/stream", r.HandleChatStream).Methods(http.MethodPost)
+
+	// Pause control
+	v1.HandleFunc("/pause", r.HandlePause).Methods(http.MethodPost)
+	v1.HandleFunc("/resume", r.HandleResume).Methods(http.MethodPost)
+	v1.HandleFunc("/pause/status", r.HandlePauseStatus).Methods(http.MethodGet)
 
 	// Sessions
 	v1.HandleFunc("/sessions", r.HandleListSessions).Methods(http.MethodGet)
@@ -265,11 +282,13 @@ func (r *Router) RegisterRoutes(router *mux.Router) {
 	v1.HandleFunc("/skills/create", r.HandleCreateSkill).Methods(http.MethodPost)
 	v1.HandleFunc("/skills/open", r.HandleOpenSkillsDir).Methods(http.MethodPost)
 	v1.HandleFunc("/skills/reload", r.HandleReloadSkills).Methods(http.MethodPost)
+	v1.HandleFunc("/skills/check-updates", r.HandleCheckSkillUpdates).Methods(http.MethodPost)
 	v1.HandleFunc("/skills/{id}", r.HandleGetSkill).Methods(http.MethodGet)
 	v1.HandleFunc("/skills/{id}/activate", r.HandleActivateSkill).Methods(http.MethodPost)
 	v1.HandleFunc("/skills/{id}/deactivate", r.HandleDeactivateSkill).Methods(http.MethodPost)
 	v1.HandleFunc("/skills/{id}/config", r.HandleGetSkillConfig).Methods(http.MethodGet)
 	v1.HandleFunc("/skills/{id}/config", r.HandleSetSkillConfig).Methods(http.MethodPut)
+	v1.HandleFunc("/skills/{id}/update", r.HandleUpdateSkill).Methods(http.MethodPost)
 
 	// Prompts
 	v1.HandleFunc("/prompts", r.HandleListPrompts).Methods(http.MethodGet)
