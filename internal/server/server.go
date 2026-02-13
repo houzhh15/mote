@@ -223,10 +223,11 @@ func (s *Server) run() {
 			}
 
 		case "copilot":
-			// Initialize Copilot provider pool
+			// Initialize Copilot API provider (free models via REST API)
+			// Requires: GitHub Token
 			githubToken := s.cfg.Copilot.Token
 			if githubToken == "" {
-				s.logger.Warn().Msg("GitHub token not configured, skipping Copilot provider")
+				s.logger.Warn().Msg("GitHub token not configured, skipping Copilot API provider")
 				continue
 			}
 
@@ -235,30 +236,23 @@ func (s *Server) run() {
 				maxTokens = 4096
 			}
 
-			// Create provider pool with factory
 			copilotFactory := copilot.Factory(githubToken, maxTokens)
 			copilotPool := provider.NewPool(copilotFactory)
-
-			// Get Copilot model list
 			copilotModels := copilot.ListModels()
 
 			if err := multiPool.AddProvider("copilot", copilotPool, copilotModels); err != nil {
-				s.logger.Warn().Err(err).Msg("Failed to add Copilot provider")
+				s.logger.Warn().Err(err).Msg("Failed to add Copilot API provider")
 			} else {
 				s.logger.Info().
 					Str("provider", "copilot").
 					Int("models", len(copilotModels)).
-					Msg("Copilot API provider initialized")
+					Msg("Copilot API provider initialized (REST API, free models)")
 			}
 
-			// Also register Copilot ACP provider for premium models.
-			// ACP uses Copilot CLI for authentication (independent of GitHub token).
-			// Model selection determines which provider is used:
-			//   - API models (gpt-4.1, gpt-4o, etc.) → copilot provider (REST API)
-			//   - ACP models (claude-sonnet-4.5, etc.) → copilot-acp provider (CLI)
-			//
-			// Use ACPFactoryWithConfigFunc to get fresh config on each provider creation.
-			// This allows toolRegistry to be injected after it's initialized.
+		case "copilot-acp":
+			// Initialize Copilot ACP provider (premium models via Copilot CLI)
+			// Independent of copilot API — uses Copilot CLI for authentication
+			// No GitHub Token required; CLI handles its own auth.
 			acpFactory := copilot.ACPFactoryWithConfigFunc(s.buildACPConfig)
 			acpPool := provider.NewPool(acpFactory)
 			acpModels := copilot.ACPListModels()
@@ -269,7 +263,7 @@ func (s *Server) run() {
 				s.logger.Info().
 					Str("provider", "copilot-acp").
 					Int("models", len(acpModels)).
-					Msg("Copilot ACP provider initialized (uses Copilot CLI)")
+					Msg("Copilot ACP provider initialized (Copilot CLI, premium models)")
 			}
 		}
 	}
@@ -649,7 +643,11 @@ func (s *Server) ReloadProviders() error {
 			}
 		case "copilot":
 			if err := s.reloadCopilotProvider(); err != nil {
-				s.logger.Warn().Err(err).Msg("Failed to reload Copilot provider")
+				s.logger.Warn().Err(err).Msg("Failed to reload Copilot API provider")
+			}
+		case "copilot-acp":
+			if err := s.reloadCopilotACPProvider(); err != nil {
+				s.logger.Warn().Err(err).Msg("Failed to reload Copilot ACP provider")
 			}
 		}
 	}
@@ -713,7 +711,7 @@ func (s *Server) reloadOllamaProvider() error {
 	return nil
 }
 
-// reloadCopilotProvider reinitializes the Copilot provider.
+// reloadCopilotProvider reinitializes the Copilot API provider (free models).
 func (s *Server) reloadCopilotProvider() error {
 	githubToken := s.cfg.Copilot.Token
 	if githubToken == "" {
@@ -725,13 +723,12 @@ func (s *Server) reloadCopilotProvider() error {
 		maxTokens = 4096
 	}
 
-	// Reload Copilot API provider (free models)
 	copilotFactory := copilot.Factory(githubToken, maxTokens)
 	copilotPool := provider.NewPool(copilotFactory)
 	copilotModels := copilot.ListModels()
 
 	if err := s.multiPool.UpdateProvider("copilot", copilotPool, copilotModels); err != nil {
-		return fmt.Errorf("failed to update Copilot provider: %w", err)
+		return fmt.Errorf("failed to update Copilot API provider: %w", err)
 	}
 
 	s.logger.Info().
@@ -739,7 +736,11 @@ func (s *Server) reloadCopilotProvider() error {
 		Int("models", len(copilotModels)).
 		Msg("Copilot API provider reloaded")
 
-	// Reload Copilot ACP provider (premium models)
+	return nil
+}
+
+// reloadCopilotACPProvider reinitializes the Copilot ACP provider (premium models).
+func (s *Server) reloadCopilotACPProvider() error {
 	acpCfg := s.buildACPConfig()
 	acpFactory := copilot.ACPFactory(acpCfg)
 	acpPool := provider.NewPool(acpFactory)
@@ -748,7 +749,7 @@ func (s *Server) reloadCopilotProvider() error {
 	if err := s.multiPool.UpdateProvider("copilot-acp", acpPool, acpModels); err != nil {
 		// If copilot-acp doesn't exist yet, add it
 		if addErr := s.multiPool.AddProvider("copilot-acp", acpPool, acpModels); addErr != nil {
-			s.logger.Warn().Err(addErr).Msg("Failed to add Copilot ACP provider during reload")
+			return fmt.Errorf("failed to add Copilot ACP provider: %w", addErr)
 		}
 	}
 

@@ -62,8 +62,8 @@ func SetDefaults() {
 	viper.SetDefault("copilot.max_tokens", 4096)
 
 	// Provider 配置
-	viper.SetDefault("provider.default", "copilot")
-	viper.SetDefault("provider.enabled", []string{"copilot"}) // 默认只启用 copilot
+	viper.SetDefault("provider.default", "copilot-acp")
+	viper.SetDefault("provider.enabled", []string{"copilot", "copilot-acp"}) // 默认启用 copilot API 和 ACP
 
 	// Storage 配置
 	viper.SetDefault("storage.driver", "sqlite")

@@ -68,17 +68,42 @@ type ProviderConfig struct {
 
 // GetEnabledProviders 返回启用的 Provider 列表
 // 向后兼容逻辑：
-// 1. 如果 Enabled 非空，直接返回
+// 1. 如果 Enabled 非空，检查旧格式并扩展
 // 2. 如果 Enabled 为空但 Default 非空，返回 [Default]
-// 3. 如果都为空，默认返回 ["copilot"]
+// 3. 如果都为空，默认返回 ["copilot", "copilot-acp"]
+//
+// 旧格式兼容：旧配置中 ["copilot"] 实际同时启用了 copilot API 和 ACP，
+// 为了不破坏升级用户的体验，旧格式自动扩展为 ["copilot", "copilot-acp"]。
 func (c *ProviderConfig) GetEnabledProviders() []string {
 	if len(c.Enabled) > 0 {
+		// 向后兼容：旧配置 ["copilot"] 隐式包含 copilot-acp，
+		// 自动扩展以保持升级后行为一致
+		hasCopilot := false
+		hasCopilotACP := false
+		for _, p := range c.Enabled {
+			if p == "copilot" {
+				hasCopilot = true
+			}
+			if p == "copilot-acp" {
+				hasCopilotACP = true
+			}
+		}
+		// 只有旧格式（有copilot但没有显式的copilot-acp且列表中没有其他copilot-acp相关项）
+		// 才做扩展。一旦用户保存过新格式，就不再自动扩展。
+		if hasCopilot && !hasCopilotACP {
+			// 检查是否是旧格式：如果配置文件中没有copilot-acp的痕迹
+			// 则认为是旧格式，自动追加
+			result := make([]string, len(c.Enabled))
+			copy(result, c.Enabled)
+			result = append(result, "copilot-acp")
+			return result
+		}
 		return c.Enabled
 	}
 	if c.Default != "" {
 		return []string{c.Default}
 	}
-	return []string{"copilot"}
+	return []string{"copilot", "copilot-acp"}
 }
 
 // OllamaConfig Ollama 本地 LLM 配置

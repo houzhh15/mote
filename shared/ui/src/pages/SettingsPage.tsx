@@ -31,6 +31,7 @@ import {
   ExclamationCircleOutlined,
   PoweroffOutlined,
   SettingOutlined,
+  RocketOutlined,
 } from '@ant-design/icons';
 import { useAPI } from '../context/APIContext';
 import type { ServiceStatus, AuthStatus, DeviceCodeResponse, ChannelStatus, IMessageChannelConfig, AppleNotesChannelConfig, AppleRemindersChannelConfig, ChannelConfig, Model, ScenarioModels, ProviderStatus } from '../types';
@@ -230,9 +231,9 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
   // Helper: Get provider display label
   const getProviderLabel = (provider: string): string => {
     switch (provider) {
-      case 'copilot': return 'GitHub Copilot';
-      case 'copilot-acp': return 'Copilot (Premium)';
-      case 'ollama': return 'Ollama';
+      case 'copilot': return 'Copilot API (免费模型)';
+      case 'copilot-acp': return 'Copilot ACP (付费模型)';
+      case 'ollama': return 'Ollama (本地)';
       default: return provider;
     }
   };
@@ -241,6 +242,9 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
   const getProviderIcon = (provider: string, props?: Record<string, unknown>) => {
     if (provider === 'ollama') {
       return <OllamaIcon {...props} />;
+    }
+    if (provider === 'copilot-acp') {
+      return <RocketOutlined {...props} />;
     }
     return <GithubOutlined {...props} />;
   };
@@ -658,8 +662,15 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                   <Checkbox value="copilot">
                     <Space>
                       <GithubOutlined />
-                      GitHub Copilot
+                      Copilot API (免费模型)
                       {defaultProvider === 'copilot' && <Tag color="blue" style={{ marginLeft: 4 }}>默认</Tag>}
+                    </Space>
+                  </Checkbox>
+                  <Checkbox value="copilot-acp">
+                    <Space>
+                      <RocketOutlined />
+                      Copilot ACP (付费模型)
+                      {defaultProvider === 'copilot-acp' && <Tag color="blue" style={{ marginLeft: 4 }}>默认</Tag>}
                     </Space>
                   </Checkbox>
                   <Checkbox value="ollama">
@@ -728,7 +739,15 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
             {enabledProviders.includes('copilot') && (
               <Alert
                 type="info"
-                message="GitHub Copilot 需要有效的订阅和认证"
+                message="GitHub Copilot API 需要有效的订阅和认证"
+                showIcon
+              />
+            )}
+
+            {enabledProviders.includes('copilot-acp') && (
+              <Alert
+                type="info"
+                message="Copilot ACP 需要本地安装 GitHub Copilot CLI 并完成认证"
                 showIcon
               />
             )}

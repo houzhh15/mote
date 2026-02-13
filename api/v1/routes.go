@@ -1140,7 +1140,7 @@ func (r *Router) HandleUpdateConfig(w http.ResponseWriter, req *http.Request) {
 
 	// Update provider configuration
 	if body.Provider != nil {
-		validProviders := []string{"copilot", "ollama"}
+		validProviders := []string{"copilot", "copilot-acp", "ollama"}
 
 		// Validate and update default provider
 		if body.Provider.Default != "" {
@@ -1152,7 +1152,7 @@ func (r *Router) HandleUpdateConfig(w http.ResponseWriter, req *http.Request) {
 				}
 			}
 			if !valid {
-				handlers.SendError(w, http.StatusBadRequest, handlers.ErrCodeInvalidRequest, "Invalid provider type. Supported: copilot, ollama")
+				handlers.SendError(w, http.StatusBadRequest, handlers.ErrCodeInvalidRequest, "Invalid provider type. Supported: copilot, copilot-acp, ollama")
 				return
 			}
 			viper.Set("provider.default", body.Provider.Default)
