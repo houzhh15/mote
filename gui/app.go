@@ -474,14 +474,15 @@ func (a *App) CallAPI(method, path, bodyJSON string) ([]byte, error) {
 // ChatStream sends a chat message and streams the response via Wails events.
 // Events are emitted with the name "chat:stream:{sessionID}" containing JSON event data.
 // This method returns when the stream is complete.
-func (a *App) ChatStream(message string, sessionID string) error {
+func (a *App) ChatStream(requestJSON string) error {
 	apiURL := fmt.Sprintf("http://localhost:%d/api/v1/chat/stream", a.serverPort)
 
-	reqBody := map[string]interface{}{
-		"message":    message,
-		"session_id": sessionID,
-		"stream":     true,
+	// Parse the incoming JSON to inject stream:true, then re-marshal
+	var reqBody map[string]interface{}
+	if err := json.Unmarshal([]byte(requestJSON), &reqBody); err != nil {
+		return fmt.Errorf("failed to parse request JSON: %w", err)
 	}
+	reqBody["stream"] = true
 
 	jsonData, err := json.Marshal(reqBody)
 	if err != nil {
@@ -508,6 +509,7 @@ func (a *App) ChatStream(message string, sessionID string) error {
 	}
 
 	// Use session-specific event name for isolation between concurrent chats
+	sessionID, _ := reqBody["session_id"].(string)
 	eventName := fmt.Sprintf("chat:stream:%s", sessionID)
 
 	// Read SSE events and emit them via Wails events

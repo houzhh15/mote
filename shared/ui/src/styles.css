@@ -255,3 +255,89 @@ html.dark .ant-tooltip-inner {
   font-size: 13px !important;
 }
 
+
+/* ============================================
+   Markdown Content Styles (for ReactMarkdown)
+   ============================================ */
+.markdown-content table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 12px 0;
+  font-size: 13px;
+}
+
+.markdown-content table th,
+.markdown-content table td {
+  border: 1px solid var(--border-color);
+  padding: 8px 12px;
+  text-align: left;
+}
+
+.markdown-content table th {
+  background-color: var(--content-bg-secondary);
+  font-weight: 600;
+}
+
+.markdown-content table tr:hover {
+  background-color: var(--hover-bg);
+}
+
+/* Light mode: lighter background for tables */
+:root:not([data-theme="dark"]) .markdown-content table th,
+:root:not([data-theme="dark"]) .markdown-content table tr:nth-child(even) {
+  background-color: #fafafa;
+}
+
+/* Code blocks in markdown */
+.markdown-content pre {
+  background-color: var(--content-bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  padding: 12px;
+  overflow-x: auto;
+  margin: 12px 0;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+
+
+.markdown-content code {
+  background-color: var(--content-bg-secondary);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'Courier New', monospace;
+  font-size: 12px;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+
+
+.markdown-content pre code {
+  background-color: transparent;
+  padding: 0;
+  color: inherit;
+  font-weight: 500;
+}
+
+/* Links in markdown */
+.markdown-content a {
+  color: var(--ant-primary-color);
+  text-decoration: none;
+}
+
+.markdown-content a:hover {
+  text-decoration: underline;
+}
+
+/* Lists in markdown */
+.markdown-content ul,
+.markdown-content ol {
+  margin: 8px 0;
+  padding-left: 24px;
+}
+
+.markdown-content li {
+  margin: 4px 0;
+}

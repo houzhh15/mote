@@ -4,8 +4,9 @@
 
 import React, { useState, useRef, useEffect, useCallback, useMemo, memo } from 'react';
 import { Input, Button, Typography, Space, Spin, message, Select, Tooltip, Collapse, Modal, Tag, theme, Dropdown } from 'antd';
-import { SendOutlined, ClearOutlined, PlusOutlined, ToolOutlined, FolderOutlined, FolderOpenOutlined, LinkOutlined, DisconnectOutlined, GithubOutlined, StopOutlined, CopyOutlined, EditOutlined, DeleteOutlined, ThunderboltOutlined, PauseOutlined, PlayCircleOutlined } from '@ant-design/icons';
+import { SendOutlined, ClearOutlined, PlusOutlined, ToolOutlined, FolderOutlined, FolderOpenOutlined, LinkOutlined, DisconnectOutlined, GithubOutlined, StopOutlined, CopyOutlined, EditOutlined, DeleteOutlined, ThunderboltOutlined, PauseOutlined, PlayCircleOutlined, CloseCircleFilled } from '@ant-design/icons';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { useAPI } from '../context/APIContext';
 import { useTheme } from '../context/ThemeContext';
 import { useChatManager } from '../context/ChatManager';
@@ -19,7 +20,7 @@ import { StatusIndicator, ErrorBanner } from '../components';
 import { useConnectionStatus, useHasConnectionIssues } from '../context/ConnectionStatusContext';
 import moteLogo from '../assets/mote_logo.png';
 import userAvatar from '../assets/user.png';
-import type { Message, Model, Workspace, ErrorDetail, Skill, ReconfigureSessionResponse } from '../types';
+import type { Message, Model, Workspace, ErrorDetail, Skill, ReconfigureSessionResponse, ImageAttachment } from '../types';
 
 const { TextArea } = Input;
 const { Text } = Typography;
@@ -187,10 +188,10 @@ const MessageItem = memo<MessageItemProps>(({
           )}
           
           {/* Message Content */}
-          {hasContent && (
+          {(hasContent || (isUser && msg.images && msg.images.length > 0)) && (
             <div
               style={{
-                background: isUser ? '#8B5CF6' : tokenColors.colorBgLayout,
+                background: isUser ? '#8B5CF6' : (effectiveTheme === 'light' ? '#ffffff' : tokenColors.colorBgLayout),
                 color: isUser ? 'white' : tokenColors.colorText,
                 padding: '12px 16px',
                 borderRadius: 12,
@@ -200,10 +201,28 @@ const MessageItem = memo<MessageItemProps>(({
               }}
             >
               {isUser ? (
-                <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{msg.content}</div>
+                <>
+                  {/* Display attached images */}
+                  {msg.images && msg.images.length > 0 && (
+                    <div style={{ display: 'flex', gap: 8, marginBottom: hasContent ? 8 : 0, flexWrap: 'wrap' }}>
+                      {msg.images.map((img, i) => (
+                        <img 
+                          key={i} 
+                          src={`data:${img.mime_type};base64,${img.data}`}
+                          alt={img.name || 'image'}
+                          style={{ maxHeight: 200, maxWidth: '100%', borderRadius: 8, cursor: 'pointer' }}
+                          onClick={() => window.open(`data:${img.mime_type};base64,${img.data}`, '_blank')}
+                        />
+                      ))}
+                    </div>
+                  )}
+                  {hasContent && (
+                    <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{msg.content}</div>
+                  )}
+                </>
               ) : (
                 <div className="markdown-content">
-                  <ReactMarkdown>{msg.content}</ReactMarkdown>
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
                 </div>
               )}
             </div>
@@ -764,6 +783,8 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
   // Pause state from ChatManager
   const [paused, setPaused] = useState(false);
   const [pausePendingTools, setPausePendingTools] = useState<string[]>([]);
+  // Pasted images state
+  const [pastedImages, setPastedImages] = useState<ImageAttachment[]>([]);
   const lastScrollHeightRef = useRef(0);
   // Truncation state - when response is cut off due to max_tokens
   const [truncated, setTruncated] = useState(false);
@@ -926,15 +947,30 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
   // 处理来自 NewChatPage 的 pending message
   const processPendingMessage = useCallback(async (sid: string) => {
     const storageKey = `mote_pending_message_${sid}`;
+    const imagesKey = `mote_pending_images_${sid}`;
     const pendingMessage = sessionStorage.getItem(storageKey);
     if (pendingMessage) {
       sessionStorage.removeItem(storageKey);
+      
+      // Check for pending images
+      let pendingImages: ImageAttachment[] | undefined;
+      const imagesJSON = sessionStorage.getItem(imagesKey);
+      if (imagesJSON) {
+        sessionStorage.removeItem(imagesKey);
+        try {
+          pendingImages = JSON.parse(imagesJSON);
+        } catch {
+          // Ignore parse errors
+        }
+      }
+      
       // 等待一小段时间确保页面已完全渲染
       await new Promise(resolve => setTimeout(resolve, 100));
       
       const userMessage: Message = {
         role: 'user',
         content: pendingMessage.trim(),
+        images: pendingImages,
         timestamp: new Date().toISOString(),
       };
       
@@ -951,6 +987,7 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
           message: userMessage.content,
           session_id: sid,
           stream: true,
+          images: pendingImages,
         },
         api.chat,
         (_assistantMessage, error) => {
@@ -1301,11 +1338,25 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
   };
 
   const handleSendInternal = async (retryCount = 0) => {
-    if (!inputValue.trim() || loading || !sessionId || isInitializing) return;
+    const hasText = inputValue.trim().length > 0;
+    const hasImages = pastedImages.length > 0;
+    if ((!hasText && !hasImages) || loading || !sessionId || isInitializing) return;
+
+    // Warn if current model doesn't support vision but images are attached
+    if (hasImages) {
+      const currentModelObj = models.find(m => m.id === currentModel);
+      if (currentModelObj && !currentModelObj.supports_vision) {
+        message.warning(`当前模型 ${currentModelObj.display_name || currentModel} 不支持图片输入，图片可能被忽略`);
+      }
+    }
+
+    // Capture current images before clearing
+    const currentImages = hasImages ? [...pastedImages] : undefined;
 
     const userMessage: Message = {
       role: 'user',
-      content: inputValue.trim(),
+      content: inputValue.trim() || (hasImages ? '请描述这张图片' : ''),
+      images: currentImages,
       timestamp: new Date().toISOString(),
     };
 
@@ -1314,6 +1365,7 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
 
     setMessages((prev: Message[]) => [...prev, userMessage]);
     setInputValue('');
+    setPastedImages([]);
     setLoading(true);
     setStreaming(true);
     currentResponseRef.current = '';
@@ -1325,6 +1377,7 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
         message: userMessage.content,
         session_id: sessionId,
         stream: true,
+        images: currentImages,
       },
       api.chat,
       (_assistantMessage, error) => {
@@ -1498,6 +1551,43 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
       }
     }
   };
+
+  // Handle paste event for screenshot/image paste
+  const handlePaste = useCallback((e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+
+    for (const item of Array.from(items)) {
+      if (item.type.startsWith('image/')) {
+        e.preventDefault();
+        const file = item.getAsFile();
+        if (!file) continue;
+
+        // Size limit: 10MB
+        if (file.size > 10 * 1024 * 1024) {
+          message.warning('图片大小不能超过 10MB');
+          continue;
+        }
+
+        const mimeType = item.type;
+        const reader = new FileReader();
+        reader.onload = () => {
+          const dataUrl = reader.result as string;
+          // Extract base64 data (remove "data:image/xxx;base64," prefix)
+          const base64 = dataUrl.split(',')[1];
+          if (base64) {
+            setPastedImages(prev => [...prev, {
+              data: base64,
+              mime_type: mimeType,
+              name: `screenshot-${Date.now()}.${mimeType.split('/')[1] || 'png'}`,
+            }]);
+          }
+        };
+        reader.readAsDataURL(file);
+        return; // Only handle the first image
+      }
+    }
+  }, []);
 
   // Handle input change with prompt and file detection
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -1842,10 +1932,18 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
                   <Button 
                     icon={<LinkOutlined />} 
                     onClick={() => setWorkspaceModalVisible(true)}
-                    style={{ color: '#52c41a' }}
+                    style={{ color: '#52c41a', maxWidth: 200 }}
                     className="page-header-btn"
                   >
-                    {workspace.alias || workspace.path.split('/').pop()}
+                    <span style={{ 
+                      overflow: 'hidden', 
+                      textOverflow: 'ellipsis', 
+                      whiteSpace: 'nowrap',
+                      display: 'inline-block',
+                      maxWidth: '100%'
+                    }}>
+                      {workspace.alias || workspace.path.split('/').pop()}
+                    </span>
                   </Button>
                 </Tooltip>
               ) : (
@@ -2076,16 +2174,43 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
           />
         )}
 
-        <Space.Compact style={{ width: '100%' }}>
+        <Space.Compact style={{ width: '100%' }} direction="vertical">
+          {/* Pasted Images Preview */}
+          {pastedImages.length > 0 && (
+            <div style={{ 
+              display: 'flex', gap: 8, padding: '8px 8px 4px', flexWrap: 'wrap',
+              background: tokenColors.colorBgLayout, borderRadius: '8px 8px 0 0',
+              border: `1px solid ${tokenColors.colorBorderSecondary}`, borderBottom: 'none',
+            }}>
+              {pastedImages.map((img, i) => (
+                <div key={i} style={{ position: 'relative', display: 'inline-block' }}>
+                  <img
+                    src={`data:${img.mime_type};base64,${img.data}`}
+                    alt="preview"
+                    style={{ height: 64, borderRadius: 6, border: `1px solid ${tokenColors.colorBorderSecondary}`, objectFit: 'cover' }}
+                  />
+                  <CloseCircleFilled
+                    style={{ 
+                      position: 'absolute', top: -6, right: -6, cursor: 'pointer', 
+                      fontSize: 16, color: '#ff4d4f', background: 'white', borderRadius: '50%',
+                    }}
+                    onClick={() => setPastedImages(prev => prev.filter((_, idx) => idx !== i))}
+                  />
+                </div>
+              ))}
+            </div>
+          )}
+          <Space.Compact style={{ width: '100%' }}>
           <TextArea
             ref={inputRef}
             value={inputValue}
             onChange={handleInputChange}
             onKeyDown={handleKeyPress}
-            placeholder={isInitializing ? "CLI初始化中，请稍候..." : "输入消息... (/ 引用提示词, @ 引用文件, Shift+Enter 换行)"}
+            onPaste={handlePaste}
+            placeholder={isInitializing ? "CLI初始化中，请稍候..." : pastedImages.length > 0 ? "添加说明文字（可选）... (Ctrl+V 粘贴截图)" : "输入消息... (/ 引用提示词, @ 引用文件, Ctrl+V 粘贴截图, Shift+Enter 换行)"}
             autoSize={{ minRows: 1, maxRows: 10 }}
             disabled={loading || isInitializing}
-            style={{ resize: 'none' }}
+            style={{ resize: 'none', borderRadius: pastedImages.length > 0 ? '0 0 0 6px' : undefined }}
             className="mote-input"
           />
           {paused ? (
@@ -2134,11 +2259,12 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
               icon={<SendOutlined />}
               onClick={handleSend}
               loading={loading || isInitializing}
-              disabled={!inputValue.trim() || isInitializing}
+              disabled={(!inputValue.trim() && pastedImages.length === 0) || isInitializing}
             >
               {isInitializing ? '初始化中...' : '发送'}
             </Button>
           )}
+        </Space.Compact>
         </Space.Compact>
 
         {/* Pause Input Modal */}

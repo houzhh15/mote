@@ -26,8 +26,8 @@ func (r *Router) HandleChat(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	if chatReq.Message == "" {
-		handlers.SendError(w, http.StatusBadRequest, ErrCodeInvalidRequest, "Message is required")
+	if chatReq.Message == "" && len(chatReq.Images) == 0 {
+		handlers.SendError(w, http.StatusBadRequest, ErrCodeInvalidRequest, "Message or images required")
 		return
 	}
 
@@ -44,13 +44,25 @@ func (r *Router) HandleChat(w http.ResponseWriter, req *http.Request) {
 		sessionID = generateSessionID()
 	}
 
+	// Convert images to provider attachments
+	var attachments []provider.Attachment
+	if len(chatReq.Images) > 0 {
+		attachments = buildAttachmentsFromImages(chatReq.Images)
+	}
+
+	// Provide a default message if only images are sent
+	message := chatReq.Message
+	if message == "" && len(attachments) > 0 {
+		message = "请描述这张图片"
+	}
+
 	// Run agent and collect response
 	var events <-chan runner.Event
 	var err error
 	if chatReq.Model != "" {
-		events, err = r.runner.RunWithModel(ctx, sessionID, chatReq.Message, chatReq.Model, "chat")
+		events, err = r.runner.RunWithModel(ctx, sessionID, message, chatReq.Model, "chat", attachments...)
 	} else {
-		events, err = r.runner.Run(ctx, sessionID, chatReq.Message)
+		events, err = r.runner.Run(ctx, sessionID, message, attachments...)
 	}
 	if err != nil {
 		handlers.SendError(w, http.StatusInternalServerError, ErrCodeInternalError, err.Error())
@@ -58,13 +70,13 @@ func (r *Router) HandleChat(w http.ResponseWriter, req *http.Request) {
 	}
 
 	// Collect events into response
-	var message string
+	var responseMsg string
 	var toolCalls []ToolCallResult
 
 	for event := range events {
 		switch event.Type {
 		case runner.EventTypeContent:
-			message += event.Content
+			responseMsg += event.Content
 		case runner.EventTypeToolResult:
 			if event.ToolResult != nil {
 				toolCalls = append(toolCalls, ToolCallResult{
@@ -80,7 +92,7 @@ func (r *Router) HandleChat(w http.ResponseWriter, req *http.Request) {
 
 	handlers.SendJSON(w, http.StatusOK, ChatResponse{
 		SessionID: sessionID,
-		Message:   message,
+		Message:   responseMsg,
 		ToolCalls: toolCalls,
 	})
 }
@@ -92,7 +104,7 @@ func parseFileReferences(message string) (cleanMessage string, fileRefs []string
 	// Negative lookbehind for alphanumeric to avoid matching email addresses
 	re := regexp.MustCompile(`(?:^|\s)@([^\s@]+)`)
 	matches := re.FindAllStringSubmatch(message, -1)
-	
+
 	for _, match := range matches {
 		if len(match) > 1 {
 			filepath := match[1]
@@ -104,7 +116,7 @@ func parseFileReferences(message string) (cleanMessage string, fileRefs []string
 			}
 		}
 	}
-	
+
 	// Keep original message (including @ references for UI display)
 	cleanMessage = message
 	return
@@ -116,18 +128,18 @@ func isValidFilePath(path string) bool {
 	if strings.Contains(path, "..") {
 		return false
 	}
-	
+
 	// 2. Block sensitive files (check filename only, not full path)
 	filename := filepath.Base(path)
 	filenameLower := strings.ToLower(filename)
-	
+
 	sensitivePaths := []string{".env", "id_rsa", ".ssh", "password", "secret", "private_key"}
 	for _, s := range sensitivePaths {
 		if strings.Contains(filenameLower, s) {
 			return false
 		}
 	}
-	
+
 	return true
 }
 
@@ -144,17 +156,17 @@ func buildAttachmentFromFile(filePath string) (provider.Attachment, error) {
 		}
 		return provider.Attachment{}, fmt.Errorf("read file: %w", err)
 	}
-	
+
 	// 2. Check file size (10MB limit)
 	const maxFileSize = 10 * 1024 * 1024
 	if len(data) > maxFileSize {
-		return provider.Attachment{}, fmt.Errorf("file too large: %s (%.1f MB, limit: 10 MB)", 
+		return provider.Attachment{}, fmt.Errorf("file too large: %s (%.1f MB, limit: 10 MB)",
 			filePath, float64(len(data))/1024/1024)
 	}
-	
+
 	// 3. Detect MIME type
 	mimeType := detectMimeType(filePath, data)
-	
+
 	// 4. Construct attachment
 	attachment := provider.Attachment{
 		Filepath: filePath,
@@ -162,32 +174,54 @@ func buildAttachmentFromFile(filePath string) (provider.Attachment, error) {
 		MimeType: mimeType,
 		Size:     len(data),
 	}
-	
+
 	// 5. Process based on type
 	if strings.HasPrefix(mimeType, "image/") {
 		// Image: Base64 encode
 		attachment.Type = "image_url"
 		attachment.ImageURL = &provider.ImageURL{
-			URL: fmt.Sprintf("data:%s;base64,%s", 
-				mimeType, 
+			URL: fmt.Sprintf("data:%s;base64,%s",
+				mimeType,
 				base64.StdEncoding.EncodeToString(data)),
 		}
 	} else {
 		// Code/text: direct text
 		attachment.Type = "text"
 		attachment.Text = string(data)
-		
+
 		// Add metadata
 		attachment.Metadata = map[string]any{
 			"filepath": filePath,
 			"language": detectLanguage(filePath),
 		}
 	}
-	
+
 	return attachment, nil
 }
 
-// detectMimeType detects MIME type from file extension and content.
+// buildAttachmentsFromImages converts ImageData from the API request to provider Attachments.
+func buildAttachmentsFromImages(images []ImageData) []provider.Attachment {
+	var attachments []provider.Attachment
+	for _, img := range images {
+		// Validate MIME type
+		if !strings.HasPrefix(img.MimeType, "image/") {
+			continue
+		}
+		// Validate base64 data is not empty
+		if img.Data == "" {
+			continue
+		}
+		// Build data URI
+		dataURI := fmt.Sprintf("data:%s;base64,%s", img.MimeType, img.Data)
+		attachments = append(attachments, provider.Attachment{
+			Type:     "image_url",
+			ImageURL: &provider.ImageURL{URL: dataURI},
+			MimeType: img.MimeType,
+			Filename: img.Name,
+		})
+	}
+	return attachments
+}
 func detectMimeType(filePath string, data []byte) string {
 	// Extension-based detection
 	ext := strings.ToLower(filepath.Ext(filePath))
@@ -216,11 +250,11 @@ func detectMimeType(filePath string, data []byte) string {
 		".xml":  "text/xml",
 		".txt":  "text/plain",
 	}
-	
+
 	if mime, ok := extToMime[ext]; ok {
 		return mime
 	}
-	
+
 	// Fallback: content-based detection
 	return http.DetectContentType(data)
 }
@@ -254,11 +288,11 @@ func detectLanguage(filePath string) string {
 		".yml":   "yaml",
 		".xml":   "xml",
 	}
-	
+
 	if lang, ok := langMap[ext]; ok {
 		return lang
 	}
-	
+
 	return "text"
 }
 
@@ -270,8 +304,8 @@ func (r *Router) HandleChatStream(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	if chatReq.Message == "" {
-		handlers.SendError(w, http.StatusBadRequest, ErrCodeInvalidRequest, "Message is required")
+	if chatReq.Message == "" && len(chatReq.Images) == 0 {
+		handlers.SendError(w, http.StatusBadRequest, ErrCodeInvalidRequest, "Message or images required")
 		return
 	}
 
@@ -304,13 +338,25 @@ func (r *Router) HandleChatStream(w http.ResponseWriter, req *http.Request) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
 	defer cancel()
 
+	// Convert images to provider attachments
+	var attachments []provider.Attachment
+	if len(chatReq.Images) > 0 {
+		attachments = buildAttachmentsFromImages(chatReq.Images)
+	}
+
+	// Provide a default message if only images are sent
+	message := chatReq.Message
+	if message == "" && len(attachments) > 0 {
+		message = "请描述这张图片"
+	}
+
 	// Run agent with streaming
 	var events <-chan runner.Event
 	var err error
 	if chatReq.Model != "" {
-		events, err = r.runner.RunWithModel(ctx, sessionID, chatReq.Message, chatReq.Model, "chat")
+		events, err = r.runner.RunWithModel(ctx, sessionID, message, chatReq.Model, "chat", attachments...)
 	} else {
-		events, err = r.runner.Run(ctx, sessionID, chatReq.Message)
+		events, err = r.runner.Run(ctx, sessionID, message, attachments...)
 	}
 	if err != nil {
 		sendSSEError(w, flusher, err)

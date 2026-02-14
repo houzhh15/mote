@@ -84,7 +84,8 @@ interface WailsApp {
   
   // Streaming Chat - Streams events via Wails event system
   // Events are emitted as "chat:stream" with JSON event data
-  ChatStream(message: string, sessionID: string): Promise<void>;
+  // Accepts full ChatRequest JSON string (message, session_id, images, etc.)
+  ChatStream(requestJSON: string): Promise<void>;
   
   // GUI-specific: Service status (includes local process/IPC info)
   GetServiceStatus(): Promise<Record<string, unknown>>;
@@ -216,8 +217,8 @@ export function createWailsAdapter(app: WailsApp): APIAdapter {
       try {
         // 如果已取消，直接返回
         if (signal?.aborted) return;
-        // Start streaming chat - this returns when stream is complete
-        await app.ChatStream(request.message, request.session_id || '');
+        // Start streaming chat - pass full request JSON including images
+        await app.ChatStream(JSON.stringify(request));
       } finally {
         // Clean up event listener
         if (cleanup) {

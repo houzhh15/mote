@@ -75,8 +75,15 @@ func (m *MultiProviderPool) GetProvider(modelID string) (Provider, string, error
 		if strings.HasPrefix(modelID, "ollama:") {
 			providerName = "ollama"
 		} else {
-			// Default to copilot for backward compatibility
-			providerName = "copilot"
+			// Try copilot first, then copilot-acp as fallback.
+			// This avoids hardcoding "copilot" when only copilot-acp is enabled.
+			if _, exists := m.pools["copilot"]; exists {
+				providerName = "copilot"
+			} else if _, exists := m.pools["copilot-acp"]; exists {
+				providerName = "copilot-acp"
+			} else {
+				providerName = "copilot" // will trigger "not registered" error below
+			}
 		}
 	}
 

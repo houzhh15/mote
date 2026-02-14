@@ -1428,16 +1428,34 @@ func (r *Router) HandleListModels(w http.ResponseWriter, req *http.Request) {
 		return models[i].ID < models[j].ID
 	})
 
-	// Get current model
+	// Get current model from config
 	current := viper.GetString("copilot.model")
 	if current == "" {
 		current = copilot.DefaultModel
 	}
 
+	// Determine provider-aware default model.
+	// If only copilot-acp is available, the default should be an ACP model;
+	// returning an API-only model (e.g., grok-code-fast-1) would cause CLI errors.
+	defaultModel := copilot.DefaultModel
+	if r.multiPool != nil {
+		hasAPI := r.multiPool.HasProvider("copilot")
+		hasACP := r.multiPool.HasProvider("copilot-acp")
+		if hasACP && !hasAPI {
+			defaultModel = copilot.ACPDefaultModel
+		}
+		// Also correct current if it's incompatible with available providers
+		if hasACP && !hasAPI && !copilot.IsACPModel(current) {
+			current = copilot.ACPDefaultModel
+		} else if hasAPI && !hasACP && !copilot.IsAPIModel(current) {
+			current = copilot.DefaultModel
+		}
+	}
+
 	handlers.SendJSON(w, http.StatusOK, ModelsResponse{
 		Models:    models,
 		Current:   current,
-		Default:   copilot.DefaultModel,
+		Default:   defaultModel,
 		Providers: providerStatuses,
 	})
 }

@@ -203,6 +203,8 @@ export const CronPage: React.FC = () => {
       schedule: parsed.type === 'custom' ? job.schedule : undefined,
       prompt: job.prompt,
       model: job.model || undefined,
+      workspace_path: job.workspace_path || undefined,
+      workspace_alias: job.workspace_alias || undefined,
     });
     setModalVisible(true);
   };
@@ -234,6 +236,8 @@ export const CronPage: React.FC = () => {
         schedule: cronSchedule,
         prompt: values.prompt as string,
         model: values.model as string | undefined,
+        workspace_path: (values.workspace_path as string) || undefined,
+        workspace_alias: (values.workspace_alias as string) || undefined,
       };
       
       if (editingJob) {
@@ -242,6 +246,8 @@ export const CronPage: React.FC = () => {
           schedule: cronSchedule,
           prompt: values.prompt as string,
           model: values.model as string | undefined,
+          workspace_path: (values.workspace_path as string) || undefined,
+          workspace_alias: (values.workspace_alias as string) || undefined,
         });
         message.success('更新成功');
       } else {
@@ -337,6 +343,13 @@ export const CronPage: React.FC = () => {
                       </Tooltip>
                     </div>
                     <Text ellipsis style={{ color: '#666', fontSize: 12 }}>{job.prompt}</Text>
+                    {job.workspace_path && (
+                      <div style={{ marginTop: 4 }}>
+                        <Text type="secondary" style={{ fontSize: 11 }}>
+                          📂 {job.workspace_alias ? `${job.workspace_alias} (${job.workspace_path})` : job.workspace_path}
+                        </Text>
+                      </div>
+                    )}
                     {job.next_run && (
                       <div style={{ marginTop: 6 }}>
                         <Text type="secondary" style={{ fontSize: 11 }}>
@@ -524,6 +537,12 @@ export const CronPage: React.FC = () => {
                 ))
               )}
             </Select>
+          </Form.Item>
+          <Form.Item name="workspace_path" label="工作目录" tooltip="设置后，AI 将在此目录上下文中执行任务">
+            <Input placeholder="例如: /Users/me/project（可选）" />
+          </Form.Item>
+          <Form.Item name="workspace_alias" label="目录别名" tooltip="可选，为工作目录设置一个友好名称">
+            <Input placeholder="例如: my-project（可选）" />
           </Form.Item>
           <Form.Item name="prompt" label="执行提示词" rules={[{ required: true, message: '请输入执行提示词' }]}>
             <Input.TextArea rows={3} placeholder="AI 将执行的任务描述" />

@@ -28,6 +28,10 @@ type Job struct {
 	Payload string `json:"payload" db:"payload"`
 	// Enabled indicates if the job is active.
 	Enabled bool `json:"enabled" db:"enabled"`
+	// WorkspacePath is the absolute path to the workspace directory for this job.
+	WorkspacePath string `json:"workspace_path,omitempty" db:"workspace_path"`
+	// WorkspaceAlias is the display name for the workspace.
+	WorkspaceAlias string `json:"workspace_alias,omitempty" db:"workspace_alias"`
 	// LastRun is the timestamp of the last execution.
 	LastRun *time.Time `json:"last_run,omitempty" db:"last_run"`
 	// NextRun is the scheduled time for the next execution.
@@ -40,11 +44,13 @@ type Job struct {
 
 // JobCreate is the input for creating a new job.
 type JobCreate struct {
-	Name     string  `json:"name"`
-	Schedule string  `json:"schedule"`
-	Type     JobType `json:"type"`
-	Payload  string  `json:"payload"`
-	Enabled  bool    `json:"enabled"`
+	Name           string  `json:"name"`
+	Schedule       string  `json:"schedule"`
+	Type           JobType `json:"type"`
+	Payload        string  `json:"payload"`
+	Enabled        bool    `json:"enabled"`
+	WorkspacePath  string  `json:"workspace_path,omitempty"`
+	WorkspaceAlias string  `json:"workspace_alias,omitempty"`
 }
 
 // Validate checks if the create input is valid.
@@ -66,10 +72,12 @@ func (c *JobCreate) Validate() error {
 
 // JobPatch is the input for updating a job.
 type JobPatch struct {
-	Schedule *string  `json:"schedule,omitempty"`
-	Type     *JobType `json:"type,omitempty"`
-	Payload  *string  `json:"payload,omitempty"`
-	Enabled  *bool    `json:"enabled,omitempty"`
+	Schedule       *string  `json:"schedule,omitempty"`
+	Type           *JobType `json:"type,omitempty"`
+	Payload        *string  `json:"payload,omitempty"`
+	Enabled        *bool    `json:"enabled,omitempty"`
+	WorkspacePath  *string  `json:"workspace_path,omitempty"`
+	WorkspaceAlias *string  `json:"workspace_alias,omitempty"`
 }
 
 // HistoryStatus represents the execution status of a job run.

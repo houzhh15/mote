@@ -283,9 +283,28 @@ func (s *Server) run() {
 		defaultProviderName = "copilot"
 	}
 
-	// Get default chat model
+	// Get default chat model — must match the default provider's capabilities.
+	// Validate the model is compatible with the default provider to prevent
+	// routing API-only models (e.g., grok-code-fast-1) to ACP CLI.
 	chatModel = s.cfg.Copilot.Model
 	if chatModel == "" {
+		if defaultProviderName == "copilot-acp" {
+			chatModel = copilot.ACPDefaultModel
+		} else {
+			chatModel = copilot.DefaultModel
+		}
+	}
+
+	// Cross-validate: ensure chatModel is compatible with the default provider.
+	// This catches misconfigurations like copilot.model=grok-code-fast-1 with provider.default=copilot-acp.
+	if defaultProviderName == "copilot-acp" && !copilot.IsACPModel(chatModel) {
+		s.logger.Warn().Str("model", chatModel).Str("fallback", copilot.ACPDefaultModel).
+			Msg("Default model is not compatible with copilot-acp provider, using ACP default")
+		chatModel = copilot.ACPDefaultModel
+	} else if defaultProviderName == "copilot" && !copilot.IsAPIModel(chatModel) && !copilot.IsACPModel(chatModel) {
+		// For copilot provider, allow both API and ACP models (ACP models may be used via fallback)
+		s.logger.Warn().Str("model", chatModel).Str("fallback", copilot.DefaultModel).
+			Msg("Default model is not recognized, using copilot default")
 		chatModel = copilot.DefaultModel
 	}
 
@@ -407,11 +426,11 @@ func (s *Server) run() {
 	if err := skills.EnsureBuiltinSkills(skillsDir); err != nil {
 		s.logger.Warn().Err(err).Msg("Failed to install builtin skills")
 	}
-	
+
 	// Initialize version checker for builtin skills
 	embedFS := defaults.GetDefaultsFS()
 	versionChecker := skills.NewVersionChecker(embedFS, s.logger)
-	
+
 	// Check for updates on startup
 	result, err := versionChecker.CheckAllVersions(skillsDir)
 	if err != nil {
@@ -428,7 +447,7 @@ func (s *Server) run() {
 				Msg("Update available for builtin skill")
 		}
 	}
-	
+
 	skillManager := skills.NewManager(skills.ManagerConfig{SkillsDir: skillsDir})
 	skillManager.SetToolRegistry(toolRegistry)
 	skillManager.SetJSRuntime(jsvmRuntime)
@@ -447,10 +466,10 @@ func (s *Server) run() {
 			}
 		}
 	}
-	
+
 	// Create skill updater
 	skillUpdater := skills.NewSkillUpdater(embedFS, skillsDir, versionChecker, skillManager, s.logger)
-	
+
 	agentRunner.SetSkillManager(skillManager)
 	s.skillManager = skillManager
 
@@ -484,17 +503,17 @@ func (s *Server) run() {
 
 	// Initialize Prompt Manager with file loading support
 	promptsDirs := []string{}
-	
+
 	// Add user-level prompts directory
 	if homeDir != "" {
 		userPromptsDir := filepath.Join(homeDir, ".mote", "prompts")
 		promptsDirs = append(promptsDirs, userPromptsDir)
 	}
-	
+
 	// Add workspace-level prompts directory
 	workspacePromptsDir := filepath.Join(".", ".mote", "prompts")
 	promptsDirs = append(promptsDirs, workspacePromptsDir)
-	
+
 	promptManager := prompts.NewManagerWithConfig(prompts.ManagerConfig{
 		PromptsDirs:    promptsDirs,
 		EnableAutoSave: true,
@@ -1006,6 +1025,7 @@ func (s *Server) initializeCron(db *storage.DB, agentRunner *runner.Runner, tool
 		&cronToolRegistryAdapter{registry: toolRegistry},
 		jsExecutor,
 		cronHistoryStore,
+		s.workspaceManager,
 		cron.DefaultExecutorConfig(),
 		s.logger,
 	)
@@ -1062,19 +1082,17 @@ type cronRunnerAdapter struct {
 }
 
 func (a *cronRunnerAdapter) Run(ctx context.Context, prompt string, opts ...interface{}) (string, error) {
-	// Extract job name from opts for session sharing
-	var jobName string
+	// Extract session ID from opts — executor passes the derived session ID
+	// (via deriveCronSessionID, e.g. "cron-myJob") directly.
+	var sessionID string
 	if len(opts) > 0 {
-		if name, ok := opts[0].(string); ok {
-			jobName = name
+		if id, ok := opts[0].(string); ok {
+			sessionID = id
 		}
 	}
-	if jobName == "" {
-		jobName = "unknown"
+	if sessionID == "" {
+		sessionID = "cron-job:unknown"
 	}
-
-	// Use job name as session ID - same job shares context across executions
-	sessionID := fmt.Sprintf("cron-job:%s", jobName)
 
 	// Run the prompt with cron-specific model
 	events, err := a.runner.RunWithModel(ctx, sessionID, prompt, a.cronModel, "cron")

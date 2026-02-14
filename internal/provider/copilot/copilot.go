@@ -220,7 +220,10 @@ func (p *CopilotProvider) doRequest(ctx context.Context, req *provider.ChatReque
 	// Set headers
 	httpReq.Header.Set("Authorization", "Bearer "+token)
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Copilot-Integration-Id", "vscode-chat")
+	httpReq.Header.Set("User-Agent", CopilotUserAgent)
+	httpReq.Header.Set("Editor-Version", CopilotEditorVersion)
+	httpReq.Header.Set("Editor-Plugin-Version", CopilotEditorPluginVersion)
+	httpReq.Header.Set("Copilot-Integration-Id", "mote-chat")
 	httpReq.Header.Set("Accept", "application/json")
 
 	// Send request
@@ -303,7 +306,10 @@ func (p *CopilotProvider) doStreamRequest(ctx context.Context, req *provider.Cha
 		// Set headers
 		httpReq.Header.Set("Authorization", "Bearer "+token)
 		httpReq.Header.Set("Content-Type", "application/json")
-		httpReq.Header.Set("Copilot-Integration-Id", "vscode-chat")
+		httpReq.Header.Set("User-Agent", CopilotUserAgent)
+		httpReq.Header.Set("Editor-Version", CopilotEditorVersion)
+		httpReq.Header.Set("Editor-Plugin-Version", CopilotEditorPluginVersion)
+		httpReq.Header.Set("Copilot-Integration-Id", "mote-chat")
 		httpReq.Header.Set("Accept", "text/event-stream")
 		// Set conversation ID headers to help Copilot identify requests in the same turn
 		// This may help with quota accounting for multi-turn tool call conversations

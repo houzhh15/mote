@@ -26,13 +26,13 @@ const (
 	TokenRefreshMargin = 5 * time.Minute
 
 	// CopilotEditorVersion is the editor version header value.
-	CopilotEditorVersion = "vscode/1.95.0"
+	CopilotEditorVersion = "mote/1.0.0"
 
 	// CopilotEditorPluginVersion is the plugin version header value.
-	CopilotEditorPluginVersion = "copilot/1.250.0"
+	CopilotEditorPluginVersion = "mote-copilot/1.0.0"
 
 	// CopilotUserAgent is the User-Agent for Copilot requests.
-	CopilotUserAgent = "GithubCopilot/1.250.0"
+	CopilotUserAgent = "Mote/1.0.0"
 )
 
 // Error definitions for token operations.
@@ -160,11 +160,11 @@ func (tm *TokenManager) fetchToken() (*CachedToken, error) {
 	req.Header.Set("Authorization", authPrefix+" "+tm.githubToken)
 	req.Header.Set("Accept", "application/json")
 
-	// Set headers to identify as VS Code Copilot client
+	// Set headers to identify as Mote client
 	req.Header.Set("User-Agent", CopilotUserAgent)
 	req.Header.Set("Editor-Version", CopilotEditorVersion)
 	req.Header.Set("Editor-Plugin-Version", CopilotEditorPluginVersion)
-	req.Header.Set("Copilot-Integration-Id", "vscode-chat")
+	req.Header.Set("Copilot-Integration-Id", "mote-chat")
 
 	resp, err := tm.httpClient.Do(req)
 	if err != nil {

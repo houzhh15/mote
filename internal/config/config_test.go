@@ -280,9 +280,19 @@ func TestProviderConfig_GetEnabledProviders(t *testing.T) {
 		expected []string
 	}{
 		{
-			name:     "Enabled 非空时直接返回",
+			name:     "Enabled 包含 copilot 时自动替换为 copilot-acp",
 			config:   ProviderConfig{Enabled: []string{"copilot", "ollama"}, Default: "copilot"},
-			expected: []string{"copilot", "ollama"},
+			expected: []string{"copilot-acp", "ollama"},
+		},
+		{
+			name:     "Enabled 仅有 copilot-acp 时直接返回",
+			config:   ProviderConfig{Enabled: []string{"copilot-acp"}, Default: "copilot-acp"},
+			expected: []string{"copilot-acp"},
+		},
+		{
+			name:     "Enabled 同时包含 copilot 和 copilot-acp 时去掉 copilot",
+			config:   ProviderConfig{Enabled: []string{"copilot", "copilot-acp", "ollama"}, Default: "copilot-acp"},
+			expected: []string{"copilot-acp", "ollama"},
 		},
 		{
 			name:     "Enabled 为空但 Default 非空时返回 Default",
@@ -290,14 +300,24 @@ func TestProviderConfig_GetEnabledProviders(t *testing.T) {
 			expected: []string{"ollama"},
 		},
 		{
-			name:     "Enabled 和 Default 都为空时返回 copilot",
+			name:     "Enabled 和 Default 都为空时返回 copilot-acp",
 			config:   ProviderConfig{Enabled: nil, Default: ""},
-			expected: []string{"copilot"},
+			expected: []string{"copilot-acp"},
 		},
 		{
 			name:     "Enabled 为空切片时根据 Default 推断",
 			config:   ProviderConfig{Enabled: []string{}, Default: "ollama"},
 			expected: []string{"ollama"},
+		},
+		{
+			name:     "Default 为 copilot 时迁移为 copilot-acp",
+			config:   ProviderConfig{Enabled: nil, Default: "copilot"},
+			expected: []string{"copilot-acp"},
+		},
+		{
+			name:     "旧配置仅有 copilot 迁移为 copilot-acp",
+			config:   ProviderConfig{Enabled: []string{"copilot"}, Default: "copilot"},
+			expected: []string{"copilot-acp"},
 		},
 	}
 

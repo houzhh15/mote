@@ -162,11 +162,10 @@ type PromptParams struct {
 
 // PromptContent represents content in a prompt.
 type PromptContent struct {
-	Type string `json:"type"` // "text", "image", etc.
-	Text string `json:"text,omitempty"`
-	// For image content:
-	// MimeType string `json:"mimeType,omitempty"`
-	// Data     string `json:"data,omitempty"`
+	Type     string `json:"type"`               // "text", "image", etc.
+	Text     string `json:"text,omitempty"`     // For text content
+	MimeType string `json:"mimeType,omitempty"` // For image content: MIME type (e.g. "image/png")
+	Data     string `json:"data,omitempty"`     // For image content: base64 encoded data (no data: prefix)
 }
 
 // PromptResult is the result of the "session/prompt" request.

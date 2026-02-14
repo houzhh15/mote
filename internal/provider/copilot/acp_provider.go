@@ -241,11 +241,23 @@ func (p *ACPProvider) ensureInitialized(ctx context.Context) error {
 // ensureSession ensures there's an active ACP session with the requested model.
 // If conversationID is non-empty and a mapping exists, the ACP session is reused
 // unless the model has changed (which requires a new session).
-func (p *ACPProvider) ensureSession(ctx context.Context, conversationID string, requestedModel string) error {
+// Returns (isNewSession, error) where isNewSession indicates whether a new ACP
+// session was created (as opposed to reusing an existing one). This is used to
+// determine whether conversation history needs to be injected into the prompt.
+func (p *ACPProvider) ensureSession(ctx context.Context, conversationID string, requestedModel string) (bool, error) {
 	// Determine effective model: use requested model, or fall back to config default
 	effectiveModel := requestedModel
 	if effectiveModel == "" {
 		effectiveModel = p.config.Model
+	}
+
+	// Validate model is ACP-compatible. API-only models (e.g., grok-code-fast-1)
+	// cannot be used with the Copilot CLI and would cause startup/session errors.
+	if effectiveModel != "" && !IsACPModel(effectiveModel) {
+		slog.Warn("ensureSession: model not supported by ACP, falling back to default",
+			"requestedModel", effectiveModel,
+			"fallback", ACPDefaultModel)
+		effectiveModel = ACPDefaultModel
 	}
 
 	// Check session mapping for conversation-aware reuse
@@ -265,20 +277,20 @@ func (p *ACPProvider) ensureSession(ctx context.Context, conversationID string, 
 					// Same model, reuse session
 					p.sessionID = acpSID.(string)
 					p.sessionModel = effectiveModel
-					return nil
+					return false, nil
 				}
 			} else {
 				// No model record, reuse session (backward compatibility)
 				p.sessionID = acpSID.(string)
 				p.sessionModel = effectiveModel
-				return nil
+				return false, nil
 			}
 		}
 	}
 
 	// Fallback to current session if no conversation mapping
 	if p.sessionID != "" && conversationID == "" {
-		return nil
+		return false, nil
 	}
 
 	// Resolve working directory:
@@ -332,7 +344,7 @@ func (p *ACPProvider) ensureSession(ctx context.Context, conversationID string, 
 
 	result, err := p.client.CreateSession(ctx, params)
 	if err != nil {
-		return fmt.Errorf("ACP session create failed: %w", err)
+		return true, fmt.Errorf("ACP session create failed: %w", err)
 	}
 
 	p.sessionID = result.SessionID
@@ -346,7 +358,7 @@ func (p *ACPProvider) ensureSession(ctx context.Context, conversationID string, 
 		p.sessionModelMap.Store(conversationID, effectiveModel)
 	}
 
-	return nil
+	return true, nil
 }
 
 // ResetSession clears the session for a given conversation, forcing creation
@@ -495,7 +507,8 @@ func (p *ACPProvider) Stream(ctx context.Context, req provider.ChatRequest) (<-c
 		}
 
 		// Ensure session with the requested model
-		if err := p.ensureSession(ctx, convID, req.Model); err != nil {
+		isNewSession, err := p.ensureSession(ctx, convID, req.Model)
+		if err != nil {
 			events <- provider.ChatEvent{
 				Type:  provider.EventTypeError,
 				Error: err,
@@ -503,8 +516,12 @@ func (p *ACPProvider) Stream(ctx context.Context, req provider.ChatRequest) (<-c
 			return
 		}
 
-		// Build prompt from messages and attachments
-		prompt := p.buildPromptWithAttachments(req.Messages, req.Attachments)
+		// Build prompt from messages and attachments.
+		// When isNewSession is true (e.g., after mote restart), conversation history
+		// must be injected into the prompt since the ACP server has no memory of
+		// previous turns. When reusing an existing session, ACP maintains its own
+		// conversation state, so history injection is skipped to avoid duplication.
+		prompt := p.buildPromptWithAttachments(req.Messages, req.Attachments, isNewSession)
 		if len(prompt) == 0 {
 			events <- provider.ChatEvent{
 				Type:  provider.EventTypeError,
@@ -1022,12 +1039,18 @@ func (p *ACPProvider) buildPrompt(messages []provider.Message) string {
 
 // buildPromptWithAttachments builds ACP prompt content array from messages and attachments.
 // It includes system messages (e.g., skills) as a prefix to the user message.
-func (p *ACPProvider) buildPromptWithAttachments(messages []provider.Message, attachments []provider.Attachment) []PromptContent {
+//
+// When isNewSession is true (e.g., after mote restart creates a fresh ACP session),
+// conversation history is serialized and injected into the prompt so the AI can
+// see previous turns. When false, ACP maintains its own session state and history
+// injection is skipped to avoid duplication.
+func (p *ACPProvider) buildPromptWithAttachments(messages []provider.Message, attachments []provider.Attachment, isNewSession bool) []PromptContent {
 	var promptContent []PromptContent
 
-	// 1. Find system message (skills injection) and last user message
+	// 1. Find system message and last user message index
 	var systemMessage string
 	var userMessage string
+	lastUserIdx := -1
 	for _, msg := range messages {
 		if msg.Role == provider.RoleSystem && msg.Content != "" {
 			systemMessage = msg.Content
@@ -1036,20 +1059,77 @@ func (p *ACPProvider) buildPromptWithAttachments(messages []provider.Message, at
 	for i := len(messages) - 1; i >= 0; i-- {
 		if messages[i].Role == provider.RoleUser {
 			userMessage = messages[i].Content
+			lastUserIdx = i
 			break
 		}
 	}
 
-	// 2. Build combined text content: system message (skills) + user message
+	// 2. Collect conversation history (only for new sessions with existing history)
+	// When the ACP session is freshly created but the mote conversation has prior
+	// turns (e.g., after a restart), we need to inject history so the AI knows
+	// about previous interactions.
+	var historySection string
+	if isNewSession {
+		var historyParts []string
+		for i, msg := range messages {
+			// Skip system messages (handled separately) and the last user message (current turn)
+			if msg.Role == provider.RoleSystem {
+				continue
+			}
+			if i == lastUserIdx {
+				continue
+			}
+			// Include user, assistant, and tool messages as history
+			if msg.Content != "" {
+				var roleLabel string
+				switch msg.Role {
+				case provider.RoleUser:
+					roleLabel = "User"
+				case provider.RoleAssistant:
+					roleLabel = "Assistant"
+				case provider.RoleTool:
+					roleLabel = "Tool"
+				default:
+					roleLabel = msg.Role
+				}
+				// Truncate very long messages to avoid exceeding context limits
+				content := msg.Content
+				if len(content) > 4000 {
+					content = content[:4000] + "\n...[truncated]"
+				}
+				historyParts = append(historyParts, fmt.Sprintf("[%s]: %s", roleLabel, content))
+			}
+		}
+		if len(historyParts) > 0 {
+			historySection = "<conversation_history>\n" +
+				"The following is the conversation history from previous turns in this session.\n" +
+				"Use this context to understand the ongoing conversation:\n\n" +
+				strings.Join(historyParts, "\n\n") +
+				"\n</conversation_history>"
+			slog.Info("ACP buildPromptWithAttachments: injected conversation history",
+				"historyTurns", len(historyParts),
+				"historySectionLen", len(historySection))
+		}
+	}
+
+	// 3. Build combined text content: system message + history (if new session) + user message
 	var combinedText string
 	if systemMessage != "" {
-		// Prefix with system message containing skills
-		combinedText = systemMessage + "\n\n---\n\n" + userMessage
+		combinedText = systemMessage
+		if historySection != "" {
+			combinedText += "\n\n---\n\n" + historySection
+		}
+		combinedText += "\n\n---\n\n" + userMessage
 		slog.Info("ACP buildPromptWithAttachments: injected system message",
 			"systemMsgLen", len(systemMessage),
+			"historyLen", len(historySection),
 			"userMsgLen", len(userMessage))
 	} else {
-		combinedText = userMessage
+		if historySection != "" {
+			combinedText = historySection + "\n\n---\n\n" + userMessage
+		} else {
+			combinedText = userMessage
+		}
 	}
 
 	if combinedText != "" {
@@ -1059,16 +1139,43 @@ func (p *ACPProvider) buildPromptWithAttachments(messages []provider.Message, at
 		})
 	}
 
-	// 3. Add attachments
+	// 4. Add attachments
 	for _, att := range attachments {
 		switch att.Type {
 		case "image_url":
 			if att.ImageURL != nil {
-				// For ACP, we pass the data URI directly
+				// Parse data URI to extract mimeType and pure base64 data
+				// Format: "data:image/png;base64,iVBORw0KGgo..."
+				dataURI := att.ImageURL.URL
+				mimeType := att.MimeType
+				base64Data := dataURI
+
+				if strings.HasPrefix(dataURI, "data:") {
+					// Parse data URI: data:<mimeType>;base64,<data>
+					parts := strings.SplitN(dataURI, ",", 2)
+					if len(parts) == 2 {
+						base64Data = parts[1]
+						// Extract mimeType from "data:image/png;base64"
+						header := parts[0] // "data:image/png;base64"
+						header = strings.TrimPrefix(header, "data:")
+						if idx := strings.Index(header, ";"); idx != -1 {
+							mimeType = header[:idx]
+						}
+					}
+				}
+
+				if mimeType == "" {
+					mimeType = "image/png" // fallback
+				}
+
 				promptContent = append(promptContent, PromptContent{
-					Type: "image",
-					Text: att.ImageURL.URL, // data:image/png;base64,...
+					Type:     "image",
+					MimeType: mimeType,
+					Data:     base64Data,
 				})
+				slog.Info("ACP buildPromptWithAttachments: added image",
+					"mimeType", mimeType,
+					"dataLen", len(base64Data))
 			}
 		case "text":
 			// Append text content with formatting
@@ -1227,14 +1334,14 @@ func (p *ACPProvider) loadLatestMCPConfig() map[string]MCPServerConfig {
 	// We'll need to access v1.LoadMCPServersConfigPublic
 	// But we can't import api/v1 from provider package
 	// So we'll use a different approach: read the file directly
-	
+
 	// Try to load from the same location as api/v1 does
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		logger.Warn().Err(err).Msg("Failed to get home dir, using fallback MCP config")
 		return p.config.MCPServers
 	}
-	
+
 	configPath := homeDir + "/.mote/mcp_servers.json"
 	data, err := os.ReadFile(configPath)
 	if err != nil {
@@ -1243,7 +1350,7 @@ func (p *ACPProvider) loadLatestMCPConfig() map[string]MCPServerConfig {
 		}
 		return p.config.MCPServers
 	}
-	
+
 	// Parse the JSON
 	var servers []struct {
 		Name    string            `json:"name"`
@@ -1253,16 +1360,16 @@ func (p *ACPProvider) loadLatestMCPConfig() map[string]MCPServerConfig {
 		Command string            `json:"command,omitempty"`
 		Args    []string          `json:"args,omitempty"`
 	}
-	
+
 	if err := json.Unmarshal(data, &servers); err != nil {
 		logger.Warn().Err(err).Msg("Failed to parse MCP config, using fallback")
 		return p.config.MCPServers
 	}
-	
+
 	if len(servers) == 0 {
 		return p.config.MCPServers
 	}
-	
+
 	// Convert to our format
 	infos := make([]MCPServerPersistInfo, len(servers))
 	for i, s := range servers {
@@ -1275,9 +1382,9 @@ func (p *ACPProvider) loadLatestMCPConfig() map[string]MCPServerConfig {
 			Args:    s.Args,
 		}
 	}
-	
+
 	result := ConvertMCPServers(infos)
-	
+
 	// Log the difference if configuration changed
 	if len(result) != len(p.config.MCPServers) {
 		logger.Info().
@@ -1285,7 +1392,7 @@ func (p *ACPProvider) loadLatestMCPConfig() map[string]MCPServerConfig {
 			Int("currentCount", len(result)).
 			Msg("MCP configuration updated dynamically")
 	}
-	
+
 	return result
 }
 
@@ -1362,7 +1469,17 @@ func ACPFactory(cfg ACPConfig) provider.ProviderFactory {
 		// Override model in config
 		cfg := cfg // Copy
 		if model != "" {
-			cfg.Model = model
+			// Validate model is ACP-compatible before setting on config.
+			// Invalid models (e.g., API-only grok-code-fast-1) would cause
+			// CLI startup failure with --model argument error.
+			if IsACPModel(model) {
+				cfg.Model = model
+			} else {
+				slog.Warn("ACPFactory: model not supported by ACP, using default",
+					"requestedModel", model,
+					"fallback", ACPDefaultModel)
+				cfg.Model = ACPDefaultModel
+			}
 		}
 		return NewACPProvider(cfg)
 	}
@@ -1375,7 +1492,17 @@ func ACPFactoryWithConfigFunc(configFunc func() ACPConfig) provider.ProviderFact
 	return func(model string) (provider.Provider, error) {
 		cfg := configFunc()
 		if model != "" {
-			cfg.Model = model
+			// Validate model is ACP-compatible before setting on config.
+			// Invalid models (e.g., API-only grok-code-fast-1) would cause
+			// CLI startup failure with --model argument error.
+			if IsACPModel(model) {
+				cfg.Model = model
+			} else {
+				slog.Warn("ACPFactoryWithConfigFunc: model not supported by ACP, using default",
+					"requestedModel", model,
+					"fallback", ACPDefaultModel)
+				cfg.Model = ACPDefaultModel
+			}
 		}
 		return NewACPProvider(cfg)
 	}

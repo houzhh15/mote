@@ -61,7 +61,7 @@ func TestExecutorExecutePrompt(t *testing.T) {
 	logger := zerolog.Nop()
 
 	cfg := DefaultExecutorConfig()
-	executor := NewExecutor(runner, nil, nil, historyStore, cfg, logger)
+	executor := NewExecutor(runner, nil, nil, historyStore, nil, cfg, logger)
 
 	job := &Job{
 		Name:    "test-prompt",
@@ -89,7 +89,7 @@ func TestExecutorExecuteTool(t *testing.T) {
 	logger := zerolog.Nop()
 
 	cfg := DefaultExecutorConfig()
-	executor := NewExecutor(nil, toolRegistry, nil, historyStore, cfg, logger)
+	executor := NewExecutor(nil, toolRegistry, nil, historyStore, nil, cfg, logger)
 
 	job := &Job{
 		Name:    "test-tool",
@@ -114,7 +114,7 @@ func TestExecutorExecuteScript(t *testing.T) {
 	logger := zerolog.Nop()
 
 	cfg := DefaultExecutorConfig()
-	executor := NewExecutor(nil, nil, jsExecutor, historyStore, cfg, logger)
+	executor := NewExecutor(nil, nil, jsExecutor, historyStore, nil, cfg, logger)
 
 	job := &Job{
 		Name:    "test-script",
@@ -139,7 +139,7 @@ func TestExecutorExecuteScriptFile(t *testing.T) {
 	logger := zerolog.Nop()
 
 	cfg := DefaultExecutorConfig()
-	executor := NewExecutor(nil, nil, jsExecutor, historyStore, cfg, logger)
+	executor := NewExecutor(nil, nil, jsExecutor, historyStore, nil, cfg, logger)
 
 	job := &Job{
 		Name:    "test-script-file",
@@ -182,7 +182,7 @@ func TestExecutorRetryOnError(t *testing.T) {
 			Multiplier:   2.0,
 		},
 	}
-	executor := NewExecutor(runner, nil, nil, historyStore, cfg, logger)
+	executor := NewExecutor(runner, nil, nil, historyStore, nil, cfg, logger)
 
 	job := &Job{
 		Name:    "test-retry",
@@ -207,7 +207,7 @@ func TestExecutorNonRetryableError(t *testing.T) {
 	logger := zerolog.Nop()
 
 	cfg := DefaultExecutorConfig()
-	executor := NewExecutor(nil, nil, jsExecutor, historyStore, cfg, logger)
+	executor := NewExecutor(nil, nil, jsExecutor, historyStore, nil, cfg, logger)
 
 	// Invalid payload - non-retryable
 	job := &Job{
@@ -249,7 +249,7 @@ func TestExecutorTimeout(t *testing.T) {
 			MaxAttempts: 0, // No retries
 		},
 	}
-	executor := NewExecutor(slowRunner, nil, nil, historyStore, cfg, logger)
+	executor := NewExecutor(slowRunner, nil, nil, historyStore, nil, cfg, logger)
 
 	job := &Job{
 		Name:    "test-timeout",
@@ -274,7 +274,7 @@ func TestExecutorHistoryRecording(t *testing.T) {
 	logger := zerolog.Nop()
 
 	cfg := DefaultExecutorConfig()
-	executor := NewExecutor(runner, nil, nil, historyStore, cfg, logger)
+	executor := NewExecutor(runner, nil, nil, historyStore, nil, cfg, logger)
 
 	job := &Job{
 		Name:    "test-history",
@@ -311,7 +311,7 @@ func TestExecutorMissingRunner(t *testing.T) {
 	logger := zerolog.Nop()
 
 	cfg := DefaultExecutorConfig()
-	executor := NewExecutor(nil, nil, nil, historyStore, cfg, logger)
+	executor := NewExecutor(nil, nil, nil, historyStore, nil, cfg, logger)
 
 	job := &Job{
 		Name:    "test-no-runner",
@@ -332,7 +332,7 @@ func TestExecutorUnknownJobType(t *testing.T) {
 	logger := zerolog.Nop()
 
 	cfg := DefaultExecutorConfig()
-	executor := NewExecutor(nil, nil, nil, historyStore, cfg, logger)
+	executor := NewExecutor(nil, nil, nil, historyStore, nil, cfg, logger)
 
 	job := &Job{
 		Name: "test-unknown",

@@ -85,11 +85,13 @@ func (r *Router) HandleCreateCronJob(w http.ResponseWriter, req *http.Request) {
 	}
 
 	jobCreate := cron.JobCreate{
-		Name:     createReq.Name,
-		Schedule: createReq.Schedule,
-		Type:     cron.JobType(jobType),
-		Payload:  payload,
-		Enabled:  true,
+		Name:           createReq.Name,
+		Schedule:       createReq.Schedule,
+		Type:           cron.JobType(jobType),
+		Payload:        payload,
+		Enabled:        true,
+		WorkspacePath:  createReq.WorkspacePath,
+		WorkspaceAlias: createReq.WorkspaceAlias,
 	}
 
 	job, err := r.cronScheduler.AddJob(req.Context(), jobCreate)
@@ -166,6 +168,12 @@ func (r *Router) HandleUpdateCronJob(w http.ResponseWriter, req *http.Request) {
 	}
 	if updateReq.Enabled != nil {
 		patch.Enabled = updateReq.Enabled
+	}
+	if updateReq.WorkspacePath != nil {
+		patch.WorkspacePath = updateReq.WorkspacePath
+	}
+	if updateReq.WorkspaceAlias != nil {
+		patch.WorkspaceAlias = updateReq.WorkspaceAlias
 	}
 
 	job, err := r.cronScheduler.UpdateJob(req.Context(), name, patch)
@@ -244,14 +252,16 @@ func cronJobFromInternal(j *cron.Job) CronJob {
 	}
 
 	return CronJob{
-		Name:     j.Name,
-		Schedule: j.Schedule,
-		Type:     string(j.Type),
-		Prompt:   prompt,
-		Model:    model,
-		Enabled:  j.Enabled,
-		LastRun:  j.LastRun,
-		NextRun:  j.NextRun,
+		Name:           j.Name,
+		Schedule:       j.Schedule,
+		Type:           string(j.Type),
+		Prompt:         prompt,
+		Model:          model,
+		Enabled:        j.Enabled,
+		WorkspacePath:  j.WorkspacePath,
+		WorkspaceAlias: j.WorkspaceAlias,
+		LastRun:        j.LastRun,
+		NextRun:        j.NextRun,
 	}
 }
 

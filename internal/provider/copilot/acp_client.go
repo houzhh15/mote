@@ -153,15 +153,27 @@ func NewACPClient(cfg ACPConfig) (*ACPClient, error) {
 	hideProcessWindow(cmd)
 
 	// Inherit parent environment
-	// Note: We do NOT inject GITHUB_TOKEN for ACP mode because:
-	// 1. Copilot CLI uses its own OAuth login state from ~/.copilot/config.json
-	// 2. Injecting a different token could cause billing to wrong account
-	// 3. The CLI handles authentication internally via `copilot login`
+	// The Copilot CLI uses OAuth tokens from ~/.copilot/ and ~/.config/github-copilot/
+	// for authentication. However, if the CLI's own auth is expired or misconfigured
+	// (e.g., last_logged_in_user doesn't match available tokens in apps.json),
+	// the CLI will fail with 403 when calling GitHub APIs.
+	// As a fallback, inject GITHUB_TOKEN from config if it's not already in the
+	// environment and a token is available. This allows the CLI to authenticate
+	// using the PAT from mote's config when its own OAuth flow fails.
 	cmd.Env = os.Environ()
-	//if cfg.GithubToken != "" {
-	//	cmd.Env = append(cmd.Env, "GITHUB_TOKEN="+cfg.GithubToken)
-	//	logger.Info().Msg("ACP: injecting GITHUB_TOKEN into CLI environment")
-	//}
+	if cfg.GithubToken != "" {
+		hasGithubToken := false
+		for _, env := range cmd.Env {
+			if strings.HasPrefix(env, "GITHUB_TOKEN=") {
+				hasGithubToken = true
+				break
+			}
+		}
+		if !hasGithubToken {
+			cmd.Env = append(cmd.Env, "GITHUB_TOKEN="+cfg.GithubToken)
+			logger.Info().Msg("ACP: injecting GITHUB_TOKEN from config as authentication fallback")
+		}
+	}
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

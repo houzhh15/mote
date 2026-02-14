@@ -55,7 +55,8 @@ func newProviderListCmd() *cobra.Command {
 				name string
 				desc string
 			}{
-				{"copilot", "GitHub Copilot API"},
+				{"copilot-acp", "GitHub Copilot ACP (CLI mode, recommended)"},
+				{"copilot", "GitHub Copilot API (REST, temporarily disabled)"},
 				{"ollama", "Local Ollama server"},
 			}
 
@@ -96,12 +97,13 @@ func newProviderUseCmd() *cobra.Command {
 
 			// Validate provider name
 			validProviders := map[string]bool{
-				"copilot": true,
-				"ollama":  true,
+				"copilot":     true,
+				"copilot-acp": true,
+				"ollama":      true,
 			}
 
 			if !validProviders[providerName] {
-				return fmt.Errorf("unknown provider: %s (valid: copilot, ollama)", providerName)
+				return fmt.Errorf("unknown provider: %s (valid: copilot, copilot-acp, ollama)", providerName)
 			}
 
 			// Load current config
@@ -153,9 +155,11 @@ func newProviderUseCmd() *cobra.Command {
 			// Show relevant hints
 			switch providerName {
 			case "copilot":
-				if cfg.Copilot.Token == "" {
-					fmt.Println("\nNote: Copilot token not configured. Run 'mote auth' to authenticate.")
-				}
+				fmt.Println("\nWarning: Copilot REST API mode is temporarily disabled.")
+				fmt.Println("Consider using 'copilot-acp' instead: mote provider use copilot-acp")
+			case "copilot-acp":
+				fmt.Println("\nNote: Copilot ACP uses the Copilot CLI for authentication.")
+				fmt.Println("Make sure 'copilot' CLI is installed and authenticated.")
 			case "ollama":
 				fmt.Printf("\nNote: Make sure Ollama is running at %s\n", cfg.Ollama.Endpoint)
 				fmt.Println("You can configure Ollama settings with 'mote config set ollama.*'")
@@ -189,12 +193,25 @@ func newProviderStatusCmd() *cobra.Command {
 
 			switch current {
 			case "copilot":
-				fmt.Println("Copilot Configuration:")
+				fmt.Println("Copilot Configuration (REST API - TEMPORARILY DISABLED):")
+				fmt.Println("  Status: Temporarily disabled. Use 'copilot-acp' instead.")
 				if cfg.Copilot.Token != "" {
 					fmt.Println("  Token: ****configured****")
 				} else {
 					fmt.Println("  Token: not configured")
 				}
+				model := cfg.Copilot.ChatModel
+				if model == "" {
+					model = cfg.Copilot.Model
+				}
+				if model == "" {
+					model = "(default)"
+				}
+				fmt.Printf("  Model: %s\n", model)
+				fmt.Printf("  Max Tokens: %d\n", cfg.Copilot.MaxTokens)
+
+			case "copilot-acp":
+				fmt.Println("Copilot ACP Configuration (CLI mode):")
 				model := cfg.Copilot.ChatModel
 				if model == "" {
 					model = cfg.Copilot.Model
@@ -231,19 +248,20 @@ func newProviderEnableCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "enable <provider>",
 		Short: "Enable a provider",
-		Long:  "Enable a provider to be included in the model list (copilot or ollama)",
+		Long:  "Enable a provider to be included in the model list (copilot, copilot-acp, or ollama)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			providerName := strings.ToLower(args[0])
 
 			// Validate provider name
 			validProviders := map[string]bool{
-				"copilot": true,
-				"ollama":  true,
+				"copilot":     true,
+				"copilot-acp": true,
+				"ollama":      true,
 			}
 
 			if !validProviders[providerName] {
-				return fmt.Errorf("unknown provider: %s (valid: copilot, ollama)", providerName)
+				return fmt.Errorf("unknown provider: %s (valid: copilot, copilot-acp, ollama)", providerName)
 			}
 
 			// Load current config
@@ -285,19 +303,20 @@ func newProviderDisableCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "disable <provider>",
 		Short: "Disable a provider",
-		Long:  "Disable a provider from the model list (copilot or ollama)",
+		Long:  "Disable a provider from the model list (copilot, copilot-acp, or ollama)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			providerName := strings.ToLower(args[0])
 
 			// Validate provider name
 			validProviders := map[string]bool{
-				"copilot": true,
-				"ollama":  true,
+				"copilot":     true,
+				"copilot-acp": true,
+				"ollama":      true,
 			}
 
 			if !validProviders[providerName] {
-				return fmt.Errorf("unknown provider: %s (valid: copilot, ollama)", providerName)
+				return fmt.Errorf("unknown provider: %s (valid: copilot, copilot-acp, ollama)", providerName)
 			}
 
 			// Load current config

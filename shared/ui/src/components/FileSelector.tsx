@@ -49,7 +49,10 @@ interface WorkspaceFile {
 export interface FileSelectorProps {
   visible: boolean;
   searchQuery: string;
-  sessionId: string;
+  /** Session ID for listing workspace files (used when session exists) */
+  sessionId?: string;
+  /** Direct workspace path for browsing files (used when no session exists, e.g. NewChatPage) */
+  workspacePath?: string;
   mode: FileSelectorMode;
   onSelect: (filepath: string, mode: FileSelectorMode) => void;
   onCancel: () => void;
@@ -117,6 +120,7 @@ export const FileSelector: React.FC<FileSelectorProps> = ({
   visible,
   searchQuery,
   sessionId,
+  workspacePath,
   mode,
   onSelect,
   onCancel,
@@ -170,15 +174,50 @@ export const FileSelector: React.FC<FileSelectorProps> = ({
   };
 
   /**
-   * Load workspace files from API
+   * Load workspace files from API.
+   * Uses listWorkspaceFiles when sessionId is available,
+   * falls back to browseDirectory when only workspacePath is provided.
    */
   const loadFiles = async (path: string = '/') => {
     setLoading(true);
     try {
-      const data = await api.listWorkspaceFiles?.(sessionId, path);
-      if (data) {
-        const files = flattenFiles(data);
-        setWorkspaceFiles(files);
+      if (sessionId) {
+        // Session-based: use listWorkspaceFiles API
+        const data = await api.listWorkspaceFiles?.(sessionId, path);
+        if (data) {
+          const files = flattenFiles(data);
+          setWorkspaceFiles(files);
+        }
+      } else if (workspacePath) {
+        // No session: use browseDirectory API with workspace path
+        const browsePath = path === '/' ? workspacePath : `${workspacePath}/${path.replace(/^\//, '')}`;
+        const data = await api.browseDirectory?.(browsePath);
+        if (data?.entries) {
+          const files: FileItem[] = data.entries.map((entry) => {
+            if (entry.is_dir) {
+              return {
+                name: entry.name,
+                path: entry.path,
+                type: 'other' as FileType,
+                size: 0,
+                icon: <FolderOutlined style={{ fontSize: 16, color: '#faad14' }} />,
+                isDir: true,
+              };
+            }
+            const type = detectFileType(entry.name);
+            return {
+              name: entry.name,
+              path: entry.path,
+              type,
+              size: 0,
+              icon: getFileIcon(type),
+              isDir: false,
+            };
+          });
+          setWorkspaceFiles(files);
+        }
+      } else {
+        setWorkspaceFiles([]);
       }
     } catch (error) {
       console.error('Failed to load workspace files:', error);
@@ -193,20 +232,26 @@ export const FileSelector: React.FC<FileSelectorProps> = ({
     if (visible) {
       loadFiles(currentPath);
     }
-  }, [api, visible, sessionId, currentPath]);
+  }, [api, visible, sessionId, workspacePath, currentPath]);
 
   // Filter and sort files based on search query
   useEffect(() => {
     let items = workspaceFiles;
     
+    // When using browseDirectory (no sessionId), files are already for the current dir
+    const isBrowseMode = !sessionId && !!workspacePath;
+    
     // When searching, show all matching files from all directories
     // When not searching, only show files in current directory
     if (!searchQuery) {
-      // Filter to current directory only
-      items = items.filter((f) => {
-        const dir = f.path.substring(0, f.path.lastIndexOf('/')) || '/';
-        return dir === currentPath;
-      });
+      if (!isBrowseMode) {
+        // Session mode: filter to current directory only (tree is flattened)
+        items = items.filter((f) => {
+          const dir = f.path.substring(0, f.path.lastIndexOf('/')) || '/';
+          return dir === currentPath;
+        });
+      }
+      // Browse mode: already has only current directory entries
     } else {
       // Apply search filter across all directories
       const query = searchQuery.toLowerCase();
@@ -276,7 +321,16 @@ export const FileSelector: React.FC<FileSelectorProps> = ({
   if (!visible) return null;
 
   // Calculate parent path for "go up" functionality
-  const parentPath = currentPath === '/' ? null : currentPath.substring(0, currentPath.lastIndexOf('/')) || '/';
+  const isBrowseMode = !sessionId && !!workspacePath;
+  let parentPath: string | null;
+  if (isBrowseMode) {
+    // In browse mode, workspacePath is the root — don't go above it
+    parentPath = (currentPath === '/' || currentPath === workspacePath)
+      ? null
+      : currentPath.substring(0, currentPath.lastIndexOf('/')) || workspacePath;
+  } else {
+    parentPath = currentPath === '/' ? null : currentPath.substring(0, currentPath.lastIndexOf('/')) || '/';
+  }
 
   // UI will be implemented in step-05
   return (

@@ -99,6 +99,7 @@ export interface Message {
   id?: string;
   role: 'user' | 'assistant' | 'system';
   content: string;
+  images?: ImageAttachment[];  // Images attached to user messages
   tool_calls?: ToolCallResult[];
   timestamp?: string;
 }
@@ -132,6 +133,8 @@ export interface CronJob {
   prompt: string;
   model?: string;       // Model for this cron job
   session_id?: string;  // Associated session ID
+  workspace_path?: string;   // Workspace directory path for this cron job
+  workspace_alias?: string;  // Workspace alias name
   enabled: boolean;
   next_run?: string;
   last_run?: string;
@@ -199,10 +202,17 @@ export interface APIError {
   message: string;
 }
 
+export interface ImageAttachment {
+  data: string;       // base64 encoded (without data: prefix)
+  mime_type: string;  // e.g. "image/png", "image/jpeg"
+  name?: string;      // optional filename
+}
+
 export interface ChatRequest {
   session_id: string;
   message: string;
   stream?: boolean;
+  images?: ImageAttachment[];  // Pasted/uploaded images
 }
 
 export interface ChatResponse {

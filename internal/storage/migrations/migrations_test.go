@@ -28,8 +28,8 @@ func TestRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get version: %v", err)
 	}
-	// Currently we have 5 migrations: 001_init.sql, 002_cron.sql, 003_session_model.sql, 004_session_title.sql, 005_session_skills.sql
-	expectedVersion := 5
+	// Currently we have 6 migrations: 001_init.sql, 002_cron.sql, 003_session_model.sql, 004_session_title.sql, 005_session_skills.sql, 006_cron_workspace.sql
+	expectedVersion := 6
 	if version != expectedVersion {
 		t.Errorf("version = %d, want %d", version, expectedVersion)
 	}
@@ -72,7 +72,7 @@ func TestRun_Idempotent(t *testing.T) {
 		t.Fatalf("get version: %v", err)
 	}
 	// Should be the number of migration scripts
-	expectedVersion := 5
+	expectedVersion := 6
 	if version != expectedVersion {
 		t.Errorf("version = %d, want %d", version, expectedVersion)
 	}
@@ -108,7 +108,7 @@ func TestPending(t *testing.T) {
 		t.Fatalf("get pending: %v", err)
 	}
 	// Number of migration scripts
-	expectedPending := 5
+	expectedPending := 6
 	if len(pending) != expectedPending {
 		t.Errorf("pending count = %d, want %d", len(pending), expectedPending)
 	}

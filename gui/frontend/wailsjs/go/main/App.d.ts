@@ -4,7 +4,7 @@ import {main} from '../models';
 
 export function CallAPI(arg1:string,arg2:string,arg3:string):Promise<Array<number>>;
 
-export function ChatStream(arg1:string,arg2:string):Promise<void>;
+export function ChatStream(arg1:string):Promise<void>;
 
 export function GetAuthStatus():Promise<main.AuthStatus>;
 

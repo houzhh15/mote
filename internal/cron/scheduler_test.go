@@ -31,6 +31,10 @@ func setupSchedulerTest(t *testing.T) (*sql.DB, *JobStore, *HistoryStore, *Execu
 			type TEXT NOT NULL,
 			payload TEXT NOT NULL DEFAULT '{}',
 			enabled INTEGER NOT NULL DEFAULT 1,
+			model TEXT,
+			session_id TEXT,
+			workspace_path TEXT,
+			workspace_alias TEXT,
 			last_run DATETIME,
 			next_run DATETIME,
 			created_at DATETIME NOT NULL,
@@ -57,7 +61,7 @@ func setupSchedulerTest(t *testing.T) (*sql.DB, *JobStore, *HistoryStore, *Execu
 	history := NewHistoryStore(db)
 
 	runner := &mockRunner{result: "ok"}
-	executor := NewExecutor(runner, nil, nil, history, DefaultExecutorConfig(), logger)
+	executor := NewExecutor(runner, nil, nil, history, nil, DefaultExecutorConfig(), logger)
 
 	return db, store, history, executor
 }
@@ -441,7 +445,7 @@ func TestSchedulerScheduledExecution(t *testing.T) {
 			return "executed", nil
 		},
 	}
-	executor := NewExecutor(runner, nil, nil, history, DefaultExecutorConfig(), zerolog.Nop())
+	executor := NewExecutor(runner, nil, nil, history, nil, DefaultExecutorConfig(), zerolog.Nop())
 
 	scheduler := NewScheduler(store, history, executor, nil, nil)
 	ctx := context.Background()
@@ -482,7 +486,7 @@ func TestSchedulerGracefulShutdown(t *testing.T) {
 			return "done", nil
 		},
 	}
-	executor := NewExecutor(runner, nil, nil, history, DefaultExecutorConfig(), zerolog.Nop())
+	executor := NewExecutor(runner, nil, nil, history, nil, DefaultExecutorConfig(), zerolog.Nop())
 
 	scheduler := NewScheduler(store, history, executor, nil, nil)
 	ctx := context.Background()

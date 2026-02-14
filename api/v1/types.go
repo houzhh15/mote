@@ -38,11 +38,19 @@ type ErrorResponse struct {
 // Chat API Models
 // =============================================================================
 
+// ImageData represents an image attachment in a chat request.
+type ImageData struct {
+	Data     string `json:"data"`           // Base64 encoded image data
+	MimeType string `json:"mime_type"`      // MIME type (e.g. "image/png")
+	Name     string `json:"name,omitempty"` // Optional filename
+}
+
 // ChatRequest represents a chat request.
 type ChatRequest struct {
-	SessionID string `json:"session_id,omitempty"` // Optional, auto-created if empty
-	Message   string `json:"message"`              // Required
-	Model     string `json:"model,omitempty"`      // Optional, model to use for this request
+	SessionID string      `json:"session_id,omitempty"` // Optional, auto-created if empty
+	Message   string      `json:"message"`              // Required (can be empty if images provided)
+	Model     string      `json:"model,omitempty"`      // Optional, model to use for this request
+	Images    []ImageData `json:"images,omitempty"`     // Optional, pasted/uploaded images
 }
 
 // ChatResponse represents a chat response.
@@ -494,17 +502,19 @@ type ComponentHealth struct {
 
 // CronJob represents a cron job.
 type CronJob struct {
-	Name        string     `json:"name"`
-	Schedule    string     `json:"schedule"`
-	Type        string     `json:"type"`
-	Prompt      string     `json:"prompt"`
-	Enabled     bool       `json:"enabled"`
-	Model       string     `json:"model,omitempty"`      // Model for this cron job
-	SessionID   string     `json:"session_id,omitempty"` // Associated session ID
-	LastRun     *time.Time `json:"last_run,omitempty"`
-	NextRun     *time.Time `json:"next_run,omitempty"`
-	RunCount    int        `json:"run_count"`
-	Description string     `json:"description,omitempty"`
+	Name           string     `json:"name"`
+	Schedule       string     `json:"schedule"`
+	Type           string     `json:"type"`
+	Prompt         string     `json:"prompt"`
+	Enabled        bool       `json:"enabled"`
+	Model          string     `json:"model,omitempty"`           // Model for this cron job
+	SessionID      string     `json:"session_id,omitempty"`      // Associated session ID
+	WorkspacePath  string     `json:"workspace_path,omitempty"`  // Workspace directory path
+	WorkspaceAlias string     `json:"workspace_alias,omitempty"` // Workspace display alias
+	LastRun        *time.Time `json:"last_run,omitempty"`
+	NextRun        *time.Time `json:"next_run,omitempty"`
+	RunCount       int        `json:"run_count"`
+	Description    string     `json:"description,omitempty"`
 }
 
 // CronJobsListResponse represents the response for listing cron jobs.
@@ -514,23 +524,27 @@ type CronJobsListResponse struct {
 
 // CreateCronJobRequest represents a request to create a cron job.
 type CreateCronJobRequest struct {
-	Name        string `json:"name"`              // Required
-	Schedule    string `json:"schedule"`          // Required, cron expression
-	Type        string `json:"type,omitempty"`    // Optional: prompt (default), tool, script
-	Prompt      string `json:"prompt,omitempty"`  // For prompt type
-	Payload     string `json:"payload,omitempty"` // Generic payload (JSON), alternative to prompt
-	Model       string `json:"model,omitempty"`   // Model for this cron job
-	Enabled     bool   `json:"enabled"`           // Default true
-	Description string `json:"description,omitempty"`
+	Name           string `json:"name"`              // Required
+	Schedule       string `json:"schedule"`          // Required, cron expression
+	Type           string `json:"type,omitempty"`    // Optional: prompt (default), tool, script
+	Prompt         string `json:"prompt,omitempty"`  // For prompt type
+	Payload        string `json:"payload,omitempty"` // Generic payload (JSON), alternative to prompt
+	Model          string `json:"model,omitempty"`   // Model for this cron job
+	Enabled        bool   `json:"enabled"`           // Default true
+	Description    string `json:"description,omitempty"`
+	WorkspacePath  string `json:"workspace_path,omitempty"`  // Workspace directory path
+	WorkspaceAlias string `json:"workspace_alias,omitempty"` // Workspace display alias
 }
 
 // UpdateCronJobRequest represents a request to update a cron job.
 type UpdateCronJobRequest struct {
-	Schedule    *string `json:"schedule,omitempty"`
-	Prompt      *string `json:"prompt,omitempty"`
-	Model       *string `json:"model,omitempty"`
-	Enabled     *bool   `json:"enabled,omitempty"`
-	Description *string `json:"description,omitempty"`
+	Schedule       *string `json:"schedule,omitempty"`
+	Prompt         *string `json:"prompt,omitempty"`
+	Model          *string `json:"model,omitempty"`
+	Enabled        *bool   `json:"enabled,omitempty"`
+	Description    *string `json:"description,omitempty"`
+	WorkspacePath  *string `json:"workspace_path,omitempty"`
+	WorkspaceAlias *string `json:"workspace_alias,omitempty"`
 }
 
 // CronHistoryEntry represents a cron execution history entry.

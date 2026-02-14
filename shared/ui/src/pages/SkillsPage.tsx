@@ -101,8 +101,14 @@ export const SkillsPage = forwardRef<SkillsPageRef, SkillsPageProps>(({ hideTool
     setLoading(true);
     try {
       const data = await api.getSkills?.() ?? [];
-      // Sort skills by name for consistent ordering
-      const sortedData = [...data].sort((a, b) => a.name.localeCompare(b.name));
+      // Sort skills by state (active first) then by name for consistent ordering
+      const sortedData = [...data].sort((a, b) => {
+        // Active skills first
+        if (a.state === 'active' && b.state !== 'active') return -1;
+        if (a.state !== 'active' && b.state === 'active') return 1;
+        // Then sort by name (case-insensitive)
+        return a.name.localeCompare(b.name, 'zh-CN', { sensitivity: 'base' });
+      });
       setSkills(sortedData);
     } catch (error) {
       console.error('Failed to fetch skills:', error);
@@ -322,7 +328,7 @@ export const SkillsPage = forwardRef<SkillsPageRef, SkillsPageProps>(({ hideTool
               <List.Item style={{ display: 'flex' }}>
                 <Card
                   size="small"
-                  style={{ width: '100%', minWidth: 220, height: '100%', display: 'flex', flexDirection: 'column' }}
+                  style={{ width: '100%', minWidth: 220, minHeight: 200, height: '100%', display: 'flex', flexDirection: 'column' }}
                   styles={{ body: { flex: 1, display: 'flex', flexDirection: 'column' } }}
                   title={
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>

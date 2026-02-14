@@ -214,7 +214,13 @@ func (r *Runner) GetProvider(model string) (provider.Provider, error) {
 				slog.Debug("GetProvider got provider from multiPool", "providerName", providerName, "effectiveModel", effectiveModel)
 				return prov, nil
 			}
-			slog.Debug("GetProvider multiPool error", "error", err)
+			slog.Warn("GetProvider multiPool error, model may not be registered in any enabled provider",
+				"model", effectiveModel, "error", err)
+			// When multiPool is configured but the specific model is not found,
+			// do NOT silently fall back to the legacy provider — that provider
+			// may be a different type (e.g., ACP) that doesn't support this model.
+			// Instead, return the error so the caller knows routing failed.
+			return nil, fmt.Errorf("model %q not available in any enabled provider: %w", effectiveModel, err)
 		}
 	}
 
@@ -229,7 +235,7 @@ func (r *Runner) GetProvider(model string) (provider.Provider, error) {
 		return r.providerPool.Get(model)
 	}
 
-	// Fallback to legacy single provider
+	// Fallback to legacy single provider (only when no multiPool is configured)
 	if r.provider == nil {
 		return nil, ErrNoProvider
 	}
@@ -582,7 +588,7 @@ func (r *Runner) handleChannelMessage(ctx context.Context, msg channel.InboundMe
 }
 
 // Run starts an agent run and returns a channel of events.
-func (r *Runner) Run(ctx context.Context, sessionID, userInput string) (<-chan Event, error) {
+func (r *Runner) Run(ctx context.Context, sessionID, userInput string, attachments ...provider.Attachment) (<-chan Event, error) {
 	slog.Info("Runner.Run called", "sessionID", sessionID, "hasMultiPool", r.multiPool != nil)
 
 	// Get provider - will be resolved in runLoop based on session model
@@ -616,7 +622,7 @@ func (r *Runner) Run(ctx context.Context, sessionID, userInput string) (<-chan E
 				events <- NewErrorEvent(fmt.Errorf("internal error: %v", rec))
 			}
 		}()
-		r.runLoop(ctx, sessionID, userInput, events)
+		r.runLoop(ctx, sessionID, userInput, attachments, events)
 	}()
 
 	return events, nil
@@ -624,8 +630,7 @@ func (r *Runner) Run(ctx context.Context, sessionID, userInput string) (<-chan E
 
 // RunWithModel starts an agent run with a specific model and scenario.
 // If the session doesn't exist, it will be created with the specified model and scenario.
-// If the session exists but has no model set, the model will be updated.
-func (r *Runner) RunWithModel(ctx context.Context, sessionID, userInput, model, scenario string) (<-chan Event, error) {
+func (r *Runner) RunWithModel(ctx context.Context, sessionID, userInput, model, scenario string, attachments ...provider.Attachment) (<-chan Event, error) {
 	if r.provider == nil && r.providerPool == nil {
 		return nil, ErrNoProvider
 	}
@@ -656,14 +661,14 @@ func (r *Runner) RunWithModel(ctx context.Context, sessionID, userInput, model, 
 				events <- NewErrorEvent(fmt.Errorf("internal error: %v", rec))
 			}
 		}()
-		r.runLoopWithModel(ctx, sessionID, userInput, model, scenario, events)
+		r.runLoopWithModel(ctx, sessionID, userInput, model, scenario, attachments, events)
 	}()
 
 	return events, nil
 }
 
 // runLoopWithModel is the main agent execution loop with explicit model/scenario.
-func (r *Runner) runLoopWithModel(ctx context.Context, sessionID, userInput, model, scenario string, events chan<- Event) {
+func (r *Runner) runLoopWithModel(ctx context.Context, sessionID, userInput, model, scenario string, attachments []provider.Attachment, events chan<- Event) {
 	// Get or create session
 	cached, err := r.sessions.GetOrCreate(sessionID, nil)
 	if err != nil {
@@ -696,11 +701,11 @@ func (r *Runner) runLoopWithModel(ctx context.Context, sessionID, userInput, mod
 	}
 
 	// Continue with the rest of the run loop (reuse the common logic)
-	r.runLoopCore(ctx, cached, sessionID, userInput, prov, events)
+	r.runLoopCore(ctx, cached, sessionID, userInput, attachments, prov, events)
 }
 
 // runLoop is the main agent execution loop.
-func (r *Runner) runLoop(ctx context.Context, sessionID, userInput string, events chan<- Event) {
+func (r *Runner) runLoop(ctx context.Context, sessionID, userInput string, attachments []provider.Attachment, events chan<- Event) {
 	// Get or create session
 	cached, err := r.sessions.GetOrCreate(sessionID, nil)
 	if err != nil {
@@ -722,11 +727,11 @@ func (r *Runner) runLoop(ctx context.Context, sessionID, userInput string, event
 	slog.Debug("runLoop got provider", "sessionID", sessionID, "sessionModel", sessionModel, "providerName", prov.Name())
 
 	// Call the core loop with the resolved provider
-	r.runLoopCore(ctx, cached, sessionID, userInput, prov, events)
+	r.runLoopCore(ctx, cached, sessionID, userInput, attachments, prov, events)
 }
 
 // runLoopCore is the core agent execution loop that takes a resolved provider.
-func (r *Runner) runLoopCore(ctx context.Context, cached *scheduler.CachedSession, sessionID, userInput string, prov provider.Provider, events chan<- Event) {
+func (r *Runner) runLoopCore(ctx context.Context, cached *scheduler.CachedSession, sessionID, userInput string, attachments []provider.Attachment, prov provider.Provider, events chan<- Event) {
 	// M07: Trigger session_create hook for new sessions
 	if len(cached.Messages) == 0 {
 		hookCtx := hooks.NewContext(hooks.HookSessionCreate)
@@ -779,7 +784,7 @@ func (r *Runner) runLoopCore(ctx context.Context, cached *scheduler.CachedSessio
 	// ACP providers handle tool call loops internally, so we only need a single call
 	if acpProv, ok := prov.(provider.ACPCapable); ok && acpProv.IsACPProvider() {
 		slog.Info("runLoopCore: using ACP mode", "sessionID", sessionID, "provider", prov.Name())
-		r.runACPMode(ctx, cached, sessionID, userInput, prov, events)
+		r.runACPMode(ctx, cached, sessionID, userInput, attachments, prov, events)
 		return
 	}
 
@@ -848,7 +853,7 @@ func (r *Runner) runLoopCore(ctx context.Context, cached *scheduler.CachedSessio
 		if cached.Session != nil {
 			sessionModel = cached.Session.Model
 		}
-		req := r.buildChatRequest(messages, sessionModel, sessionID)
+		req := r.buildChatRequest(messages, sessionModel, sessionID, attachments)
 
 		// Call provider
 		resp, err := r.callProviderWith(ctx, prov, req, events, iteration)
@@ -1062,14 +1067,18 @@ func (r *Runner) runLoopCore(ctx context.Context, cached *scheduler.CachedSessio
 
 // runACPMode handles execution for ACP providers.
 // ACP providers handle tool call loops internally, so we only need to:
-// 1. Build system message with skills injection
-// 2. Send the user message
-// 3. Forward streaming events from the provider
-// 4. Save the final response
+// 1. Build messages with conversation history (like non-ACP mode)
+// 2. Compress history if needed (using same logic as non-ACP mode)
+// 3. Inject skills into system message
+// 4. Forward streaming events from the provider
+// 5. Save the final response
 //
 // This is more efficient for quota usage as it counts as a single premium request
 // regardless of how many tool calls are executed internally.
-func (r *Runner) runACPMode(ctx context.Context, cached *scheduler.CachedSession, sessionID, userInput string, prov provider.Provider, events chan<- Event) {
+//
+// Note: Previous implementation didn't include history, causing context loss after restart.
+// Now fixed to match non-ACP behavior.
+func (r *Runner) runACPMode(ctx context.Context, cached *scheduler.CachedSession, sessionID, userInput string, attachments []provider.Attachment, prov provider.Provider, events chan<- Event) {
 	// Add user message to session
 	_, err := r.sessions.AddMessage(sessionID, provider.RoleUser, userInput, nil, "")
 	if err != nil {
@@ -1077,44 +1086,99 @@ func (r *Runner) runACPMode(ctx context.Context, cached *scheduler.CachedSession
 		return
 	}
 
-	// Build system message with skills injection for ACP mode
-	// ACP maintains its own conversation context, but we need to inject skills
-	// on each request to ensure the LLM knows about available tools
-	var sysPromptContent string
+	// Build messages including conversation history (same as non-ACP mode)
+	messages, err := r.buildMessages(ctx, cached, userInput)
+	if err != nil {
+		events <- NewErrorEvent(err)
+		return
+	}
+
+	slog.Info("runACPMode: built messages with history",
+		"sessionID", sessionID,
+		"messageCount", len(messages),
+		"cachedMessageCount", len(cached.Messages))
+
+	// Compress history if needed (same as non-ACP mode)
+	if r.compactor != nil {
+		if r.compactor.NeedsCompaction(messages) {
+			slog.Info("runACPMode: compacting messages",
+				"sessionID", sessionID,
+				"beforeCount", len(messages))
+			compacted := r.compactor.CompactWithFallback(ctx, messages)
+			slog.Info("runACPMode: compaction done",
+				"sessionID", sessionID,
+				"afterCount", len(compacted))
+			messages = compacted
+			r.compactor.IncrementCompactionCount(sessionID)
+		}
+	} else if compressed, changed := r.history.Compress(messages); changed {
+		slog.Info("runACPMode: history compressed (fallback)",
+			"sessionID", sessionID,
+			"beforeCount", len(messages),
+			"afterCount", len(compressed))
+		messages = compressed
+	}
+
+	// Inject skills into system message
+	// Find or create system message index
+	systemMsgIdx := -1
+	for i, msg := range messages {
+		if msg.Role == provider.RoleSystem {
+			systemMsgIdx = i
+			break
+		}
+	}
+
 	if r.skillManager != nil {
 		skillsSection := skills.NewPromptSection(r.skillManager)
 		// Apply session-level skill selection filter
 		if cached.Session != nil && len(cached.Session.SelectedSkills) > 0 {
 			skillsSection.WithSelectedSkills(cached.Session.SelectedSkills)
-			slog.Info("runACPMode: applying selected skills filter", "sessionID", sessionID, "selectedSkills", cached.Session.SelectedSkills)
+			slog.Info("runACPMode: applying selected skills filter",
+				"sessionID", sessionID,
+				"selectedSkills", cached.Session.SelectedSkills)
 		}
+
+		var skillsContent string
 		if section := skillsSection.Build(); section != "" {
-			sysPromptContent += section
+			skillsContent += section
 		}
 		if activePrompts := skillsSection.BuildActivePrompts(); activePrompts != "" {
-			sysPromptContent += "\n" + activePrompts
+			skillsContent += "\n" + activePrompts
+		}
+
+		if skillsContent != "" {
+			if systemMsgIdx >= 0 {
+				// Append to existing system message
+				messages[systemMsgIdx].Content += "\n\n" + skillsContent
+				slog.Info("runACPMode: appended skills to existing system message",
+					"sessionID", sessionID,
+					"skillsLen", len(skillsContent))
+			} else {
+				// Prepend new system message
+				messages = append([]provider.Message{{
+					Role:    provider.RoleSystem,
+					Content: skillsContent,
+				}}, messages...)
+				slog.Info("runACPMode: prepended new system message with skills",
+					"sessionID", sessionID,
+					"skillsLen", len(skillsContent))
+			}
 		}
 	}
-
-	// Build request with system message (if skills injected) and user message
-	var messages []provider.Message
-	if sysPromptContent != "" {
-		messages = append(messages, provider.Message{
-			Role:    provider.RoleSystem,
-			Content: sysPromptContent,
-		})
-		slog.Info("runACPMode: injected skills into system message", "sessionID", sessionID, "sysPromptLen", len(sysPromptContent))
-	}
-	messages = append(messages, provider.Message{Role: provider.RoleUser, Content: userInput})
 
 	req := provider.ChatRequest{
 		Model:          cached.Session.Model,
 		Messages:       messages,
+		Attachments:    attachments,
 		Stream:         true,
 		ConversationID: sessionID,
 	}
 
-	slog.Info("runACPMode: starting ACP execution", "sessionID", sessionID, "model", req.Model)
+	slog.Info("runACPMode: starting ACP execution",
+		"sessionID", sessionID,
+		"model", req.Model,
+		"finalMessageCount", len(messages))
 
 	// Stream from ACP provider
 	provEvents, err := prov.Stream(ctx, req)
@@ -1308,7 +1372,7 @@ func (r *Runner) buildMessages(ctx context.Context, cached *scheduler.CachedSess
 
 // buildChatRequest creates a ChatRequest from messages.
 // sessionID is used as the conversation ID to help providers track multi-turn tool call conversations.
-func (r *Runner) buildChatRequest(messages []provider.Message, model string, sessionID string) provider.ChatRequest {
+func (r *Runner) buildChatRequest(messages []provider.Message, model string, sessionID string, attachments []provider.Attachment) provider.ChatRequest {
 	tools, _ := r.registry.ToProviderTools()
 
 	// For Ollama provider, strip the "ollama:" prefix from model name
@@ -1317,6 +1381,7 @@ func (r *Runner) buildChatRequest(messages []provider.Message, model string, ses
 	req := provider.ChatRequest{
 		Model:          model,
 		Messages:       messages,
+		Attachments:    attachments,
 		Tools:          tools,
 		Temperature:    r.config.Temperature,
 		MaxTokens:      r.config.MaxTokens,

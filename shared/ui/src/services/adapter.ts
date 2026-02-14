@@ -218,6 +218,16 @@ export interface APIAdapter {
   reloadSkills?(): Promise<void>;
   
   /**
+   * Check for skill updates
+   */
+  checkSkillUpdates?(): Promise<VersionCheckResult>;
+  
+  /**
+   * Update a skill to latest version
+   */
+  updateSkill?(skillId: string, options?: UpdateOptions): Promise<UpdateResult>;
+  
+  /**
    * Open skills directory in file manager
    */
   openSkillsDir?(target: 'user' | 'workspace'): Promise<void>;
@@ -361,6 +371,8 @@ export const createNoopAdapter = (): APIAdapter => ({
   activateSkill: async () => {},
   deactivateSkill: async () => {},
   reloadSkills: async () => {},
+  checkSkillUpdates: async () => ({ updates: [], total: 0, updated_at: new Date().toISOString() }),
+  updateSkill: async () => ({ success: false, skill_id: '', old_version: '', new_version: '', error: 'Not implemented' }),
   openSkillsDir: async () => {},
   createSkill: async () => ({ path: '' }),
   // Tools

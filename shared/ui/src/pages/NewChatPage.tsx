@@ -3,15 +3,17 @@
  *
  * 居中布局，延迟创建 Session，发送第一条消息时才创建
  */
-import React, { useState, useEffect, useCallback } from 'react';
-import { Input, Button, Select, Space, Typography, message, Modal, Tag, Tooltip, Dropdown } from 'antd';
-import { SendOutlined, GithubOutlined, FolderOutlined, LinkOutlined, DisconnectOutlined, FolderOpenOutlined, ThunderboltOutlined } from '@ant-design/icons';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { Input, Button, Select, Space, Typography, message, Modal, Tag, Tooltip, Dropdown, theme } from 'antd';
+import { SendOutlined, GithubOutlined, FolderOutlined, LinkOutlined, DisconnectOutlined, FolderOpenOutlined, ThunderboltOutlined, CloseCircleFilled } from '@ant-design/icons';
 import { useAPI } from '../context/APIContext';
 import { useInputHistory } from '../hooks';
 import { PromptSelector } from '../components/PromptSelector';
+import { FileSelector } from '../components/FileSelector';
+import type { FileSelectorMode } from '../components/FileSelector';
 import { DirectoryPicker } from '../components/DirectoryPicker';
 import { OllamaIcon } from '../components/OllamaIcon';
-import type { Model, Workspace, Skill } from '../types';
+import type { Model, Workspace, Skill, ImageAttachment } from '../types';
 
 const { TextArea } = Input;
 const { Text, Title } = Typography;
@@ -45,6 +47,15 @@ export const NewChatPage: React.FC<NewChatPageProps> = ({
   const [promptSearchQuery, setPromptSearchQuery] = useState('');
   const [skills, setSkills] = useState<Skill[]>([]);
   const [selectedSkills, setSelectedSkills] = useState<string[]>([]); // empty = all
+  // Image paste state
+  const [pastedImages, setPastedImages] = useState<ImageAttachment[]>([]);
+  // File selector state
+  const [fileSelectorVisible, setFileSelectorVisible] = useState(false);
+  const [fileSearchQuery, setFileSearchQuery] = useState('');
+  const [fileSelectorMode, setFileSelectorMode] = useState<FileSelectorMode>('context');
+  const [tabTriggerPos, setTabTriggerPos] = useState<number | null>(null);
+  const inputRef = useRef<any>(null);
+  const { token: tokenColors } = theme.useToken();
 
   // 加载模型列表
   const loadModels = useCallback(async () => {
@@ -144,15 +155,28 @@ export const NewChatPage: React.FC<NewChatPageProps> = ({
   // 发送消息（创建 Session 后发送）
   const handleSend = async () => {
     const content = inputValue.trim();
-    if (!content) {
+    const hasImages = pastedImages.length > 0;
+    if (!content && !hasImages) {
       return;
     }
+
+    // Warn if current model doesn't support vision but images are attached
+    if (hasImages) {
+      const currentModelObj = models.find(m => m.id === currentModel);
+      if (currentModelObj && !currentModelObj.supports_vision) {
+        message.warning(`当前模型 ${currentModelObj.display_name || currentModel} 不支持图片输入，图片可能被忽略`);
+      }
+    }
+
+    // Capture current images before clearing
+    const currentImages = hasImages ? [...pastedImages] : undefined;
 
     setLoading(true);
 
     try {
       // 1. 创建新 Session
-      const title = content.slice(0, 50) + (content.length > 50 ? '...' : '');
+      const titleText = content || '图片对话';
+      const title = titleText.slice(0, 50) + (titleText.length > 50 ? '...' : '');
       const session = await api.createSession(title, 'chat');
       const sessionId = session.id;
 
@@ -198,7 +222,13 @@ export const NewChatPage: React.FC<NewChatPageProps> = ({
 
       // 注意：需要传递初始消息给 ChatPage
       // 这里通过 sessionStorage 临时存储待发送的消息
-      sessionStorage.setItem(`mote_pending_message_${sessionId}`, content);
+      const messageContent = content || (hasImages ? '请描述这张图片' : '');
+      sessionStorage.setItem(`mote_pending_message_${sessionId}`, messageContent);
+
+      // Store images if any
+      if (currentImages && currentImages.length > 0) {
+        sessionStorage.setItem(`mote_pending_images_${sessionId}`, JSON.stringify(currentImages));
+      }
 
       // 6. 跳转到 ChatPage
       onNavigateToChat?.(sessionId);
@@ -228,27 +258,65 @@ export const NewChatPage: React.FC<NewChatPageProps> = ({
       const next = navigateNext();
       setInputValue(next ?? '');
     }
-    // Close prompt selector on Escape
-    if (e.key === 'Escape' && promptSelectorVisible) {
-      setPromptSelectorVisible(false);
-      setPromptSearchQuery('');
+    // Close selectors on Escape
+    if (e.key === 'Escape') {
+      if (promptSelectorVisible) {
+        setPromptSelectorVisible(false);
+        setPromptSearchQuery('');
+      }
+      if (fileSelectorVisible) {
+        setFileSelectorVisible(false);
+        setFileSearchQuery('');
+      }
+    }
+    // Tab key path completion (only when workspace is bound)
+    if (e.key === 'Tab' && !e.shiftKey && !promptSelectorVisible && !fileSelectorVisible && selectedWorkspace) {
+      const value = inputValue;
+      const cursorPos = e.currentTarget.selectionStart;
+      const beforeCursor = value.substring(0, cursorPos);
+      const pathMatch = beforeCursor.match(/[\w\/\.\-_]*$/);
+      if (pathMatch && pathMatch[0].length > 0) {
+        e.preventDefault();
+        setFileSelectorVisible(true);
+        setFileSelectorMode('path-only');
+        setFileSearchQuery(pathMatch[0]);
+        setTabTriggerPos(cursorPos - pathMatch[0].length);
+      }
     }
   };
 
-  // 处理输入变化，检测 / 命令
+  // 处理输入变化，检测 / 命令和 @ 文件引用
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const value = e.target.value;
     setInputValue(value);
     resetNavigation();
 
-    // Detect / command at the start of input
+    // ===== Detect / command for prompt selector =====
     const match = value.match(/^\/(.*)$/);
     if (match) {
       setPromptSelectorVisible(true);
       setPromptSearchQuery(match[1] || '');
+      setFileSelectorVisible(false); // Mutually exclusive
     } else if (!value.startsWith('/')) {
       setPromptSelectorVisible(false);
       setPromptSearchQuery('');
+    }
+
+    // ===== Detect @ for file selector (only when workspace is bound) =====
+    if (selectedWorkspace && value.endsWith('@')) {
+      const beforeAt = value.slice(0, -1);
+      if (beforeAt === '' || beforeAt.endsWith(' ') || beforeAt.endsWith('\n')) {
+        setFileSelectorVisible(true);
+        setFileSearchQuery('');
+        setFileSelectorMode('context');
+        setPromptSelectorVisible(false); // Mutually exclusive
+        return;
+      }
+    }
+
+    const lastAtIndex = value.lastIndexOf('@');
+    if (lastAtIndex !== -1 && fileSelectorVisible) {
+      setFileSearchQuery(value.slice(lastAtIndex + 1));
     }
   };
 
@@ -258,6 +326,61 @@ export const NewChatPage: React.FC<NewChatPageProps> = ({
     setPromptSelectorVisible(false);
     setPromptSearchQuery('');
   };
+
+  // 处理文件选择
+  const handleFileSelect = (filepath: string, _mode: FileSelectorMode) => {
+    if (fileSelectorMode === 'path-only' && tabTriggerPos !== null) {
+      // Tab completion: replace path fragment
+      const cursorPos = inputRef.current?.resizableTextArea?.textArea?.selectionStart || 0;
+      const before = inputValue.substring(0, tabTriggerPos);
+      const after = inputValue.substring(cursorPos);
+      setInputValue(`${before}${filepath}${after}`);
+      setTabTriggerPos(null);
+    } else {
+      // @ reference: insert at end
+      const lastAtIndex = inputValue.lastIndexOf('@');
+      const before = inputValue.substring(0, lastAtIndex);
+      setInputValue(`${before}@${filepath} `);
+    }
+    setFileSelectorVisible(false);
+    setFileSearchQuery('');
+  };
+
+  // 处理图片粘贴
+  const handlePaste = useCallback((e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+
+    for (const item of Array.from(items)) {
+      if (item.type.startsWith('image/')) {
+        e.preventDefault();
+        const file = item.getAsFile();
+        if (!file) continue;
+
+        // Size limit: 10MB
+        if (file.size > 10 * 1024 * 1024) {
+          message.warning('图片大小不能超过 10MB');
+          continue;
+        }
+
+        const mimeType = item.type;
+        const reader = new FileReader();
+        reader.onload = () => {
+          const dataUrl = reader.result as string;
+          const base64 = dataUrl.split(',')[1];
+          if (base64) {
+            setPastedImages(prev => [...prev, {
+              data: base64,
+              mime_type: mimeType,
+              name: `screenshot-${Date.now()}.${mimeType.split('/')[1] || 'png'}`,
+            }]);
+          }
+        };
+        reader.readAsDataURL(file);
+        return; // Only handle the first image
+      }
+    }
+  }, []);
 
   return (
     <div className="new-chat-page" style={styles.container}>
@@ -275,13 +398,45 @@ export const NewChatPage: React.FC<NewChatPageProps> = ({
         {/* 输入区域 */}
         <div style={styles.inputContainer}>
           <div style={{ position: 'relative' }}>
+            {/* Pasted Images Preview */}
+            {pastedImages.length > 0 && (
+              <div style={{ 
+                display: 'flex', gap: 8, padding: '8px 8px 4px', flexWrap: 'wrap',
+                background: tokenColors.colorBgLayout, borderRadius: '12px 12px 0 0',
+                border: `1px solid ${tokenColors.colorBorderSecondary}`, borderBottom: 'none',
+              }}>
+                {pastedImages.map((img, i) => (
+                  <div key={i} style={{ position: 'relative', display: 'inline-block' }}>
+                    <img
+                      src={`data:${img.mime_type};base64,${img.data}`}
+                      alt="preview"
+                      style={{ height: 64, borderRadius: 6, border: `1px solid ${tokenColors.colorBorderSecondary}`, objectFit: 'cover' }}
+                    />
+                    <CloseCircleFilled
+                      style={{ 
+                        position: 'absolute', top: -6, right: -6, cursor: 'pointer', 
+                        fontSize: 16, color: '#ff4d4f', background: 'white', borderRadius: '50%',
+                      }}
+                      onClick={() => setPastedImages(prev => prev.filter((_, idx) => idx !== i))}
+                    />
+                  </div>
+                ))}
+              </div>
+            )}
             <TextArea
+              ref={inputRef}
               value={inputValue}
               onChange={handleInputChange}
               onKeyDown={handleKeyDown}
-              placeholder="输入消息开始对话... (输入 / 使用提示词)"
+              onPaste={handlePaste}
+              placeholder={pastedImages.length > 0 
+                ? "添加说明文字（可选）... (Ctrl+V 粘贴截图)" 
+                : `输入消息开始对话... (/ 提示词${selectedWorkspace ? ', @ 引用文件' : ''}, Ctrl+V 粘贴截图)`}
               autoSize={{ minRows: 3, maxRows: 8 }}
-              style={styles.textArea}
+              style={{
+                ...styles.textArea,
+                borderRadius: pastedImages.length > 0 ? '0 0 12px 12px' : 12,
+              }}
               disabled={loading}
               className="mote-input"
             />
@@ -296,6 +451,19 @@ export const NewChatPage: React.FC<NewChatPageProps> = ({
                 setPromptSearchQuery('');
               }}
             />
+            {selectedWorkspace && (
+              <FileSelector
+                visible={fileSelectorVisible}
+                searchQuery={fileSearchQuery}
+                workspacePath={selectedWorkspace.path}
+                mode={fileSelectorMode}
+                onSelect={handleFileSelect}
+                onCancel={() => {
+                  setFileSelectorVisible(false);
+                  setFileSearchQuery('');
+                }}
+              />
+            )}
           </div>
 
           {/* 底部控制栏：模型选择 + 工作区绑定 + 发送按钮，同一行 */}
@@ -366,9 +534,17 @@ export const NewChatPage: React.FC<NewChatPageProps> = ({
                 <Button
                   icon={<LinkOutlined />}
                   onClick={() => setWorkspaceModalVisible(true)}
-                  style={{ color: '#52c41a' }}
+                  style={{ color: '#52c41a', maxWidth: 200 }}
                 >
-                  {selectedWorkspace.name || selectedWorkspace.path.split('/').pop()}
+                  <span style={{ 
+                    overflow: 'hidden', 
+                    textOverflow: 'ellipsis', 
+                    whiteSpace: 'nowrap',
+                    display: 'inline-block',
+                    maxWidth: '100%'
+                  }}>
+                    {selectedWorkspace.name || selectedWorkspace.path.split('/').pop()}
+                  </span>
                 </Button>
               ) : (
                 <Button
@@ -385,7 +561,7 @@ export const NewChatPage: React.FC<NewChatPageProps> = ({
               icon={<SendOutlined />}
               onClick={handleSend}
               loading={loading}
-              disabled={!inputValue.trim()}
+              disabled={!inputValue.trim() && pastedImages.length === 0}
             >
               发送
             </Button>

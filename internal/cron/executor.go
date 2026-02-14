@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
+
+	"mote/internal/workspace"
 )
 
 // Runner executes prompts through the LLM.
@@ -25,15 +27,23 @@ type JSExecutor interface {
 	ExecuteFile(ctx context.Context, filePath, executionID string) (interface{}, error)
 }
 
+// WorkspaceManager manages workspace bindings for sessions.
+type WorkspaceManager interface {
+	Bind(sessionID, workspacePath string, readOnly bool) error
+	BindWithAlias(sessionID, workspacePath, alias string, readOnly bool) error
+	Get(sessionID string) (*workspace.WorkspaceBinding, bool)
+}
+
 // Executor handles running cron jobs.
 type Executor struct {
-	runner       Runner
-	toolRegistry ToolRegistry
-	jsExecutor   JSExecutor
-	historyStore *HistoryStore
-	retryPolicy  RetryPolicy
-	timeout      time.Duration
-	logger       zerolog.Logger
+	runner           Runner
+	toolRegistry     ToolRegistry
+	jsExecutor       JSExecutor
+	historyStore     *HistoryStore
+	workspaceManager WorkspaceManager
+	retryPolicy      RetryPolicy
+	timeout          time.Duration
+	logger           zerolog.Logger
 }
 
 // ExecutorConfig holds configuration for the executor.
@@ -56,17 +66,19 @@ func NewExecutor(
 	toolRegistry ToolRegistry,
 	jsExecutor JSExecutor,
 	historyStore *HistoryStore,
+	workspaceManager WorkspaceManager,
 	cfg ExecutorConfig,
 	logger zerolog.Logger,
 ) *Executor {
 	return &Executor{
-		runner:       runner,
-		toolRegistry: toolRegistry,
-		jsExecutor:   jsExecutor,
-		historyStore: historyStore,
-		retryPolicy:  cfg.RetryPolicy,
-		timeout:      cfg.Timeout,
-		logger:       logger,
+		runner:           runner,
+		toolRegistry:     toolRegistry,
+		jsExecutor:       jsExecutor,
+		historyStore:     historyStore,
+		workspaceManager: workspaceManager,
+		retryPolicy:      cfg.RetryPolicy,
+		timeout:          cfg.Timeout,
+		logger:           logger,
 	}
 }
 
@@ -83,6 +95,30 @@ type ExecuteResult struct {
 // Execute runs a job and records the result in history.
 func (e *Executor) Execute(ctx context.Context, job *Job) *ExecuteResult {
 	startTime := time.Now()
+
+	// Bind workspace if specified
+	if job.WorkspacePath != "" && e.workspaceManager != nil {
+		sessionID := deriveCronSessionID(job.Name)
+		var err error
+		if job.WorkspaceAlias != "" {
+			err = e.workspaceManager.BindWithAlias(sessionID, job.WorkspacePath, job.WorkspaceAlias, false)
+		} else {
+			err = e.workspaceManager.Bind(sessionID, job.WorkspacePath, false)
+		}
+		if err != nil {
+			e.logger.Warn().
+				Err(err).
+				Str("job", job.Name).
+				Str("workspace", job.WorkspacePath).
+				Msg("failed to bind workspace, continuing without workspace context")
+		} else {
+			e.logger.Debug().
+				Str("job", job.Name).
+				Str("workspace", job.WorkspacePath).
+				Str("session_id", sessionID).
+				Msg("workspace bound to cron job session")
+		}
+	}
 
 	// Create history entry
 	entry, err := e.historyStore.StartExecution(job.Name)
@@ -110,6 +146,11 @@ func (e *Executor) Execute(ctx context.Context, job *Job) *ExecuteResult {
 		Duration:  time.Since(startTime),
 		HistoryID: entry.ID,
 	}
+}
+
+// deriveCronSessionID generates a session ID for a cron job.
+func deriveCronSessionID(jobName string) string {
+	return "cron-" + jobName
 }
 
 // executeWithRetry handles retry logic.
@@ -180,8 +221,9 @@ func (e *Executor) executePrompt(ctx context.Context, job *Job) (string, error) 
 		return "", NonRetryable(fmt.Errorf("prompt is required"))
 	}
 
-	// Pass job name as option for session sharing
-	result, err := e.runner.Run(ctx, payload.Prompt, job.Name)
+	// Pass derived session ID to runner for workspace-aware execution
+	sessionID := deriveCronSessionID(job.Name)
+	result, err := e.runner.Run(ctx, payload.Prompt, sessionID)
 	if err != nil {
 		return "", err
 	}
