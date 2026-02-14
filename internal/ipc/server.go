@@ -71,6 +71,7 @@ func NewServer(opts ...ServerOption) *Server {
 	}
 
 	s.RegisterHandler(MsgPing, HandlerFunc(s.handlePing))
+	s.RegisterHandler(MsgPong, HandlerFunc(s.handlePong))
 
 	return s
 }
@@ -328,6 +329,12 @@ func (s *Server) handlePing(msg *Message) error {
 		WithReplyTo(msg.ID)
 
 	return s.Send(msg.Source, pong)
+}
+
+// handlePong handles pong responses from clients (heartbeat acknowledgment).
+func (s *Server) handlePong(_ *Message) error {
+	// Pong is just an acknowledgment — no action needed.
+	return nil
 }
 
 func (s *Server) sendToClient(client *clientConn, msg *Message) error {

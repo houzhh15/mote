@@ -64,7 +64,7 @@ type CompactionConfig struct {
 	SummaryMaxTokens int `json:"summary_max_tokens"`
 
 	// ChunkMaxTokens is the maximum tokens per chunk for summarization.
-	// Default: 4000
+	// Default: 16000
 	ChunkMaxTokens int `json:"chunk_max_tokens"`
 
 	// FlushOnCompact enables saving key info to memory before compaction.
@@ -82,7 +82,7 @@ func DefaultConfig() CompactionConfig {
 		TriggerThreshold: 0.8,
 		KeepRecentCount:  10,
 		SummaryMaxTokens: 500,
-		ChunkMaxTokens:   4000,
+		ChunkMaxTokens:   16000,
 		FlushOnCompact:   true, // P1: Enable by default
 		MemoryFlush:      DefaultMemoryFlushConfig(),
 	}

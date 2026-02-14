@@ -306,20 +306,6 @@ type ReconfigureSessionResponse struct {
 	Message        string   `json:"message"`
 }
 
-// ScenarioModelsResponse represents scenario default models.
-type ScenarioModelsResponse struct {
-	Chat    string `json:"chat"`    // Default model for chat scenario
-	Cron    string `json:"cron"`    // Default model for cron scenario
-	Channel string `json:"channel"` // Default model for channel scenario
-}
-
-// UpdateScenarioModelsRequest represents a request to update scenario models.
-type UpdateScenarioModelsRequest struct {
-	Chat    string `json:"chat,omitempty"`    // New default model for chat
-	Cron    string `json:"cron,omitempty"`    // New default model for cron
-	Channel string `json:"channel,omitempty"` // New default model for channel
-}
-
 // CreateSessionResponse represents a response after creating a session.
 type CreateSessionResponse struct {
 	ID        string    `json:"id"`
@@ -351,6 +337,7 @@ type ConfigResponse struct {
 	Gateway  GatewayConfigView  `json:"gateway"`
 	Provider ProviderConfigView `json:"provider"`
 	Ollama   OllamaConfigView   `json:"ollama"`
+	Minimax  MinimaxConfigView  `json:"minimax"`
 	Memory   MemoryConfigView   `json:"memory"`
 	Cron     CronConfigView     `json:"cron"`
 	MCP      MCPConfigView      `json:"mcp"`
@@ -383,6 +370,14 @@ type OllamaConfigView struct {
 	Model    string `json:"model,omitempty"`
 }
 
+// MinimaxConfigView represents MiniMax provider configuration for API.
+type MinimaxConfigView struct {
+	APIKey    string `json:"api_key,omitempty"`
+	Endpoint  string `json:"endpoint,omitempty"`
+	Model     string `json:"model,omitempty"`
+	MaxTokens int    `json:"max_tokens,omitempty"`
+}
+
 // MemoryConfigView represents memory configuration for API.
 type MemoryConfigView struct {
 	Enabled bool `json:"enabled"`
@@ -404,6 +399,7 @@ type UpdateConfigRequest struct {
 	Gateway  *GatewayConfigView  `json:"gateway,omitempty"`
 	Provider *ProviderConfigView `json:"provider,omitempty"`
 	Ollama   *OllamaConfigView   `json:"ollama,omitempty"`
+	Minimax  *MinimaxConfigView  `json:"minimax,omitempty"`
 	Memory   *MemoryConfigView   `json:"memory,omitempty"`
 	Cron     *CronConfigView     `json:"cron,omitempty"`
 }

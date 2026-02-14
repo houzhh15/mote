@@ -206,6 +206,57 @@ func (db *DB) CountMessages(sessionID string) (int, error) {
 	return count, err
 }
 
+// ReplaceMessages atomically replaces all messages for a session with new ones.
+// This is used to persist compaction results: the old messages are deleted and
+// the compacted messages are inserted in a single transaction.
+func (db *DB) ReplaceMessages(sessionID string, messages []*Message) error {
+	return db.WithTx(func(tx *Tx) error {
+		// Delete all existing messages for this session
+		if _, err := tx.Exec("DELETE FROM messages WHERE session_id = ?", sessionID); err != nil {
+			return err
+		}
+
+		// Insert new (compacted) messages
+		for _, msg := range messages {
+			id := msg.ID
+			if id == "" {
+				id = uuid.New().String()
+			}
+
+			var toolCallsJSON *string
+			if len(msg.ToolCalls) > 0 {
+				data, err := json.Marshal(msg.ToolCalls)
+				if err != nil {
+					return err
+				}
+				s := string(data)
+				toolCallsJSON = &s
+			}
+
+			var toolCallIDPtr *string
+			if msg.ToolCallID != "" {
+				toolCallIDPtr = &msg.ToolCallID
+			}
+
+			createdAt := msg.CreatedAt
+			if createdAt.IsZero() {
+				createdAt = time.Now()
+			}
+
+			if _, err := tx.Exec(
+				"INSERT INTO messages (id, session_id, role, content, tool_calls, tool_call_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+				id, sessionID, msg.Role, msg.Content, toolCallsJSON, toolCallIDPtr, createdAt,
+			); err != nil {
+				return err
+			}
+		}
+
+		// Update session timestamp
+		_, _ = tx.Exec("UPDATE sessions SET updated_at = ? WHERE id = ?", time.Now(), sessionID)
+		return nil
+	})
+}
+
 // GetMessage 获取单条消息
 func (db *DB) GetMessage(id string) (*Message, error) {
 	var m Message

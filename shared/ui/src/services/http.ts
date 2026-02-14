@@ -18,7 +18,6 @@ import type {
   ChannelStatus,
   ChannelConfig,
   ModelsResponse,
-  ScenarioModels,
   Skill,
   Workspace,
   WorkspaceFile,
@@ -388,19 +387,6 @@ export const createHttpAdapter = (options: HttpAdapterOptions = {}): APIAdapter 
       return fetchJSON<ReconfigureSessionResponse>(`/api/v1/sessions/${sessionId}/reconfigure`, {
         method: 'POST',
         body: JSON.stringify(config),
-      });
-    },
-
-    getScenarioModels: async (): Promise<ScenarioModels> => {
-      return fetchJSON<ScenarioModels>('/api/v1/settings/models');
-    },
-
-    setScenarioModel: async (scenario: string, modelId: string): Promise<void> => {
-      const body: Record<string, string> = {};
-      body[scenario] = modelId;
-      await fetchJSON('/api/v1/settings/models', {
-        method: 'PUT',
-        body: JSON.stringify(body),
       });
     },
 

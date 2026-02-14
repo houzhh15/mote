@@ -25,6 +25,7 @@ import (
 	"mote/internal/prompts"
 	"mote/internal/provider"
 	"mote/internal/provider/copilot"
+	"mote/internal/provider/minimax"
 	"mote/internal/runner"
 	"mote/internal/skills"
 	"mote/internal/storage"
@@ -231,10 +232,6 @@ func (r *Router) RegisterRoutes(router *mux.Router) {
 	// Providers - Status and Recovery
 	v1.HandleFunc("/providers/status", r.HandleProviderStatus).Methods(http.MethodGet)
 	v1.HandleFunc("/providers/{name}/recover", r.HandleProviderRecover).Methods(http.MethodPost)
-
-	// Settings - Scenario Models
-	v1.HandleFunc("/settings/models", r.HandleGetScenarioModels).Methods(http.MethodGet)
-	v1.HandleFunc("/settings/models", r.HandleUpdateScenarioModels).Methods(http.MethodPut)
 
 	// MCP
 	v1.HandleFunc("/mcp/servers", r.HandleListMCPServers).Methods(http.MethodGet)
@@ -499,29 +496,14 @@ func (r *Router) HandleCreateSession(w http.ResponseWriter, req *http.Request) {
 	// Generate a new session ID
 	sessionID := generateSessionID()
 
-	// Determine scenario and default model
+	// Determine scenario
 	scenario := body.Scenario
 	if scenario == "" {
 		scenario = "chat"
 	}
 
-	// Get default model for the scenario
-	var model string
-	switch scenario {
-	case "chat":
-		model = viper.GetString("copilot.chat_model")
-	case "cron":
-		model = viper.GetString("cron.model")
-	case "channel":
-		model = viper.GetString("channels.model")
-	default:
-		model = viper.GetString("copilot.chat_model")
-	}
-
-	// Allow explicit model override
-	if body.Model != "" {
-		model = body.Model
-	}
+	// Use explicitly provided model (empty means session has no default model yet)
+	model := body.Model
 
 	// Insert session with scenario and model
 	_, err := r.db.Exec(`INSERT INTO sessions (id, scenario, model) VALUES (?, ?, ?)`, sessionID, scenario, model)
@@ -730,6 +712,10 @@ func (r *Router) HandleUpdateSessionModel(w http.ResponseWriter, req *http.Reque
 	if !modelValid && strings.HasPrefix(body.Model, "ollama:") {
 		modelValid = true
 	}
+	// Check MiniMax models (with "minimax:" prefix)
+	if !modelValid && strings.HasPrefix(body.Model, "minimax:") {
+		modelValid = true
+	}
 	// Check via multiPool if available
 	if !modelValid && r.multiPool != nil {
 		_, _, err := r.multiPool.GetProvider(body.Model)
@@ -864,6 +850,9 @@ func (r *Router) HandleReconfigureSession(w http.ResponseWriter, req *http.Reque
 			}
 		}
 		if !modelValid && strings.HasPrefix(*body.Model, "ollama:") {
+			modelValid = true
+		}
+		if !modelValid && strings.HasPrefix(*body.Model, "minimax:") {
 			modelValid = true
 		}
 		if !modelValid && r.multiPool != nil {
@@ -1030,85 +1019,6 @@ func (r *Router) HandleUpdateSession(w http.ResponseWriter, req *http.Request) {
 	handlers.SendJSON(w, http.StatusOK, session)
 }
 
-// HandleGetScenarioModels returns the default models for each scenario.
-func (r *Router) HandleGetScenarioModels(w http.ResponseWriter, req *http.Request) {
-	response := ScenarioModelsResponse{
-		Chat:    viper.GetString("copilot.chat_model"),
-		Cron:    viper.GetString("cron.model"),
-		Channel: viper.GetString("channels.model"),
-	}
-
-	// Apply defaults if empty
-	if response.Chat == "" {
-		response.Chat = viper.GetString("copilot.model")
-	}
-	if response.Chat == "" {
-		response.Chat = copilot.DefaultModel
-	}
-	if response.Cron == "" {
-		response.Cron = "gpt-4o-mini"
-	}
-	if response.Channel == "" {
-		response.Channel = "gpt-4o-mini"
-	}
-
-	handlers.SendJSON(w, http.StatusOK, response)
-}
-
-// HandleUpdateScenarioModels updates the default models for scenarios.
-func (r *Router) HandleUpdateScenarioModels(w http.ResponseWriter, req *http.Request) {
-	var body UpdateScenarioModelsRequest
-	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
-		handlers.SendError(w, http.StatusBadRequest, handlers.ErrCodeInvalidRequest, "Invalid request body")
-		return
-	}
-
-	// Validate models
-	validModels := copilot.ListModels()
-	validateModel := func(model string) bool {
-		if model == "" {
-			return true // Empty means no change
-		}
-		for _, m := range validModels {
-			if m == model {
-				return true
-			}
-		}
-		return false
-	}
-
-	if !validateModel(body.Chat) || !validateModel(body.Cron) || !validateModel(body.Channel) {
-		handlers.SendError(w, http.StatusBadRequest, handlers.ErrCodeInvalidRequest, "Invalid model name")
-		return
-	}
-
-	// Update viper config and persist to file
-	if body.Chat != "" {
-		viper.Set("copilot.chat_model", body.Chat)
-	}
-	if body.Cron != "" {
-		viper.Set("cron.model", body.Cron)
-	}
-	if body.Channel != "" {
-		viper.Set("channels.model", body.Channel)
-	}
-
-	// Persist config changes to file
-	if err := viper.WriteConfig(); err != nil {
-		log.Warn().Err(err).Msg("Failed to persist scenario models config")
-		// Continue anyway - runtime config is updated
-	}
-
-	// Return updated values
-	response := ScenarioModelsResponse{
-		Chat:    viper.GetString("copilot.chat_model"),
-		Cron:    viper.GetString("cron.model"),
-		Channel: viper.GetString("channels.model"),
-	}
-
-	handlers.SendJSON(w, http.StatusOK, response)
-}
-
 // HandleGetConfig returns the current configuration.
 func (r *Router) HandleGetConfig(w http.ResponseWriter, req *http.Request) {
 	// Get values with defaults
@@ -1138,6 +1048,12 @@ func (r *Router) HandleGetConfig(w http.ResponseWriter, req *http.Request) {
 			Endpoint: viper.GetString("ollama.endpoint"),
 			Model:    viper.GetString("ollama.model"),
 		},
+		Minimax: MinimaxConfigView{
+			APIKey:    maskAPIKey(viper.GetString("minimax.api_key")),
+			Endpoint:  viper.GetString("minimax.endpoint"),
+			Model:     viper.GetString("minimax.model"),
+			MaxTokens: viper.GetInt("minimax.max_tokens"),
+		},
 		Memory: MemoryConfigView{
 			Enabled: r.memory != nil,
 		},
@@ -1163,7 +1079,7 @@ func (r *Router) HandleUpdateConfig(w http.ResponseWriter, req *http.Request) {
 
 	// Update provider configuration
 	if body.Provider != nil {
-		validProviders := []string{"copilot", "copilot-acp", "ollama"}
+		validProviders := []string{"copilot", "copilot-acp", "ollama", "minimax"}
 
 		// Validate and update default provider
 		if body.Provider.Default != "" {
@@ -1175,7 +1091,7 @@ func (r *Router) HandleUpdateConfig(w http.ResponseWriter, req *http.Request) {
 				}
 			}
 			if !valid {
-				handlers.SendError(w, http.StatusBadRequest, handlers.ErrCodeInvalidRequest, "Invalid provider type. Supported: copilot, copilot-acp, ollama")
+				handlers.SendError(w, http.StatusBadRequest, handlers.ErrCodeInvalidRequest, "Invalid provider type. Supported: copilot, copilot-acp, ollama, minimax")
 				return
 			}
 			viper.Set("provider.default", body.Provider.Default)
@@ -1210,6 +1126,22 @@ func (r *Router) HandleUpdateConfig(w http.ResponseWriter, req *http.Request) {
 		}
 	}
 
+	// Update MiniMax configuration
+	if body.Minimax != nil {
+		if body.Minimax.APIKey != "" {
+			viper.Set("minimax.api_key", body.Minimax.APIKey)
+		}
+		if body.Minimax.Endpoint != "" {
+			viper.Set("minimax.endpoint", body.Minimax.Endpoint)
+		}
+		if body.Minimax.Model != "" {
+			viper.Set("minimax.model", body.Minimax.Model)
+		}
+		if body.Minimax.MaxTokens > 0 {
+			viper.Set("minimax.max_tokens", body.Minimax.MaxTokens)
+		}
+	}
+
 	// Persist config changes to file
 	if err := viper.WriteConfig(); err != nil {
 		log.Warn().Err(err).Msg("Failed to persist config")
@@ -1241,6 +1173,12 @@ func (r *Router) HandleUpdateConfig(w http.ResponseWriter, req *http.Request) {
 			Endpoint: viper.GetString("ollama.endpoint"),
 			Model:    viper.GetString("ollama.model"),
 		},
+		Minimax: MinimaxConfigView{
+			APIKey:    maskAPIKey(viper.GetString("minimax.api_key")),
+			Endpoint:  viper.GetString("minimax.endpoint"),
+			Model:     viper.GetString("minimax.model"),
+			MaxTokens: viper.GetInt("minimax.max_tokens"),
+		},
 		Memory: MemoryConfigView{
 			Enabled: r.memory != nil,
 		},
@@ -1259,6 +1197,17 @@ func (r *Router) HandleUpdateConfig(w http.ResponseWriter, req *http.Request) {
 // HandleReloadConfig reloads configuration from disk.
 func (r *Router) HandleReloadConfig(w http.ResponseWriter, req *http.Request) {
 	handlers.SendError(w, http.StatusMethodNotAllowed, "CONFIG_RELOAD_DISABLED", "Configuration reload is not enabled")
+}
+
+// maskAPIKey masks an API key for safe display, showing only the last 4 chars.
+func maskAPIKey(key string) string {
+	if key == "" {
+		return ""
+	}
+	if len(key) <= 4 {
+		return "****"
+	}
+	return "****" + key[len(key)-4:]
 }
 
 // ModelsResponse represents the response for GET /api/v1/models.
@@ -1297,43 +1246,22 @@ func (r *Router) HandleListModels(w http.ResponseWriter, req *http.Request) {
 
 	// If MultiProviderPool is available, use it; otherwise fallback to copilot only
 	if r.multiPool != nil && r.multiPool.Count() > 0 {
-		// Get all providers with health check
+		// Build provider status without Ping — providers are assumed available
+		// if they are registered in the pool. Users can manually check status
+		// via POST /api/v1/providers/{name}/recover.
 		for _, providerName := range r.multiPool.ListProviders() {
 			modelCount := r.multiPool.ModelCountByProvider(providerName)
-
-			// Perform health check to determine availability
-			available := false
-			var lastError string
-			if prov := r.multiPool.GetAnyProvider(providerName); prov != nil {
-				if hc, ok := prov.(provider.HealthCheckable); ok {
-					ctx, cancel := context.WithTimeout(req.Context(), 5*time.Second)
-					if err := hc.Ping(ctx); err == nil {
-						available = true
-					} else {
-						if pe, ok := err.(*provider.ProviderError); ok {
-							lastError = pe.Message
-						} else {
-							lastError = err.Error()
-						}
-					}
-					cancel()
-				} else {
-					// Provider doesn't support health check, assume available
-					available = true
-				}
-			}
 
 			providerStatuses = append(providerStatuses, ProviderStatus{
 				Name:       providerName,
 				Enabled:    true,
-				Available:  available,
+				Available:  true,
 				ModelCount: modelCount,
-				Error:      lastError,
 			})
 		}
 
 		// Build model list from all providers
-		if providerFilter == "" || providerFilter == "copilot" {
+		if (providerFilter == "" || providerFilter == "copilot") && r.multiPool.HasProvider("copilot") {
 			// Add Copilot models
 			for id, info := range copilot.SupportedModels {
 				if freeOnly && !info.IsFree {
@@ -1360,7 +1288,7 @@ func (r *Router) HandleListModels(w http.ResponseWriter, req *http.Request) {
 		}
 
 		// Add Copilot ACP models (premium models via Copilot CLI)
-		if providerFilter == "" || providerFilter == "copilot-acp" || providerFilter == "copilot" {
+		if (providerFilter == "" || providerFilter == "copilot-acp" || providerFilter == "copilot") && r.multiPool.HasProvider("copilot-acp") {
 			for id, info := range copilot.ACPSupportedModels {
 				if freeOnly {
 					continue // All ACP models are premium
@@ -1404,6 +1332,43 @@ func (r *Router) HandleListModels(w http.ResponseWriter, req *http.Request) {
 					SupportsVision: false, // TODO: Detect from Ollama model metadata
 					SupportsTools:  false, // TODO: Detect from Ollama model metadata
 					Description:    "Local Ollama model",
+					Available:      modelInfo.Available,
+				})
+			}
+		}
+
+		// Add MiniMax models if provider is available and not filtered out
+		if (providerFilter == "" || providerFilter == "minimax") && r.multiPool.HasProvider("minimax") {
+			for _, modelInfo := range r.multiPool.ListAllModels() {
+				if modelInfo.Provider != "minimax" {
+					continue
+				}
+				// Use metadata if available, otherwise use defaults
+				meta, hasMeta := minimax.ModelMetadata[modelInfo.OriginalID]
+				displayName := modelInfo.OriginalID
+				contextWindow := 204800
+				maxOutput := 16384
+				supportsTools := true
+				description := "MiniMax cloud model"
+				if hasMeta {
+					displayName = meta.DisplayName
+					contextWindow = meta.ContextWindow
+					maxOutput = meta.MaxOutput
+					supportsTools = meta.SupportsTools
+					description = meta.Description
+				}
+				models = append(models, ModelView{
+					ID:             modelInfo.ID,
+					Provider:       "minimax",
+					DisplayName:    displayName,
+					Family:         "minimax",
+					IsFree:         false,
+					Multiplier:     0,
+					ContextWindow:  contextWindow,
+					MaxOutput:      maxOutput,
+					SupportsVision: false,
+					SupportsTools:  supportsTools,
+					Description:    description,
 					Available:      modelInfo.Available,
 				})
 			}
@@ -1458,20 +1423,40 @@ func (r *Router) HandleListModels(w http.ResponseWriter, req *http.Request) {
 	}
 
 	// Determine provider-aware default model.
-	// If only copilot-acp is available, the default should be an ACP model;
-	// returning an API-only model (e.g., grok-code-fast-1) would cause CLI errors.
+	// The default must be a model from an actually enabled provider.
 	defaultModel := copilot.DefaultModel
 	if r.multiPool != nil {
 		hasAPI := r.multiPool.HasProvider("copilot")
 		hasACP := r.multiPool.HasProvider("copilot-acp")
-		if hasACP && !hasAPI {
+		hasMinimax := r.multiPool.HasProvider("minimax")
+		hasOllama := r.multiPool.HasProvider("ollama")
+
+		if hasAPI {
+			defaultModel = copilot.DefaultModel
+		} else if hasACP {
 			defaultModel = copilot.ACPDefaultModel
+		} else if hasMinimax {
+			defaultModel = "minimax:" + minimax.DefaultModel
+		} else if hasOllama {
+			// Use first available ollama model
+			for _, m := range models {
+				if m.Provider == "ollama" {
+					defaultModel = m.ID
+					break
+				}
+			}
 		}
-		// Also correct current if it's incompatible with available providers
-		if hasACP && !hasAPI && !copilot.IsACPModel(current) {
-			current = copilot.ACPDefaultModel
-		} else if hasAPI && !hasACP && !copilot.IsAPIModel(current) {
-			current = copilot.DefaultModel
+
+		// Correct current if it refers to a model from an unavailable provider
+		currentValid := false
+		for _, m := range models {
+			if m.ID == current {
+				currentValid = true
+				break
+			}
+		}
+		if !currentValid {
+			current = defaultModel
 		}
 	}
 
@@ -1582,6 +1567,11 @@ func randomString(n int) string {
 
 // HandleProviderStatus returns the status of all providers.
 // GET /api/v1/providers/status
+//
+// This endpoint does NOT trigger Ping or network requests. It returns cached
+// state for providers that have it (copilot, copilot-acp) and assumes
+// "connected" for providers without cached state (minimax, ollama).
+// Use POST /api/v1/providers/{name}/recover to manually check connectivity.
 func (r *Router) HandleProviderStatus(w http.ResponseWriter, req *http.Request) {
 	var states []provider.ProviderState
 
@@ -1597,10 +1587,23 @@ func (r *Router) HandleProviderStatus(w http.ResponseWriter, req *http.Request) 
 				continue
 			}
 
-			// Check if provider supports health check
+			// For copilot/copilot-acp: GetState() only reads cached state (no network).
+			// For minimax/ollama: GetState() would trigger Ping, so we skip it
+			// and return a default "connected" state.
 			if hc, ok := prov.(provider.HealthCheckable); ok {
-				state := hc.GetState()
-				states = append(states, state)
+				switch providerName {
+				case "copilot", "copilot-acp":
+					// Safe — no network calls, just reads in-memory token/process state
+					state := hc.GetState()
+					states = append(states, state)
+				default:
+					// minimax, ollama: don't trigger Ping, assume connected
+					states = append(states, provider.ProviderState{
+						Name:   providerName,
+						Status: provider.StatusConnected,
+						Models: prov.Models(),
+					})
+				}
 			} else {
 				// Provider doesn't support health check, assume connected
 				states = append(states, provider.ProviderState{

@@ -234,3 +234,84 @@ func TestCompactor_chunkMessages(t *testing.T) {
 		t.Error("expected at least one chunk")
 	}
 }
+
+func TestAdjustKeepBoundary(t *testing.T) {
+	tests := []struct {
+		name     string
+		msgs     []provider.Message
+		splitIdx int
+		wantIdx  int
+	}{
+		{
+			name: "no adjustment needed - starts with user",
+			msgs: []provider.Message{
+				{Role: "user", Content: "old"},
+				{Role: "assistant", Content: "old reply"},
+				{Role: "user", Content: "new"},
+				{Role: "assistant", Content: "new reply"},
+			},
+			splitIdx: 2,
+			wantIdx:  2,
+		},
+		{
+			name: "adjust - starts with tool result",
+			msgs: []provider.Message{
+				{Role: "user", Content: "do something"},
+				{Role: "assistant", Content: "", ToolCalls: []provider.ToolCall{{ID: "call_1", Name: "test"}}},
+				{Role: "tool", Content: "result1", ToolCallID: "call_1"},
+				{Role: "user", Content: "next question"},
+				{Role: "assistant", Content: "answer"},
+			},
+			splitIdx: 2, // Would start at tool result
+			wantIdx:  1, // Should include the assistant tool_call
+		},
+		{
+			name: "adjust - multiple tool results",
+			msgs: []provider.Message{
+				{Role: "user", Content: "do two things"},
+				{Role: "assistant", Content: "", ToolCalls: []provider.ToolCall{{ID: "call_1"}, {ID: "call_2"}}},
+				{Role: "tool", Content: "result1", ToolCallID: "call_1"},
+				{Role: "tool", Content: "result2", ToolCallID: "call_2"},
+				{Role: "user", Content: "thanks"},
+			},
+			splitIdx: 2, // Would start at first tool result
+			wantIdx:  1, // Should include the assistant tool_call
+		},
+		{
+			name: "adjust - split at second tool result",
+			msgs: []provider.Message{
+				{Role: "user", Content: "do two things"},
+				{Role: "assistant", Content: "", ToolCalls: []provider.ToolCall{{ID: "call_1"}, {ID: "call_2"}}},
+				{Role: "tool", Content: "result1", ToolCallID: "call_1"},
+				{Role: "tool", Content: "result2", ToolCallID: "call_2"},
+				{Role: "user", Content: "thanks"},
+			},
+			splitIdx: 3, // Would start at second tool result
+			wantIdx:  1, // Should include the assistant tool_call
+		},
+		{
+			name:     "boundary at 0",
+			msgs:     []provider.Message{{Role: "tool", Content: "r"}},
+			splitIdx: 0,
+			wantIdx:  0,
+		},
+		{
+			name: "boundary at end",
+			msgs: []provider.Message{
+				{Role: "user", Content: "hi"},
+				{Role: "assistant", Content: "hello"},
+			},
+			splitIdx: 2,
+			wantIdx:  2,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := adjustKeepBoundary(tt.msgs, tt.splitIdx)
+			if got != tt.wantIdx {
+				t.Errorf("adjustKeepBoundary() = %d, want %d", got, tt.wantIdx)
+			}
+		})
+	}
+}

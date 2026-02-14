@@ -17,7 +17,7 @@ func NewProviderCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "provider",
 		Short: "Manage LLM providers",
-		Long:  "Configure and manage LLM providers (copilot, ollama)",
+		Long:  "Configure and manage LLM providers (copilot, ollama, minimax)",
 	}
 
 	cmd.AddCommand(newProviderListCmd())
@@ -58,6 +58,7 @@ func newProviderListCmd() *cobra.Command {
 				{"copilot-acp", "GitHub Copilot ACP (CLI mode, recommended)"},
 				{"copilot", "GitHub Copilot API (REST, temporarily disabled)"},
 				{"ollama", "Local Ollama server"},
+				{"minimax", "MiniMax AI (cloud)"},
 			}
 
 			fmt.Println("Available providers:")
@@ -163,6 +164,13 @@ func newProviderUseCmd() *cobra.Command {
 			case "ollama":
 				fmt.Printf("\nNote: Make sure Ollama is running at %s\n", cfg.Ollama.Endpoint)
 				fmt.Println("You can configure Ollama settings with 'mote config set ollama.*'")
+			case "minimax":
+				if cfg.Minimax.APIKey == "" {
+					fmt.Println("\nWarning: MiniMax API key not configured.")
+					fmt.Println("Set it with: mote config set minimax.api_key <your-key>")
+				} else {
+					fmt.Println("\nMiniMax provider configured.")
+				}
 			}
 
 			return nil
@@ -200,10 +208,7 @@ func newProviderStatusCmd() *cobra.Command {
 				} else {
 					fmt.Println("  Token: not configured")
 				}
-				model := cfg.Copilot.ChatModel
-				if model == "" {
-					model = cfg.Copilot.Model
-				}
+				model := cfg.Copilot.Model
 				if model == "" {
 					model = "(default)"
 				}
@@ -212,10 +217,7 @@ func newProviderStatusCmd() *cobra.Command {
 
 			case "copilot-acp":
 				fmt.Println("Copilot ACP Configuration (CLI mode):")
-				model := cfg.Copilot.ChatModel
-				if model == "" {
-					model = cfg.Copilot.Model
-				}
+				model := cfg.Copilot.Model
 				if model == "" {
 					model = "(default)"
 				}
@@ -236,6 +238,25 @@ func newProviderStatusCmd() *cobra.Command {
 				fmt.Printf("  Model: %s\n", model)
 				fmt.Printf("  Timeout: %s\n", cfg.Ollama.Timeout)
 				fmt.Printf("  Keep Alive: %s\n", cfg.Ollama.KeepAlive)
+
+			case "minimax":
+				fmt.Println("MiniMax Configuration:")
+				endpoint := cfg.Minimax.Endpoint
+				if endpoint == "" {
+					endpoint = "https://api.minimaxi.com/v1"
+				}
+				model := cfg.Minimax.Model
+				if model == "" {
+					model = "MiniMax-M2.5"
+				}
+				if cfg.Minimax.APIKey != "" {
+					fmt.Println("  API Key: ****configured****")
+				} else {
+					fmt.Println("  API Key: not configured")
+				}
+				fmt.Printf("  Endpoint: %s\n", endpoint)
+				fmt.Printf("  Model: %s\n", model)
+				fmt.Printf("  Max Tokens: %d\n", cfg.Minimax.MaxTokens)
 			}
 
 			return nil
@@ -248,7 +269,7 @@ func newProviderEnableCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "enable <provider>",
 		Short: "Enable a provider",
-		Long:  "Enable a provider to be included in the model list (copilot, copilot-acp, or ollama)",
+		Long:  "Enable a provider to be included in the model list (copilot, copilot-acp, ollama, or minimax)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			providerName := strings.ToLower(args[0])
@@ -258,10 +279,11 @@ func newProviderEnableCmd() *cobra.Command {
 				"copilot":     true,
 				"copilot-acp": true,
 				"ollama":      true,
+				"minimax":     true,
 			}
 
 			if !validProviders[providerName] {
-				return fmt.Errorf("unknown provider: %s (valid: copilot, copilot-acp, ollama)", providerName)
+				return fmt.Errorf("unknown provider: %s (valid: copilot, copilot-acp, ollama, minimax)", providerName)
 			}
 
 			// Load current config
@@ -303,7 +325,7 @@ func newProviderDisableCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "disable <provider>",
 		Short: "Disable a provider",
-		Long:  "Disable a provider from the model list (copilot, copilot-acp, or ollama)",
+		Long:  "Disable a provider from the model list (copilot, copilot-acp, ollama, or minimax)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			providerName := strings.ToLower(args[0])
@@ -313,10 +335,11 @@ func newProviderDisableCmd() *cobra.Command {
 				"copilot":     true,
 				"copilot-acp": true,
 				"ollama":      true,
+				"minimax":     true,
 			}
 
 			if !validProviders[providerName] {
-				return fmt.Errorf("unknown provider: %s (valid: copilot, copilot-acp, ollama)", providerName)
+				return fmt.Errorf("unknown provider: %s (valid: copilot, copilot-acp, ollama, minimax)", providerName)
 			}
 
 			// Load current config

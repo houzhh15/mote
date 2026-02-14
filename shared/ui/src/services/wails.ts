@@ -571,16 +571,6 @@ export function createWailsAdapter(app: WailsApp): APIAdapter {
       return callAPI<ReconfigureSessionResponse>('POST', `/api/v1/sessions/${sessionId}/reconfigure`, config);
     },
 
-    getScenarioModels: async (): Promise<{ chat: string; cron: string; channel: string }> => {
-      return callAPI('GET', '/api/v1/settings/models');
-    },
-
-    setScenarioModel: async (scenario: string, modelId: string): Promise<void> => {
-      const body: Record<string, string> = {};
-      body[scenario] = modelId;
-      await callAPI('PUT', '/api/v1/settings/models', body);
-    },
-
     // ============== Auth Service (GUI only) ==============
     getAuthStatus: async (): Promise<AuthStatus> => {
       const status = await app.GetAuthStatus();

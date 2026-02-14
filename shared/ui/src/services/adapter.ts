@@ -19,7 +19,6 @@ import type {
   ChannelStatus,
   ChannelConfig,
   ModelsResponse,
-  ScenarioModels,
   Skill,
   Workspace,
   WorkspaceFile,
@@ -127,8 +126,6 @@ export interface APIAdapter {
   setCurrentModel(modelId: string): Promise<void>;
   setSessionModel?(sessionId: string, modelId: string): Promise<void>;
   setSessionSkills?(sessionId: string, skillIds: string[]): Promise<void>;
-  getScenarioModels?(): Promise<ScenarioModels>;
-  setScenarioModel?(scenario: string, modelId: string): Promise<void>;
 
   /**
    * Atomically reconfigure a session's model, workspace, and/or skills.

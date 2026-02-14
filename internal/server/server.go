@@ -31,6 +31,7 @@ import (
 	"mote/internal/prompts"
 	"mote/internal/provider"
 	"mote/internal/provider/copilot"
+	"mote/internal/provider/minimax"
 	"mote/internal/provider/ollama"
 	"mote/internal/runner"
 	"mote/internal/scheduler"
@@ -265,6 +266,32 @@ func (s *Server) run() {
 					Int("models", len(acpModels)).
 					Msg("Copilot ACP provider initialized (Copilot CLI, premium models)")
 			}
+
+		case "minimax":
+			// Initialize MiniMax provider (cloud API, OpenAI-compatible)
+			apiKey := s.cfg.Minimax.APIKey
+			if apiKey == "" {
+				s.logger.Warn().Msg("MiniMax API key not configured, skipping MiniMax provider")
+				continue
+			}
+
+			mmMaxTokens := s.cfg.Minimax.MaxTokens
+			if mmMaxTokens <= 0 {
+				mmMaxTokens = 4096
+			}
+
+			minimaxFactory := minimax.Factory(apiKey, mmMaxTokens)
+			minimaxPool := provider.NewPool(minimaxFactory)
+			minimaxModels := minimax.ListModels()
+
+			if err := multiPool.AddProvider("minimax", minimaxPool, minimaxModels); err != nil {
+				s.logger.Warn().Err(err).Msg("Failed to add MiniMax provider")
+			} else {
+				s.logger.Info().
+					Str("provider", "minimax").
+					Int("models", len(minimaxModels)).
+					Msg("MiniMax provider initialized")
+			}
 		}
 	}
 
@@ -416,6 +443,9 @@ func (s *Server) run() {
 	agentRunner.SetSystemPrompt(systemPromptBuilder)
 
 	// Initialize compactor
+	// The compactor's default provider is used as a fallback only. At runtime,
+	// CompactWithFallback receives the session's active provider so that
+	// compaction uses the same provider/model as the current conversation.
 	compactorConfig := compaction.DefaultConfig()
 	compactor := compaction.NewCompactor(compactorConfig, defaultProvider)
 	agentRunner.SetCompactor(compactor)
@@ -668,6 +698,10 @@ func (s *Server) ReloadProviders() error {
 			if err := s.reloadCopilotACPProvider(); err != nil {
 				s.logger.Warn().Err(err).Msg("Failed to reload Copilot ACP provider")
 			}
+		case "minimax":
+			if err := s.reloadMinimaxProvider(); err != nil {
+				s.logger.Warn().Err(err).Msg("Failed to reload MiniMax provider")
+			}
 		}
 	}
 
@@ -776,6 +810,37 @@ func (s *Server) reloadCopilotACPProvider() error {
 		Str("provider", "copilot-acp").
 		Int("models", len(acpModels)).
 		Msg("Copilot ACP provider reloaded")
+
+	return nil
+}
+
+// reloadMinimaxProvider reinitializes the MiniMax provider.
+func (s *Server) reloadMinimaxProvider() error {
+	apiKey := s.cfg.Minimax.APIKey
+	if apiKey == "" {
+		return fmt.Errorf("MiniMax API key not configured")
+	}
+
+	mmMaxTokens := s.cfg.Minimax.MaxTokens
+	if mmMaxTokens <= 0 {
+		mmMaxTokens = 4096
+	}
+
+	minimaxFactory := minimax.Factory(apiKey, mmMaxTokens)
+	minimaxPool := provider.NewPool(minimaxFactory)
+	minimaxModels := minimax.ListModels()
+
+	if err := s.multiPool.UpdateProvider("minimax", minimaxPool, minimaxModels); err != nil {
+		// If minimax doesn't exist yet, add it
+		if addErr := s.multiPool.AddProvider("minimax", minimaxPool, minimaxModels); addErr != nil {
+			return fmt.Errorf("failed to add MiniMax provider: %w", addErr)
+		}
+	}
+
+	s.logger.Info().
+		Str("provider", "minimax").
+		Int("models", len(minimaxModels)).
+		Msg("MiniMax provider reloaded")
 
 	return nil
 }

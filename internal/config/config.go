@@ -18,7 +18,8 @@ type Config struct {
 	Gateway  GatewayConfig  `mapstructure:"gateway" yaml:"gateway"`
 	Provider ProviderConfig `mapstructure:"provider" yaml:"provider"` // 新增: Provider 选择
 	Copilot  CopilotConfig  `mapstructure:"copilot" yaml:"copilot"`
-	Ollama   OllamaConfig   `mapstructure:"ollama" yaml:"ollama"` // 新增: Ollama 配置
+	Ollama   OllamaConfig   `mapstructure:"ollama" yaml:"ollama"`   // 新增: Ollama 配置
+	Minimax  MinimaxConfig  `mapstructure:"minimax" yaml:"minimax"` // 新增: MiniMax 配置
 	Log      LogConfig      `mapstructure:"log" yaml:"log"`
 	Storage  StorageConfig  `mapstructure:"storage" yaml:"storage"`
 	Memory   MemoryConfig   `mapstructure:"memory" yaml:"memory"`
@@ -51,8 +52,7 @@ type RateLimitConfig struct {
 //   - ACP 模式：使用付费模型 (claude-sonnet-4.5 等)，通过 Copilot CLI 认证，按 prompt 计费
 type CopilotConfig struct {
 	Token     string `mapstructure:"token" yaml:"token"`
-	Model     string `mapstructure:"model" yaml:"model"`           // 默认模型（向后兼容）
-	ChatModel string `mapstructure:"chat_model" yaml:"chat_model"` // Chat场景默认模型
+	Model     string `mapstructure:"model" yaml:"model"` // 默认模型（向后兼容）
 	MaxTokens int    `mapstructure:"max_tokens" yaml:"max_tokens"`
 
 	// ACP mode configuration
@@ -117,6 +117,15 @@ type OllamaConfig struct {
 	Model     string `mapstructure:"model" yaml:"model"`           // 默认模型
 	Timeout   string `mapstructure:"timeout" yaml:"timeout"`       // 超时时间
 	KeepAlive string `mapstructure:"keep_alive" yaml:"keep_alive"` // 模型保持时间
+}
+
+// MinimaxConfig MiniMax 云端 LLM 配置
+type MinimaxConfig struct {
+	APIKey    string `mapstructure:"api_key" yaml:"api_key"`       // API Key
+	Endpoint  string `mapstructure:"endpoint" yaml:"endpoint"`     // API 地址
+	Model     string `mapstructure:"model" yaml:"model"`           // 默认模型
+	MaxTokens int    `mapstructure:"max_tokens" yaml:"max_tokens"` // 最大输出 token 数
+	Timeout   string `mapstructure:"timeout" yaml:"timeout"`       // 超时时间
 }
 
 // LogConfig 日志配置

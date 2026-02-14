@@ -74,9 +74,47 @@ func (c *Compactor) NeedsCompaction(messages []provider.Message) bool {
 	return tokens > threshold
 }
 
+// resolveProvider returns the override provider if non-nil, otherwise falls back to c.provider.
+func (c *Compactor) resolveProvider(override provider.Provider) provider.Provider {
+	if override != nil {
+		return override
+	}
+	return c.provider
+}
+
+// adjustKeepBoundary adjusts a split index so that tool call pairs
+// (assistant with tool_calls → one or more tool result messages) are never split.
+// Given convMsgs and a proposed splitIdx (messages[:splitIdx] are compacted,
+// messages[splitIdx:] are kept), it moves splitIdx earlier if the first kept
+// message is a tool result whose corresponding assistant tool_call would be
+// compacted away.
+func adjustKeepBoundary(convMsgs []provider.Message, splitIdx int) int {
+	if splitIdx <= 0 || splitIdx >= len(convMsgs) {
+		return splitIdx
+	}
+
+	// Walk backward from splitIdx while the message at splitIdx is role=tool,
+	// meaning we'd be keeping orphan tool results.
+	for splitIdx > 0 && convMsgs[splitIdx].Role == provider.RoleTool {
+		splitIdx--
+	}
+
+	// Now splitIdx should point to either:
+	// - an assistant message (possibly with tool_calls) — include it in kept
+	// - a user message — safe boundary
+	// - 0 — can't go further back
+	return splitIdx
+}
+
 // Compact compresses the message history using LLM summarization.
-func (c *Compactor) Compact(ctx context.Context, messages []provider.Message) ([]provider.Message, error) {
-	if c.provider == nil {
+// An optional provider override can be passed; if nil, the default provider is used.
+func (c *Compactor) Compact(ctx context.Context, messages []provider.Message, provOverride ...provider.Provider) ([]provider.Message, error) {
+	var override provider.Provider
+	if len(provOverride) > 0 {
+		override = provOverride[0]
+	}
+	prov := c.resolveProvider(override)
+	if prov == nil {
 		return nil, ErrNoProvider
 	}
 
@@ -88,13 +126,14 @@ func (c *Compactor) Compact(ctx context.Context, messages []provider.Message) ([
 		return messages, ErrMessagesTooShort
 	}
 
-	// Keep recent messages
+	// Keep recent messages, adjusting boundary to avoid splitting tool call pairs
 	keepCount := c.config.KeepRecentCount
 	if keepCount > len(convMsgs) {
 		keepCount = len(convMsgs)
 	}
-	keptMsgs := convMsgs[len(convMsgs)-keepCount:]
-	toCompact := convMsgs[:len(convMsgs)-keepCount]
+	splitIdx := adjustKeepBoundary(convMsgs, len(convMsgs)-keepCount)
+	keptMsgs := convMsgs[splitIdx:]
+	toCompact := convMsgs[:splitIdx]
 
 	// Chunk messages for summarization
 	chunks := c.chunkMessages(toCompact)
@@ -102,7 +141,7 @@ func (c *Compactor) Compact(ctx context.Context, messages []provider.Message) ([
 	// Generate summary for each chunk
 	var summaries []string
 	for _, chunk := range chunks {
-		summary, err := c.summarizeChunk(ctx, chunk)
+		summary, err := c.summarizeChunk(ctx, chunk, prov)
 		if err != nil {
 			return nil, fmt.Errorf("%w: %v", ErrSummaryFailed, err)
 		}
@@ -127,8 +166,9 @@ func (c *Compactor) Compact(ctx context.Context, messages []provider.Message) ([
 }
 
 // CompactWithFallback attempts Compact and falls back to truncation on error.
-func (c *Compactor) CompactWithFallback(ctx context.Context, messages []provider.Message) []provider.Message {
-	result, err := c.Compact(ctx, messages)
+// An optional provider override can be passed to use the session's provider.
+func (c *Compactor) CompactWithFallback(ctx context.Context, messages []provider.Message, provOverride ...provider.Provider) []provider.Message {
+	result, err := c.Compact(ctx, messages, provOverride...)
 	if err == nil {
 		return result
 	}
@@ -179,7 +219,7 @@ func (c *Compactor) chunkMessages(messages []provider.Message) [][]provider.Mess
 }
 
 // summarizeChunk generates a summary for a chunk of messages.
-func (c *Compactor) summarizeChunk(ctx context.Context, chunk []provider.Message) (string, error) {
+func (c *Compactor) summarizeChunk(ctx context.Context, chunk []provider.Message, prov provider.Provider) (string, error) {
 	// Format messages for summarization
 	var sb strings.Builder
 	for _, msg := range chunk {
@@ -195,7 +235,7 @@ func (c *Compactor) summarizeChunk(ctx context.Context, chunk []provider.Message
 		MaxTokens: c.config.SummaryMaxTokens,
 	}
 
-	resp, err := c.provider.Chat(ctx, req)
+	resp, err := prov.Chat(ctx, req)
 	if err != nil {
 		return "", err
 	}
@@ -214,16 +254,21 @@ func (c *Compactor) truncate(messages []provider.Message) []provider.Message {
 		availableTokens = 1000
 	}
 
-	// Keep most recent messages that fit
-	var keptMsgs []provider.Message
+	// Keep most recent messages that fit (walk backward, accumulate tokens)
+	keptTokens := 0
+	splitIdx := len(convMsgs)
 	for i := len(convMsgs) - 1; i >= 0; i-- {
-		msg := convMsgs[i]
-		msgTokens := c.counter.EstimateMessages([]provider.Message{msg})
-		if c.counter.EstimateMessages(keptMsgs)+msgTokens > availableTokens {
+		msgTokens := c.counter.EstimateMessages([]provider.Message{convMsgs[i]})
+		if keptTokens+msgTokens > availableTokens {
 			break
 		}
-		keptMsgs = append([]provider.Message{msg}, keptMsgs...)
+		keptTokens += msgTokens
+		splitIdx = i
 	}
+
+	// Adjust boundary to avoid splitting tool call pairs
+	splitIdx = adjustKeepBoundary(convMsgs, splitIdx)
+	keptMsgs := convMsgs[splitIdx:]
 
 	result := make([]provider.Message, 0, len(systemMsgs)+len(keptMsgs))
 	result = append(result, systemMsgs...)
@@ -242,19 +287,26 @@ func (c *Compactor) SetMemoryIndex(m *memory.MemoryIndex) {
 }
 
 // CompactWithFlush extracts key info and saves to memory before compacting.
-func (c *Compactor) CompactWithFlush(ctx context.Context, messages []provider.Message) ([]provider.Message, error) {
+// An optional provider override can be passed to use the session's provider.
+func (c *Compactor) CompactWithFlush(ctx context.Context, messages []provider.Message, provOverride ...provider.Provider) ([]provider.Message, error) {
+	var override provider.Provider
+	if len(provOverride) > 0 {
+		override = provOverride[0]
+	}
+	prov := c.resolveProvider(override)
+
 	// First, flush important info to memory if configured
 	if c.memoryFlusher != nil && c.config.FlushOnCompact {
-		_ = c.flushToMemory(ctx, messages) // Ignore error - compaction should still proceed
+		_ = c.flushToMemory(ctx, messages, prov) // Ignore error - compaction should still proceed
 	}
 
 	// Then do normal compaction
-	return c.Compact(ctx, messages)
+	return c.Compact(ctx, messages, prov)
 }
 
 // flushToMemory extracts key information and saves it to the daily log.
-func (c *Compactor) flushToMemory(ctx context.Context, messages []provider.Message) error {
-	if c.provider == nil {
+func (c *Compactor) flushToMemory(ctx context.Context, messages []provider.Message, prov provider.Provider) error {
+	if prov == nil {
 		return nil
 	}
 
@@ -279,7 +331,7 @@ func (c *Compactor) flushToMemory(ctx context.Context, messages []provider.Messa
 		MaxTokens: c.config.SummaryMaxTokens,
 	}
 
-	resp, err := c.provider.Chat(ctx, req)
+	resp, err := prov.Chat(ctx, req)
 	if err != nil {
 		return fmt.Errorf("extract key info: %w", err)
 	}

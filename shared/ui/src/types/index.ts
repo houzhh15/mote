@@ -70,12 +70,6 @@ export interface ModelsResponse {
   providers?: ProviderStatus[];  // List of provider statuses
 }
 
-export interface ScenarioModels {
-  chat: string;
-  cron: string;
-  channel: string;
-}
-
 export interface Session {
   id: string;
   title?: string;  // May be derived from preview
@@ -165,12 +159,18 @@ export interface Config {
     port?: number;
   };
   provider?: {
-    default?: string;  // 'copilot' | 'ollama'
-    enabled?: string[];  // List of enabled providers: ['copilot', 'ollama']
+    default?: string;  // 'copilot' | 'ollama' | 'minimax'
+    enabled?: string[];  // List of enabled providers: ['copilot', 'ollama', 'minimax']
   };
   ollama?: {
     endpoint?: string;  // Ollama API endpoint (default: http://localhost:11434)
     model?: string;     // Default Ollama model
+  };
+  minimax?: {
+    api_key?: string;    // MiniMax API key (masked)
+    endpoint?: string;   // MiniMax API endpoint (default: https://api.minimaxi.com/v1)
+    model?: string;      // Default MiniMax model
+    max_tokens?: number; // Max output tokens
   };
   memory?: {
     enabled?: boolean;
@@ -189,11 +189,17 @@ export interface Config {
 export interface UpdateConfigRequest {
   provider?: {
     default?: string;
-    enabled?: string[];  // List of enabled providers: ['copilot', 'ollama']
+    enabled?: string[];  // List of enabled providers: ['copilot', 'ollama', 'minimax']
   };
   ollama?: {
     endpoint?: string;
     model?: string;
+  };
+  minimax?: {
+    api_key?: string;
+    endpoint?: string;
+    model?: string;
+    max_tokens?: number;
   };
 }
 

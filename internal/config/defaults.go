@@ -59,13 +59,17 @@ func SetDefaults() {
 	// Copilot 配置
 	// NOTE: Default model must be compatible with provider.default (copilot-acp).
 	// ACP CLI does not support API-only models like grok-code-fast-1.
-	viper.SetDefault("copilot.model", "claude-sonnet-4.5")      // ACP 兼容的默认模型
-	viper.SetDefault("copilot.chat_model", "claude-sonnet-4.5") // Chat 场景默认模型
+	viper.SetDefault("copilot.model", "claude-sonnet-4.5") // ACP 兼容的默认模型
 	viper.SetDefault("copilot.max_tokens", 4096)
 
 	// Provider 配置
 	viper.SetDefault("provider.default", "copilot-acp")
 	viper.SetDefault("provider.enabled", []string{"copilot-acp"}) // 默认仅启用 ACP (CLI 模式)，copilot REST API 已暂时禁用
+
+	// MiniMax 配置
+	viper.SetDefault("minimax.endpoint", "https://api.minimaxi.com/v1")
+	viper.SetDefault("minimax.model", "MiniMax-M2.5")
+	viper.SetDefault("minimax.max_tokens", 16384)
 
 	// Storage 配置
 	viper.SetDefault("storage.driver", "sqlite")

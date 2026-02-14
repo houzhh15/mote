@@ -31,10 +31,10 @@ import {
   ExclamationCircleOutlined,
   PoweroffOutlined,
   SettingOutlined,
-  RocketOutlined,
 } from '@ant-design/icons';
+import { MinimaxIcon } from '../components/MinimaxIcon';
 import { useAPI } from '../context/APIContext';
-import type { ServiceStatus, AuthStatus, DeviceCodeResponse, ChannelStatus, IMessageChannelConfig, AppleNotesChannelConfig, AppleRemindersChannelConfig, ChannelConfig, Model, ScenarioModels, ProviderStatus } from '../types';
+import type { ServiceStatus, AuthStatus, DeviceCodeResponse, ChannelStatus, IMessageChannelConfig, AppleNotesChannelConfig, AppleRemindersChannelConfig, ChannelConfig, Model, ProviderStatus } from '../types';
 import { ChannelCard, IMessageConfig, AppleNotesConfig, AppleRemindersConfig } from '../components/channels';
 import { OllamaIcon } from '../components/OllamaIcon';
 
@@ -67,10 +67,8 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
   const [currentConfig, setCurrentConfig] = useState<ChannelConfig | null>(null);
   const [channelLoading, setChannelLoading] = useState<Record<string, boolean>>({});
 
-  // Scenario models state
-  const [models, setModels] = useState<Model[]>([]);
-  const [scenarioModels, setScenarioModels] = useState<ScenarioModels>({ chat: '', cron: '', channel: '' });
-  const [scenarioLoading, setScenarioLoading] = useState<Record<string, boolean>>({});
+  // Models state (used only for loading, consumed by other pages via API refresh)
+  const [, setModels] = useState<Model[]>([]);
 
   // Provider state - multi-select support
   const [enabledProviders, setEnabledProviders] = useState<string[]>(['copilot']);
@@ -82,12 +80,16 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
   const [ollamaEndpoint, setOllamaEndpoint] = useState('http://localhost:11434');
   const [ollamaLoading, setOllamaLoading] = useState(false);
 
+  // MiniMax config state
+  const [minimaxApiKey, setMinimaxApiKey] = useState('');
+  const [minimaxEndpoint, setMinimaxEndpoint] = useState('https://api.minimaxi.com/v1');
+  const [minimaxLoading, setMinimaxLoading] = useState(false);
+
   // Check capabilities based on API availability
   const hasAuthSupport = Boolean(api.getAuthStatus);
   const hasRestartSupport = Boolean(api.restartService);
   const hasQuitSupport = Boolean(api.quit);
   const hasChannelSupport = Boolean(api.getChannels);
-  const hasScenarioModelsSupport = Boolean(api.getScenarioModels);
 
   useEffect(() => {
     loadServiceStatus();
@@ -99,16 +101,13 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
     if (hasChannelSupport) {
       loadChannels();
     }
-    if (hasScenarioModelsSupport) {
-      loadScenarioModels();
-    }
     
     return () => {
       if (pollingRef.current) {
         clearTimeout(pollingRef.current);
       }
     };
-  }, [hasAuthSupport, hasChannelSupport, hasScenarioModelsSupport]);
+  }, [hasAuthSupport, hasChannelSupport]);
 
   const loadConfig = async () => {
     try {
@@ -124,6 +123,13 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
       // Load Ollama config
       if (config.ollama?.endpoint) {
         setOllamaEndpoint(config.ollama.endpoint);
+      }
+      // Load MiniMax config
+      if (config.minimax?.api_key) {
+        setMinimaxApiKey(config.minimax.api_key);
+      }
+      if (config.minimax?.endpoint) {
+        setMinimaxEndpoint(config.minimax.endpoint);
       }
     } catch (error) {
       console.error('Failed to load config:', error);
@@ -146,6 +152,33 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
       message.error('保存失败');
     } finally {
       setOllamaLoading(false);
+    }
+  };
+
+  const handleMinimaxConfigSave = async () => {
+    setMinimaxLoading(true);
+    try {
+      const updatePayload: Record<string, string> = {};
+      // Only send api_key if it's a real new key (not masked)
+      if (minimaxApiKey && !minimaxApiKey.startsWith('****')) {
+        updatePayload.api_key = minimaxApiKey;
+      }
+      if (minimaxEndpoint) {
+        updatePayload.endpoint = minimaxEndpoint;
+      }
+      await api.updateConfig({
+        minimax: updatePayload as any,
+      });
+      message.success('MiniMax 配置已保存并生效');
+      // Reload models to refresh MiniMax models
+      loadModels();
+      // Reload config to get masked key
+      loadConfig();
+    } catch (error) {
+      console.error('Failed to update MiniMax config:', error);
+      message.error('保存失败');
+    } finally {
+      setMinimaxLoading(false);
     }
   };
 
@@ -228,12 +261,38 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
     }
   };
 
+  // Recover provider (manual Ping)
+  const [recoveringProvider, setRecoveringProvider] = useState<string | null>(null);
+  const handleRecoverProvider = useCallback(async (providerName: string) => {
+    setRecoveringProvider(providerName);
+    try {
+      const response = await fetch(`/api/v1/providers/${providerName}/recover`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'reconnect' }),
+      });
+      const result = await response.json();
+      if (result.success) {
+        message.success(`${providerName} 连接已恢复`);
+      } else {
+        message.error(result.message || `${providerName} 恢复失败`);
+      }
+      // Refresh models to get updated provider statuses
+      await loadModels();
+    } catch (err) {
+      message.error(`${providerName} 恢复失败: ${err}`);
+    } finally {
+      setRecoveringProvider(null);
+    }
+  }, []);
+
   // Helper: Get provider display label
   const getProviderLabel = (provider: string): string => {
     switch (provider) {
       case 'copilot': return 'Copilot API (免费模型)';
       case 'copilot-acp': return 'Copilot ACP (付费模型)';
       case 'ollama': return 'Ollama (本地)';
+      case 'minimax': return 'MiniMax (云端)';
       default: return provider;
     }
   };
@@ -243,120 +302,10 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
     if (provider === 'ollama') {
       return <OllamaIcon {...props} />;
     }
-    if (provider === 'copilot-acp') {
-      return <RocketOutlined {...props} />;
+    if (provider === 'minimax') {
+      return <MinimaxIcon size={14} {...props} />;
     }
     return <GithubOutlined {...props} />;
-  };
-
-  // Helper: Group models by provider for OptGroup display
-  const getModelsByProvider = useCallback(() => {
-    const grouped: Record<string, Model[]> = {};
-    models.forEach(model => {
-      const provider = model.provider || 'copilot';
-      if (!grouped[provider]) {
-        grouped[provider] = [];
-      }
-      grouped[provider].push(model);
-    });
-    return grouped;
-  }, [models]);
-
-  // Helper: Render model option with provider icon and tags
-  const renderModelOption = (model: Model) => (
-    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-      <Space>
-        {model.provider === 'ollama' ? <OllamaIcon size={12} style={{ opacity: 0.6 }} /> : <GithubOutlined style={{ fontSize: 12, opacity: 0.6 }} />}
-        <span>{model.display_name}</span>
-      </Space>
-      <Space size={4}>
-        {model.is_free && <Tag color="green" style={{ marginRight: 0 }}>免费</Tag>}
-        {model.available === false && <Tag color="red" style={{ marginRight: 0 }}>不可用</Tag>}
-      </Space>
-    </div>
-  );
-
-  // Helper: Render model selector with OptGroup by provider
-  const renderModelSelector = (
-    value: string,
-    onChange: (value: string) => void,
-    loading?: boolean
-  ) => {
-    const grouped = getModelsByProvider();
-    const providers = Object.keys(grouped);
-    
-    // If only one provider, don't use OptGroup
-    if (providers.length <= 1) {
-      return (
-        <Select
-          value={value}
-          onChange={onChange}
-          loading={loading}
-          style={{ width: 320 }}
-          placeholder="选择默认模型"
-        >
-          {models.map((model) => (
-            <Select.Option key={model.id} value={model.id} disabled={model.available === false}>
-              {renderModelOption(model)}
-            </Select.Option>
-          ))}
-        </Select>
-      );
-    }
-    
-    // Multiple providers: use OptGroup
-    return (
-      <Select
-        value={value}
-        onChange={onChange}
-        loading={loading}
-        style={{ width: 320 }}
-        placeholder="选择默认模型"
-      >
-        {providers.map(provider => (
-          <Select.OptGroup 
-            key={provider} 
-            label={
-              <Space>
-                {getProviderIcon(provider)}
-                {getProviderLabel(provider)}
-              </Space>
-            }
-          >
-            {grouped[provider].map(model => (
-              <Select.Option key={model.id} value={model.id} disabled={model.available === false}>
-                {renderModelOption(model)}
-              </Select.Option>
-            ))}
-          </Select.OptGroup>
-        ))}
-      </Select>
-    );
-  };
-
-  const loadScenarioModels = async () => {
-    if (!api.getScenarioModels) return;
-    try {
-      const scenarios = await api.getScenarioModels();
-      setScenarioModels(scenarios);
-    } catch (error) {
-      console.error('Failed to load scenario models:', error);
-    }
-  };
-
-  const handleScenarioModelChange = async (scenario: 'chat' | 'cron' | 'channel', modelId: string) => {
-    if (!api.setScenarioModel) return;
-    
-    setScenarioLoading(prev => ({ ...prev, [scenario]: true }));
-    try {
-      await api.setScenarioModel(scenario, modelId);
-      setScenarioModels(prev => ({ ...prev, [scenario]: modelId }));
-      message.success(`${scenario} 默认模型已更新`);
-    } catch (error) {
-      message.error('更新默认模型失败');
-    } finally {
-      setScenarioLoading(prev => ({ ...prev, [scenario]: false }));
-    }
   };
 
   const loadAuthStatus = async () => {
@@ -668,7 +617,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                   </Checkbox>
                   <Checkbox value="copilot-acp">
                     <Space>
-                      <RocketOutlined />
+                      <GithubOutlined />
                       Copilot ACP (付费模型)
                       {defaultProvider === 'copilot-acp' && <Tag color="blue" style={{ marginLeft: 4 }}>默认</Tag>}
                     </Space>
@@ -678,6 +627,13 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                       <OllamaIcon />
                       Ollama (本地)
                       {defaultProvider === 'ollama' && <Tag color="blue" style={{ marginLeft: 4 }}>默认</Tag>}
+                    </Space>
+                  </Checkbox>
+                  <Checkbox value="minimax">
+                    <Space>
+                      <MinimaxIcon size={14} />
+                      MiniMax (云端)
+                      {defaultProvider === 'minimax' && <Tag color="blue" style={{ marginLeft: 4 }}>默认</Tag>}
                     </Space>
                   </Checkbox>
                 </Space>
@@ -730,6 +686,16 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                       {status.error && (
                         <Text type="danger" style={{ fontSize: 12 }}>{status.error}</Text>
                       )}
+                      {!status.available && (
+                        <Button
+                          size="small"
+                          icon={<ReloadOutlined />}
+                          loading={recoveringProvider === status.name}
+                          onClick={() => handleRecoverProvider(status.name)}
+                        >
+                          重试连接
+                        </Button>
+                      )}
                     </Space>
                   </Card>
                 ))}
@@ -778,49 +744,48 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                 </div>
               </div>
             )}
+
+            {enabledProviders.includes('minimax') && (
+              <div>
+                <Alert
+                  type="info"
+                  message="MiniMax 需要配置 API Key，可在 platform.minimax.io 获取"
+                  showIcon
+                  style={{ marginBottom: 12 }}
+                />
+                <Space direction="vertical" style={{ width: '100%' }} size="small">
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <Text strong style={{ minWidth: 100 }}>API Key:</Text>
+                    <Input.Password
+                      value={minimaxApiKey}
+                      onChange={(e) => setMinimaxApiKey(e.target.value)}
+                      placeholder="请输入 MiniMax API Key"
+                      style={{ width: 300 }}
+                    />
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <Text strong style={{ minWidth: 100 }}>API 地址:</Text>
+                    <Input
+                      value={minimaxEndpoint}
+                      onChange={(e) => setMinimaxEndpoint(e.target.value)}
+                      placeholder="https://api.minimaxi.com/v1"
+                      style={{ width: 300 }}
+                    />
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'flex-start', paddingLeft: 108 }}>
+                    <Button 
+                      type="primary" 
+                      onClick={handleMinimaxConfigSave}
+                      loading={minimaxLoading}
+                    >
+                      保存
+                    </Button>
+                  </div>
+                </Space>
+              </div>
+            )}
           </Space>
         </Card>
-
-        {/* Scenario Default Models */}
-        {hasScenarioModelsSupport && (
-          <Card style={{ marginBottom: 24 }}>
-            <Title level={5}>
-              <SettingOutlined style={{ marginRight: 8 }} />
-              场景默认模型
-            </Title>
-            <Paragraph type="secondary">
-              为不同场景设置默认模型。新建会话时将自动使用对应场景的默认模型。
-              {enabledProviders.length > 1 && ' 模型已按 Provider 分组显示。'}
-            </Paragraph>
-            
-            <Descriptions column={1} bordered size="small">
-              <Descriptions.Item label="对话 (Chat)">
-                {renderModelSelector(
-                  scenarioModels.chat,
-                  (value) => handleScenarioModelChange('chat', value),
-                  scenarioLoading.chat
-                )}
-              </Descriptions.Item>
-              <Descriptions.Item label="定时任务 (Cron)">
-                {renderModelSelector(
-                  scenarioModels.cron,
-                  (value) => handleScenarioModelChange('cron', value),
-                  scenarioLoading.cron
-                )}
-              </Descriptions.Item>
-              <Descriptions.Item label="消息渠道 (Channel)">
-                {renderModelSelector(
-                  scenarioModels.channel,
-                  (value) => handleScenarioModelChange('channel', value),
-                  scenarioLoading.channel
-                )}
-              </Descriptions.Item>
-            </Descriptions>
-            <Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>
-              <Text type="secondary">提示：在会话中切换模型不会影响这里的默认设置。</Text>
-            </Paragraph>
-          </Card>
-        )}
 
         {/* GitHub Copilot Authentication - Show if auth API is supported */}
         {hasAuthSupport && (

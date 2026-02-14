@@ -5,6 +5,7 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo, memo } from 'react';
 import { Input, Button, Typography, Space, Spin, message, Select, Tooltip, Collapse, Modal, Tag, theme, Dropdown } from 'antd';
 import { SendOutlined, ClearOutlined, PlusOutlined, ToolOutlined, FolderOutlined, FolderOpenOutlined, LinkOutlined, DisconnectOutlined, GithubOutlined, StopOutlined, CopyOutlined, EditOutlined, DeleteOutlined, ThunderboltOutlined, PauseOutlined, PlayCircleOutlined, CloseCircleFilled } from '@ant-design/icons';
+import { MinimaxIcon } from '../components/MinimaxIcon';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useAPI } from '../context/APIContext';
@@ -321,6 +322,8 @@ const StreamingContent: React.FC<StreamingContentProps> = ({ sessionId, tokenCol
   // 状态存储在 ref 中
   const lastContentLengthRef = useRef(0);
   const lastToolCallsJsonRef = useRef('');
+  const thinkingFadeTimerRef = useRef<ReturnType<typeof setTimeout>>();
+  const thinkingDoneRef = useRef(false);
 
   // 使用 useLayoutEffect 确保 DOM 已准备好
   useEffect(() => {
@@ -329,8 +332,10 @@ const StreamingContent: React.FC<StreamingContentProps> = ({ sessionId, tokenCol
     const unsubscribe = chatManager.subscribe(sessionId, (state) => {
       // === 1. 更新内容文本（直接操作 DOM）===
       const newContent = state.currentContent || '';
-      if (contentRef.current && contentRef.current.textContent !== newContent) {
-        contentRef.current.textContent = newContent;
+      // 压缩连续空行（3个以上换行 → 2个），并去掉开头空行
+      const displayContent = newContent.replace(/^\n+/, '').replace(/\n{3,}/g, '\n\n');
+      if (contentRef.current && contentRef.current.textContent !== displayContent) {
+        contentRef.current.textContent = displayContent;
         
         // 内容增加时请求滚动
         if (newContent.length > lastContentLengthRef.current) {
@@ -353,11 +358,34 @@ const StreamingContent: React.FC<StreamingContentProps> = ({ sessionId, tokenCol
           thinkingSpan.textContent = thinkingText;
         }
         
-        // 显示条件：有 thinking 且没有内容和工具调用
         const hasThinking = !!(thinkingText && thinkingText.trim());
-        const hasContent = !!(state.currentContent && state.currentContent.trim());
-        const hasToolCalls = state.currentToolCalls && Object.keys(state.currentToolCalls).length > 0;
-        thinkingRef.current.style.display = (hasThinking && !hasContent && !hasToolCalls) ? 'block' : 'none';
+        
+        if (hasThinking && !state.thinkingDone) {
+          // Thinking 进行中：显示并重置状态
+          if (thinkingFadeTimerRef.current) {
+            clearTimeout(thinkingFadeTimerRef.current);
+            thinkingFadeTimerRef.current = undefined;
+          }
+          thinkingDoneRef.current = false;
+          thinkingRef.current.style.display = 'block';
+          thinkingRef.current.style.opacity = '1';
+          thinkingRef.current.style.transition = '';
+          // thinking 增长时也请求滚动
+          onScrollRequest?.();
+        } else if (hasThinking && state.thinkingDone && !thinkingDoneRef.current) {
+          // Thinking 刚结束：启动淡出动画
+          thinkingDoneRef.current = true;
+          thinkingRef.current.style.transition = 'opacity 0.6s ease-out';
+          thinkingRef.current.style.opacity = '0';
+          thinkingFadeTimerRef.current = setTimeout(() => {
+            if (thinkingRef.current) {
+              thinkingRef.current.style.display = 'none';
+            }
+          }, 600);
+        } else if (!hasThinking) {
+          // 没有 thinking 内容：直接隐藏
+          thinkingRef.current.style.display = 'none';
+        }
       }
       
       // === 3. 更新 Tool Calls（只有结构变化时才更新 DOM）===
@@ -426,7 +454,12 @@ const StreamingContent: React.FC<StreamingContentProps> = ({ sessionId, tokenCol
       }
     });
 
-    return unsubscribe;
+    return () => {
+      unsubscribe();
+      if (thinkingFadeTimerRef.current) {
+        clearTimeout(thinkingFadeTimerRef.current);
+      }
+    };
   }, [sessionId, chatManager, onScrollRequest, tokenColors]);
 
   return (
@@ -449,7 +482,7 @@ const StreamingContent: React.FC<StreamingContentProps> = ({ sessionId, tokenCol
           <img src={moteLogo} alt="AI" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
-          {/* Thinking content - 初始隐藏，由 JS 控制显示 */}
+          {/* Thinking content - 初始隐藏，由 JS 控制显示和淡出 */}
           <div
             ref={thinkingRef}
             style={{
@@ -462,10 +495,15 @@ const StreamingContent: React.FC<StreamingContentProps> = ({ sessionId, tokenCol
               fontStyle: 'italic',
               marginBottom: 8,
               borderLeft: `3px solid ${tokenColors.colorPrimary}`,
+              maxHeight: 200,
+              overflowY: 'auto',
             }}
           >
-            <Spin size="small" style={{ marginRight: 8 }} />
-            <span className="thinking-text"></span>
+            <div style={{ display: 'flex', alignItems: 'center', marginBottom: 4, fontWeight: 500, fontStyle: 'normal', fontSize: 11, opacity: 0.7 }}>
+              <Spin size="small" style={{ marginRight: 6 }} />
+              思考中...
+            </div>
+            <span className="thinking-text" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}></span>
           </div>
 
           {/* Tool Calls - 初始隐藏，由 JS 控制显示和内容 */}
@@ -786,51 +824,95 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
   // Pasted images state
   const [pastedImages, setPastedImages] = useState<ImageAttachment[]>([]);
   const lastScrollHeightRef = useRef(0);
+  // Auto-scroll state: true = 自动滚动到底部, false = 用户手动上滚，暂停自动滚动
+  const shouldAutoScrollRef = useRef(true);
+  // 标记程序化滚动，避免 scroll 事件反向影响 shouldAutoScrollRef
+  const programmaticScrollRef = useRef(false);
   // Truncation state - when response is cut off due to max_tokens
   const [truncated, setTruncated] = useState(false);
   const [truncatedInfo, setTruncatedInfo] = useState<{ reason: string; pendingToolCalls: number } | null>(null);
 
   // 检测用户是否在消息列表底部附近
-  const isNearBottom = () => {
+  const isNearBottom = useCallback(() => {
     const container = messagesContainerRef.current;
     if (!container) return true;
     
     const threshold = 150; // 150px 阈值
     const { scrollTop, scrollHeight, clientHeight } = container;
     return scrollHeight - scrollTop - clientHeight < threshold;
-  };
+  }, []);
 
-  // 智能滚动：只在用户位于底部或强制时才滚动
-  const scrollToBottom = (behavior: ScrollBehavior = 'auto', force = false) => {
-    if (!force && !isNearBottom()) {
+  // 监听用户滚动，更新 shouldAutoScrollRef
+  useEffect(() => {
+    const container = messagesContainerRef.current;
+    if (!container) return;
+
+    let scrollTimer: ReturnType<typeof setTimeout>;
+
+    const handleScroll = () => {
+      // 跳过程序化滚动触发的 scroll 事件
+      if (programmaticScrollRef.current) return;
+      // 用户滚动后，延迟检查位置来更新自动滚动状态
+      clearTimeout(scrollTimer);
+      scrollTimer = setTimeout(() => {
+        shouldAutoScrollRef.current = isNearBottom();
+      }, 50);
+    };
+
+    // 鼠标滚轮滚动 → 可能是用户主动操作
+    const handleWheel = (e: WheelEvent) => {
+      if (e.deltaY < 0) {
+        // 向上滚动 → 用户想看历史
+        shouldAutoScrollRef.current = false;
+      }
+    };
+
+    container.addEventListener('scroll', handleScroll, { passive: true });
+    container.addEventListener('wheel', handleWheel, { passive: true });
+    return () => {
+      container.removeEventListener('scroll', handleScroll);
+      container.removeEventListener('wheel', handleWheel);
+      clearTimeout(scrollTimer);
+    };
+  }, [isNearBottom]);
+
+  // 智能滚动：基于 shouldAutoScrollRef 状态决定是否滚动
+  const scrollToBottom = useCallback((_behavior: ScrollBehavior = 'auto', force = false) => {
+    if (!force && !shouldAutoScrollRef.current) {
       // 用户正在查看历史消息，不要自动滚动
       return;
     }
-    
-    messagesEndRef.current?.scrollIntoView({ behavior });
-  };
+    const container = messagesContainerRef.current;
+    if (container) {
+      // 标记程序化滚动，避免 handleScroll 中的 isNearBottom 检查干扰
+      programmaticScrollRef.current = true;
+      container.scrollTop = container.scrollHeight;
+      // 延迟重置标志，确保 scroll 事件已处理完
+      requestAnimationFrame(() => {
+        programmaticScrollRef.current = false;
+      });
+    }
+    shouldAutoScrollRef.current = true;
+  }, []);
 
-  // 注意：不需要监听滚动事件来存储状态，isNearBottom() 会实时检查
+  // 稳定的 onScrollRequest 回调引用，避免 StreamingContent useEffect 反复重执行
+  const handleScrollRequest = useCallback(() => {
+    scrollToBottom('auto', false);
+  }, [scrollToBottom]);
 
   // 消息变化时的智能滚动
   useEffect(() => {
     const container = messagesContainerRef.current;
     if (!container) return;
 
-    // 记录滚动高度变化前用户是否在底部
-    const threshold = 150;
-    const { scrollTop, scrollHeight, clientHeight } = container;
-    const wasAtBottom = scrollHeight - scrollTop - clientHeight < threshold;
-
     // 使用 requestAnimationFrame 确保 DOM 已更新
     requestAnimationFrame(() => {
-      // 只有当用户之前在底部时才自动滚动
-      if (wasAtBottom) {
-        scrollToBottom('auto', false);
+      if (shouldAutoScrollRef.current) {
+        scrollToBottom('auto', true);
       }
       lastScrollHeightRef.current = container.scrollHeight;
     });
-  }, [messages]);
+  }, [messages, scrollToBottom]);
 
   // 流式内容滚动由 StreamingContent 组件的 onScrollRequest 回调处理
 
@@ -840,7 +922,9 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
     const loadModels = async () => {
       try {
         const response = await api.getModels();
-        setModels(response.models || []);
+        // Filter out unavailable models so they don't appear in selector
+        const availableModels = (response.models || []).filter(m => m.available !== false);
+        setModels(availableModels);
         // Only set currentModel from models API if there's no initial session
         // Session loading will set the correct model from session data
         if (!initialSessionId) {
@@ -978,6 +1062,7 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
       setMessages((prev: Message[]) => [...prev, userMessage]);
       setLoading(true);
       setStreaming(true);
+      shouldAutoScrollRef.current = true;
       currentResponseRef.current = '';
 
       // 使用 ChatManager 发起请求
@@ -1002,10 +1087,13 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
 
   useEffect(() => {
     initializeSession().then(() => {
-      // 初始加载后强制滚动到底部（使用 instant 避免动画延迟）
+      // 初始加载后强制滚动到底部
       setTimeout(() => {
-        messagesEndRef.current?.scrollIntoView({ behavior: 'instant' });
-        lastScrollHeightRef.current = messagesContainerRef.current?.scrollHeight || 0;
+        const container = messagesContainerRef.current;
+        if (container) {
+          container.scrollTop = container.scrollHeight;
+        }
+        lastScrollHeightRef.current = container?.scrollHeight || 0;
       }, 100);
       
       // 检查是否有来自 NewChatPage 的 pending message
@@ -1368,6 +1456,7 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
     setPastedImages([]);
     setLoading(true);
     setStreaming(true);
+    shouldAutoScrollRef.current = true;
     currentResponseRef.current = '';
 
     // 使用 ChatManager 发起请求，它会在后台持续运行
@@ -1898,8 +1987,8 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
                       key={provider}
                       label={
                         <Space>
-                          {(provider === 'copilot' || provider === 'copilot-acp') ? <GithubOutlined /> : <OllamaIcon />}
-                          {provider === 'copilot' ? 'Copilot API' : provider === 'copilot-acp' ? 'Copilot ACP' : 'Ollama'}
+                          {(provider === 'copilot' || provider === 'copilot-acp') ? <GithubOutlined /> : provider === 'minimax' ? <MinimaxIcon size={14} /> : <OllamaIcon />}
+                          {provider === 'copilot' ? 'Copilot API' : provider === 'copilot-acp' ? 'Copilot ACP' : provider === 'minimax' ? 'MiniMax' : 'Ollama'}
                         </Space>
                       }
                     >
@@ -2131,7 +2220,7 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
                 sessionId={sessionId}
                 tokenColors={tokenColors}
                 effectiveTheme={effectiveTheme}
-                onScrollRequest={() => scrollToBottom('auto', false)}
+                onScrollRequest={handleScrollRequest}
               />
             )}
 

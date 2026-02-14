@@ -167,7 +167,7 @@ export const ConnectionStatusProvider: React.FC<ConnectionStatusProviderProps> =
     []
   );
 
-  // Refresh all status
+  // Refresh all status (full refresh including providers — called on mount and manual actions)
   const refreshStatus = useCallback(async () => {
     setIsLoading(true);
     try {
@@ -190,15 +190,32 @@ export const ConnectionStatusProvider: React.FC<ConnectionStatusProviderProps> =
     }
   }, [fetchProviderStatus, fetchMCPStatus, calculateOverallHealth]);
 
-  // Initial fetch and polling
+  // MCP-only refresh (used for periodic polling — no provider Ping overhead)
+  const refreshMCPOnly = useCallback(async () => {
+    try {
+      const mcpServers = await fetchMCPStatus();
+
+      setStatus(prev => ({
+        ...prev,
+        mcpServers,
+        overallHealth: calculateOverallHealth(prev.providers, mcpServers),
+        lastUpdated: new Date(),
+      }));
+    } catch (err) {
+      console.error('Failed to refresh MCP status:', err);
+    }
+  }, [fetchMCPStatus, calculateOverallHealth]);
+
+  // Initial fetch (full) and MCP-only polling
   useEffect(() => {
     refreshStatus();
 
     if (!enablePolling) return;
 
-    const interval = setInterval(refreshStatus, pollInterval);
+    // Only poll MCP status, not providers (to avoid triggering Ping)
+    const interval = setInterval(refreshMCPOnly, pollInterval);
     return () => clearInterval(interval);
-  }, [refreshStatus, pollInterval, enablePolling]);
+  }, [refreshStatus, refreshMCPOnly, pollInterval, enablePolling]);
 
   // Recover provider
   const recoverProvider = useCallback(async (providerName: string, action: 'reconnect' | 'reauth' = 'reconnect'): Promise<boolean> => {
@@ -220,7 +237,7 @@ export const ConnectionStatusProvider: React.FC<ConnectionStatusProviderProps> =
 
       const result = await response.json();
       
-      // Refresh status after recovery
+      // Refresh status after recovery (full refresh including providers)
       await refreshStatus();
       
       return result.success === true;

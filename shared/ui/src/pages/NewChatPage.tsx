@@ -6,6 +6,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Input, Button, Select, Space, Typography, message, Modal, Tag, Tooltip, Dropdown, theme } from 'antd';
 import { SendOutlined, GithubOutlined, FolderOutlined, LinkOutlined, DisconnectOutlined, FolderOpenOutlined, ThunderboltOutlined, CloseCircleFilled } from '@ant-design/icons';
+import { MinimaxIcon } from '../components/MinimaxIcon';
 import { useAPI } from '../context/APIContext';
 import { useInputHistory } from '../hooks';
 import { PromptSelector } from '../components/PromptSelector';
@@ -62,7 +63,9 @@ export const NewChatPage: React.FC<NewChatPageProps> = ({
     setModelsLoading(true);
     try {
       const response = await api.getModels();
-      setModels(response.models || []);
+      // Filter out unavailable models so they don't appear in selector
+      const availableModels = (response.models || []).filter(m => m.available !== false);
+      setModels(availableModels);
       setCurrentModel(response.current || response.default || '');
     } catch (error) {
       console.error('Failed to load models:', error);
@@ -104,6 +107,9 @@ export const NewChatPage: React.FC<NewChatPageProps> = ({
   const getModelIcon = (model: Model) => {
     if (model.provider === 'ollama') {
       return <OllamaIcon size={12} style={{ marginRight: 8 }} />;
+    }
+    if (model.provider === 'minimax') {
+      return <MinimaxIcon size={12} style={{ marginRight: 8 }} />;
     }
     return <GithubOutlined style={{ fontSize: 12, marginRight: 8 }} />;
   };

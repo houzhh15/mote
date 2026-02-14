@@ -186,6 +186,27 @@ func (m *SessionManager) Delete(sessionID string) error {
 	return m.db.DeleteSession(sessionID)
 }
 
+// ReplaceMessages atomically replaces all messages for a session in both
+// the database and cache. This is used to persist compaction results so that
+// subsequent session loads don't need to re-compact.
+func (m *SessionManager) ReplaceMessages(sessionID string, messages []*storage.Message) error {
+	// Persist to database (transactional)
+	if err := m.db.ReplaceMessages(sessionID, messages); err != nil {
+		return err
+	}
+
+	// Update cache
+	m.mu.Lock()
+	if cached, ok := m.cache[sessionID]; ok {
+		cached.Messages = messages
+		cached.LastAccess = time.Now()
+		cached.Dirty = false // Just persisted, so clean
+	}
+	m.mu.Unlock()
+
+	return nil
+}
+
 // Sync writes all dirty sessions to the database.
 // This is called periodically or on shutdown to ensure data consistency.
 func (m *SessionManager) Sync() error {

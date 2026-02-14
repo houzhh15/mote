@@ -7,6 +7,7 @@ import { Typography, List, Card, Button, Space, Spin, Empty, message, Modal, Tag
 import { DeleteOutlined, MessageOutlined, ClockCircleOutlined, GithubOutlined, SearchOutlined } from '@ant-design/icons';
 import { useAPI } from '../context/APIContext';
 import { OllamaIcon } from '../components/OllamaIcon';
+import { MinimaxIcon } from '../components/MinimaxIcon';
 import type { Session } from '../types';
 
 const { Text } = Typography;
@@ -14,11 +15,10 @@ const { Text } = Typography;
 // Helper function to extract provider from model ID
 // Ollama models have "ollama:" prefix (e.g., "ollama:llama3.2")
 // Copilot models don't have prefix (e.g., "gpt-4", "claude-3.5-sonnet")
-const getProviderFromModel = (model?: string): 'copilot' | 'ollama' | null => {
+const getProviderFromModel = (model?: string): 'copilot' | 'ollama' | 'minimax' | null => {
   if (!model) return null;
-  if (model.startsWith('ollama:')) {
-    return 'ollama';
-  }
+  if (model.startsWith('ollama:')) return 'ollama';
+  if (model.startsWith('minimax:')) return 'minimax';
   return 'copilot';
 };
 
@@ -118,10 +118,10 @@ export const SessionsPage: React.FC<SessionsPageProps> = ({ onSelectSession }) =
                       </Text>
                       {session.model && (
                         <Tag 
-                          color={getProviderFromModel(session.model) === 'ollama' ? 'orange' : 'blue'}
+                          color={getProviderFromModel(session.model) === 'ollama' ? 'orange' : getProviderFromModel(session.model) === 'minimax' ? 'purple' : 'blue'}
                           style={{ marginLeft: 8, display: 'flex', alignItems: 'center', gap: 4 }}
                         >
-                          {getProviderFromModel(session.model) === 'ollama' ? <OllamaIcon size={10} /> : <GithubOutlined style={{ fontSize: 10 }} />}
+                          {getProviderFromModel(session.model) === 'ollama' ? <OllamaIcon size={10} /> : getProviderFromModel(session.model) === 'minimax' ? <MinimaxIcon size={10} /> : <GithubOutlined style={{ fontSize: 10 }} />}
                           {session.model}
                         </Tag>
                       )}

@@ -11,15 +11,15 @@ import type { Session } from '../../types';
 import { useSessionGroups } from '../../hooks';
 import { useAPI } from '../../context/APIContext';
 import { OllamaIcon } from '../OllamaIcon';
+import { MinimaxIcon } from '../MinimaxIcon';
 
 const { Text } = Typography;
 
 // Helper function to get provider from model
-const getProviderFromModel = (model?: string): 'copilot' | 'ollama' | null => {
+const getProviderFromModel = (model?: string): 'copilot' | 'ollama' | 'minimax' | null => {
   if (!model) return null;
-  if (model.startsWith('ollama:')) {
-    return 'ollama';
-  }
+  if (model.startsWith('ollama:')) return 'ollama';
+  if (model.startsWith('minimax:')) return 'minimax';
   return 'copilot';
 };
 
@@ -243,6 +243,8 @@ export const SessionList: React.FC<SessionListProps> = ({
                       <span className="session-item-model">
                         {getProviderFromModel(session.model) === 'ollama' 
                           ? <OllamaIcon size={12} /> 
+                          : getProviderFromModel(session.model) === 'minimax'
+                          ? <MinimaxIcon size={12} />
                           : <GithubOutlined style={{ fontSize: 12 }} />}
                         {' '}{session.model.split('/').pop()?.replace('ollama:', '')}
                       </span>

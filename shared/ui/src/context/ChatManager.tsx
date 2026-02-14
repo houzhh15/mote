@@ -15,6 +15,7 @@ export interface ChatState {
   streaming: boolean;
   currentContent: string;
   currentThinking: string;  // Temporary thinking content (cleared when other output arrives)
+  thinkingDone: boolean;     // Whether thinking phase has ended (content/tool_call started)
   currentToolCalls: { [key: string]: { name: string; status?: string; arguments?: string; result?: unknown; error?: string } };
   messages: Message[];
   finalMessage?: Message;  // Set when streaming completes, contains the final assistant message
@@ -177,6 +178,7 @@ export const ChatManagerProvider: React.FC<{ children: React.ReactNode }> = ({ c
       streaming: true,
       currentContent: '',
       currentThinking: '',
+      thinkingDone: false,
       currentToolCalls: {},
       messages: [],
     };
@@ -209,9 +211,10 @@ export const ChatManagerProvider: React.FC<{ children: React.ReactNode }> = ({ c
       if (event.type === 'content' && content) {
         accumulatedContent += content;
         state.currentContent = accumulatedContent;
-        // Clear thinking when content arrives
-        accumulatedThinking = '';
-        state.currentThinking = '';
+        // Mark thinking as done (don't clear text — let UI animate out)
+        if (accumulatedThinking) {
+          state.thinkingDone = true;
+        }
         // 使用 RAF 节流，减少高频更新
         notifySubscribers(sessionId);
       } else if (event.type === 'thinking' && event.thinking) {
@@ -226,9 +229,10 @@ export const ChatManagerProvider: React.FC<{ children: React.ReactNode }> = ({ c
         if (toolName) {
           accumulatedToolCalls[toolName] = { name: toolName, status: 'running', arguments: toolArgs };
           state.currentToolCalls = { ...accumulatedToolCalls };
-          // Clear thinking when tool call starts
-          accumulatedThinking = '';
-          state.currentThinking = '';
+          // Mark thinking as done when tool call starts
+          if (accumulatedThinking) {
+            state.thinkingDone = true;
+          }
           // 工具调用开始时立即通知
           notifySubscribers(sessionId, true);
         }
@@ -245,9 +249,10 @@ export const ChatManagerProvider: React.FC<{ children: React.ReactNode }> = ({ c
             arguments: args || existing?.arguments,
           };
           state.currentToolCalls = { ...accumulatedToolCalls };
-          // Clear thinking when tool call updates
-          accumulatedThinking = '';
-          state.currentThinking = '';
+          // Mark thinking as done when tool call updates
+          if (accumulatedThinking) {
+            state.thinkingDone = true;
+          }
           // 工具更新使用节流
           notifySubscribers(sessionId);
         }
@@ -277,6 +282,7 @@ export const ChatManagerProvider: React.FC<{ children: React.ReactNode }> = ({ c
         state.currentContent = accumulatedContent;
         accumulatedThinking = '';
         state.currentThinking = '';
+        state.thinkingDone = false;
         // Keep tool calls visible until ChatPage processes them
         // state.currentToolCalls = {}; // Don't clear - let ChatPage handle it
 
@@ -327,6 +333,7 @@ export const ChatManagerProvider: React.FC<{ children: React.ReactNode }> = ({ c
         // Clear thinking when paused
         accumulatedThinking = '';
         state.currentThinking = '';
+        state.thinkingDone = false;
         // pause 立即通知
         notifySubscribers(sessionId, true);
       } else if (event.type === 'pause_timeout') {
