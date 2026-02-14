@@ -871,8 +871,19 @@ func (s *Server) buildACPConfig() copilot.ACPConfig {
 		cfg.SkillDirectories = []string{skillsDir}
 	}
 
-	// Pass GitHub token for authentication
-	if s.cfg.Copilot.Token != "" {
+	// Pass GitHub token for authentication (only if copilot REST API provider is enabled).
+	// NOTE: When only copilot-acp is enabled, do NOT inject the old REST API token
+	// as GITHUB_TOKEN, because it would override the CLI's own OAuth authentication
+	// (from `copilot login`) and cause 403 errors if the token is stale/invalid.
+	enabledProviders := s.cfg.Provider.GetEnabledProviders()
+	copilotAPIEnabled := false
+	for _, p := range enabledProviders {
+		if p == "copilot" {
+			copilotAPIEnabled = true
+			break
+		}
+	}
+	if copilotAPIEnabled && s.cfg.Copilot.Token != "" {
 		cfg.GithubToken = s.cfg.Copilot.Token
 	}
 

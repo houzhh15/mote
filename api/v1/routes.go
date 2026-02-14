@@ -387,12 +387,35 @@ func (r *Router) HandleAuthStatus(w http.ResponseWriter, req *http.Request) {
 		token = viper.GetString("copilot.token")
 	}
 
+	// Determine the default provider
+	defaultProvider := viper.GetString("provider.default")
+	if defaultProvider == "" {
+		defaultProvider = "copilot-acp"
+	}
+
 	response := AuthStatusResponse{
-		Provider: viper.GetString("provider.type"),
+		Provider: defaultProvider,
 		Model:    viper.GetString("provider.model"),
 	}
 
-	if token == "" {
+	// For ACP mode, authentication is managed by the Copilot CLI itself
+	// (via `copilot login`), not by the mote config token.
+	if defaultProvider == "copilot-acp" {
+		if token != "" {
+			// Has legacy API token — show as authenticated
+			response.Authenticated = true
+			if len(token) > 8 {
+				response.TokenMasked = token[:4] + "..." + token[len(token)-4:]
+			} else {
+				response.TokenMasked = "***"
+			}
+		} else {
+			// No legacy token, but ACP uses CLI auth — check if copilot CLI is available
+			response.Authenticated = true
+			response.Message = "使用 Copilot CLI 认证 (copilot login)"
+			response.TokenMasked = "cli-auth"
+		}
+	} else if token == "" {
 		response.Authenticated = false
 		response.Message = "未配置认证 Token，请运行 mote auth login 进行认证"
 	} else {
