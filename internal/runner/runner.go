@@ -256,6 +256,44 @@ func (r *Runner) SetCompactor(c *compaction.Compactor) {
 	r.compactor = c
 }
 
+// persistCompactedMessages converts compacted provider.Messages to storage.Messages
+// and persists them to the database, replacing the old session messages.
+// This avoids re-compacting the same messages on every subsequent request.
+func (r *Runner) persistCompactedMessages(sessionID string, messages []provider.Message) {
+	// Convert provider.Message → storage.Message (skip system messages since
+	// system prompts are rebuilt each request by SystemPromptBuilder)
+	var storeMsgs []*storage.Message
+	now := time.Now()
+	for _, msg := range messages {
+		if msg.Role == provider.RoleSystem {
+			continue
+		}
+
+		sm := &storage.Message{
+			SessionID:  sessionID,
+			Role:       string(msg.Role),
+			Content:    msg.Content,
+			ToolCallID: msg.ToolCallID,
+			CreatedAt:  now,
+		}
+
+		// Convert tool calls
+		if len(msg.ToolCalls) > 0 {
+			sm.ToolCalls = convertToolCalls(msg.ToolCalls)
+		}
+
+		storeMsgs = append(storeMsgs, sm)
+	}
+
+	if err := r.sessions.ReplaceMessages(sessionID, storeMsgs); err != nil {
+		slog.Warn("failed to persist compacted messages, will re-compact next time",
+			"sessionID", sessionID, "error", err)
+	} else {
+		slog.Info("persisted compacted messages to database",
+			"sessionID", sessionID, "messageCount", len(storeMsgs))
+	}
+}
+
 // SetMemory sets the optional M04 memory index.
 func (r *Runner) SetMemory(m *memory.MemoryIndex) {
 	r.mu.Lock()
@@ -836,9 +874,11 @@ func (r *Runner) runLoopCore(ctx context.Context, cached *scheduler.CachedSessio
 		if r.compactor != nil {
 			if r.compactor.NeedsCompaction(messages) {
 				slog.Info("runLoopCore: compacting messages", "sessionID", sessionID, "iteration", iteration, "messageCount", len(messages))
-				compacted := r.compactor.CompactWithFallback(ctx, messages)
+				compacted := r.compactor.CompactWithFallback(ctx, messages, prov)
 				slog.Info("runLoopCore: compaction done", "sessionID", sessionID, "iteration", iteration, "newMessageCount", len(compacted))
 				messages = compacted
+				// Persist compacted messages so future loads don't need re-compaction
+				r.persistCompactedMessages(sessionID, compacted)
 				// Increment compaction count after successful compaction
 				r.compactor.IncrementCompactionCount(sessionID)
 			}
@@ -1104,11 +1144,13 @@ func (r *Runner) runACPMode(ctx context.Context, cached *scheduler.CachedSession
 			slog.Info("runACPMode: compacting messages",
 				"sessionID", sessionID,
 				"beforeCount", len(messages))
-			compacted := r.compactor.CompactWithFallback(ctx, messages)
+			compacted := r.compactor.CompactWithFallback(ctx, messages, prov)
 			slog.Info("runACPMode: compaction done",
 				"sessionID", sessionID,
 				"afterCount", len(compacted))
 			messages = compacted
+			// Persist compacted messages so future loads don't need re-compaction
+			r.persistCompactedMessages(sessionID, compacted)
 			r.compactor.IncrementCompactionCount(sessionID)
 		}
 	} else if compressed, changed := r.history.Compress(messages); changed {
@@ -1166,6 +1208,9 @@ func (r *Runner) runACPMode(ctx context.Context, cached *scheduler.CachedSession
 			}
 		}
 	}
+
+	// Sanitize messages to remove corrupted tool call data
+	messages = provider.SanitizeMessages(messages)
 
 	req := provider.ChatRequest{
 		Model:          cached.Session.Model,
@@ -1378,6 +1423,9 @@ func (r *Runner) buildChatRequest(messages []provider.Message, model string, ses
 	// For Ollama provider, strip the "ollama:" prefix from model name
 	model = strings.TrimPrefix(model, "ollama:")
 
+	// Sanitize messages to remove corrupted tool call data (e.g., truncated arguments)
+	messages = provider.SanitizeMessages(messages)
+
 	req := provider.ChatRequest{
 		Model:          model,
 		Messages:       messages,
@@ -1485,6 +1533,7 @@ func (r *Runner) processStreamResponse(ctx context.Context, streamCh <-chan prov
 		FinishReason: provider.FinishReasonStop, // Default to stop
 	}
 	var contentBuilder string
+	var thinkingBuilder string // Track thinking content for fallback when content is empty
 	pendingToolCalls := make(map[int]*provider.ToolCall)
 
 	// Start heartbeat for streaming - model may take a long time to generate tool call arguments
@@ -1525,8 +1574,9 @@ func (r *Runner) processStreamResponse(ctx context.Context, streamCh <-chan prov
 			}
 
 		case provider.EventTypeThinking:
-			// Forward thinking events for temporary display
+			// Forward thinking events for temporary display and accumulate for fallback
 			if streamEvent.Thinking != "" {
+				thinkingBuilder += streamEvent.Thinking
 				events <- Event{
 					Type:      EventTypeThinking,
 					Thinking:  streamEvent.Thinking,
@@ -1594,8 +1644,26 @@ func (r *Runner) processStreamResponse(ctx context.Context, streamCh <-chan prov
 
 	resp.Content = contentBuilder
 
+	// Fallback: if content is empty but thinking content was received,
+	// use thinking as the response content. This handles the case where
+	// models with reasoning_split put all output into reasoning_content
+	// but return empty content (observed with MiniMax after compaction).
+	if resp.Content == "" && thinkingBuilder != "" && len(pendingToolCalls) == 0 {
+		slog.Warn("processStreamResponse: content empty but thinking received, using thinking as fallback",
+			"thinkingLen", len(thinkingBuilder),
+			"finishReason", resp.FinishReason)
+		resp.Content = thinkingBuilder
+		// Also emit the thinking content as regular content so frontend displays it
+		events <- Event{
+			Type:      EventTypeContent,
+			Content:   thinkingBuilder,
+			Iteration: iteration,
+		}
+	}
+
 	slog.Info("processStreamResponse: stream ended",
-		"contentLen", len(contentBuilder),
+		"contentLen", len(resp.Content),
+		"thinkingLen", len(thinkingBuilder),
 		"pendingToolCallsCount", len(pendingToolCalls),
 		"finishReason", resp.FinishReason)
 
