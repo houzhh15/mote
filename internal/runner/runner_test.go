@@ -95,17 +95,17 @@ func TestNewToolResultEvent(t *testing.T) {
 func TestDefaultConfig(t *testing.T) {
 	cfg := DefaultConfig()
 
-	if cfg.MaxIterations != 10 {
-		t.Errorf("expected MaxIterations 10, got %d", cfg.MaxIterations)
+	if cfg.MaxIterations != 1000 {
+		t.Errorf("expected MaxIterations 1000, got %d", cfg.MaxIterations)
 	}
-	if cfg.MaxTokens != 8000 {
-		t.Errorf("expected MaxTokens 8000, got %d", cfg.MaxTokens)
+	if cfg.MaxTokens != 32000 {
+		t.Errorf("expected MaxTokens 32000, got %d", cfg.MaxTokens)
 	}
 	if cfg.MaxMessages != 100 {
 		t.Errorf("expected MaxMessages 100, got %d", cfg.MaxMessages)
 	}
-	if cfg.Timeout != 5*time.Minute {
-		t.Errorf("expected Timeout 5m, got %v", cfg.Timeout)
+	if cfg.Timeout != 10*time.Minute {
+		t.Errorf("expected Timeout 10m, got %v", cfg.Timeout)
 	}
 	if !cfg.StreamOutput {
 		t.Error("expected StreamOutput true")
