@@ -409,8 +409,22 @@ func (o *StandardOrchestrator) callProvider(ctx context.Context, prov provider.P
 		return nil, streamErr
 	}
 
-	resp := &provider.ChatResponse{}
+	resp := &provider.ChatResponse{
+		FinishReason: provider.FinishReasonStop, // Default to stop
+	}
+	var thinkingBuilder string
+	// pendingToolCalls accumulates incremental tool call chunks by index.
+	// Streaming providers send tool call arguments in multiple events
+	// with the same Index; we must concatenate them before use.
+	pendingToolCalls := make(map[int]*provider.ToolCall)
+
 	for event := range eventChan {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+
 		if event.Error != nil {
 			return nil, event.Error
 		}
@@ -419,20 +433,108 @@ func (o *StandardOrchestrator) callProvider(ctx context.Context, prov provider.P
 			events <- types.Event{Type: types.EventTypeContent, Content: event.Delta}
 		}
 		if event.Thinking != "" {
+			thinkingBuilder += event.Thinking
 			events <- types.Event{Type: types.EventTypeThinking, Thinking: event.Thinking}
 		}
 		if event.FinishReason != "" {
 			resp.FinishReason = event.FinishReason
 		}
 		if event.ToolCall != nil {
-			resp.ToolCalls = append(resp.ToolCalls, *event.ToolCall)
+			tc := event.ToolCall
+			if existing, ok := pendingToolCalls[tc.Index]; ok {
+				// Accumulate arguments for existing tool call
+				existing.Arguments += tc.Arguments
+				if tc.Function != nil {
+					if existing.Function == nil {
+						existing.Function = tc.Function
+					} else {
+						existing.Function.Arguments += tc.Function.Arguments
+					}
+				}
+			} else {
+				// New tool call — store a copy
+				newTc := &provider.ToolCall{
+					ID:        tc.ID,
+					Index:     tc.Index,
+					Type:      tc.Type,
+					Name:      tc.Name,
+					Arguments: tc.Arguments,
+					Function:  tc.Function,
+				}
+				pendingToolCalls[tc.Index] = newTc
+			}
+		}
+		if event.ToolCallUpdate != nil {
+			events <- types.Event{
+				Type: types.EventTypeToolCallUpdate,
+				ToolCallUpdate: &types.ToolCallUpdateEvent{
+					ToolCallID: event.ToolCallUpdate.ID,
+					ToolName:   event.ToolCallUpdate.Name,
+					Status:     event.ToolCallUpdate.Status,
+					Arguments:  event.ToolCallUpdate.Arguments,
+				},
+			}
 		}
 		if event.Usage != nil {
 			resp.Usage = event.Usage
 		}
 	}
 
+	// Fallback: if content is empty but thinking was received and no tool calls,
+	// use thinking as content (handles models that put output in reasoning_content only)
+	if resp.Content == "" && thinkingBuilder != "" && len(pendingToolCalls) == 0 {
+		slog.Warn("callProvider: content empty but thinking received, using thinking as fallback",
+			"thinkingLen", len(thinkingBuilder))
+		resp.Content = thinkingBuilder
+		events <- types.Event{Type: types.EventTypeContent, Content: thinkingBuilder}
+	}
+
+	// Convert pending tool calls to final slice and emit tool call events
+	for _, tc := range pendingToolCalls {
+		resp.ToolCalls = append(resp.ToolCalls, *tc)
+		// Emit tool call event for frontend display
+		storageTc := providerToStorageToolCall(*tc)
+		events <- types.NewToolCallEvent(storageTc)
+	}
+
+	// Adjust FinishReason based on actual tool calls
+	// (Some providers may not set FinishReason correctly in stream mode)
+	if len(resp.ToolCalls) > 0 && resp.FinishReason == provider.FinishReasonStop {
+		resp.FinishReason = provider.FinishReasonToolCalls
+	}
+
+	slog.Info("callProvider: stream completed",
+		"contentLen", len(resp.Content),
+		"thinkingLen", len(thinkingBuilder),
+		"toolCallCount", len(resp.ToolCalls),
+		"finishReason", resp.FinishReason)
+
 	return resp, nil
+}
+
+// providerToStorageToolCall converts a provider.ToolCall to a storage.ToolCall.
+func providerToStorageToolCall(tc provider.ToolCall) *storage.ToolCall {
+	name := tc.Name
+	args := tc.Arguments
+	if tc.Function != nil {
+		if tc.Function.Name != "" {
+			name = tc.Function.Name
+		}
+		if tc.Function.Arguments != "" {
+			args = tc.Function.Arguments
+		}
+	}
+
+	fnData, _ := json.Marshal(map[string]string{
+		"name":      name,
+		"arguments": args,
+	})
+
+	return &storage.ToolCall{
+		ID:       tc.ID,
+		Type:     "function",
+		Function: json.RawMessage(fnData),
+	}
 }
 
 // executeToolsSimple 简化的工具执行（暂时直接调用 registry）
