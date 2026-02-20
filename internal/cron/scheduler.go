@@ -26,6 +26,9 @@ type Scheduler struct {
 
 	// Track active executions for graceful shutdown
 	wg sync.WaitGroup
+
+	// Track currently executing jobs to prevent overlapping executions
+	executing sync.Map // job name -> time.Time (start time)
 }
 
 // SchedulerConfig configures the scheduler.
@@ -104,9 +107,9 @@ func (s *Scheduler) Start(ctx context.Context) error {
 // Stop gracefully stops the scheduler, waiting for running jobs.
 func (s *Scheduler) Stop() context.Context {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	if !s.running {
+		s.mu.Unlock()
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 		return ctx
@@ -114,7 +117,6 @@ func (s *Scheduler) Stop() context.Context {
 
 	// Stop accepting new jobs
 	ctx := s.cron.Stop()
-	s.mu.Lock()
 	s.running = false
 	s.mu.Unlock()
 
@@ -258,6 +260,11 @@ func (s *Scheduler) RunNow(ctx context.Context, name string) (*ExecuteResult, er
 		return nil, fmt.Errorf("job not found: %w", err)
 	}
 
+	// Check if already running
+	if _, running := s.executing.Load(name); running {
+		return nil, fmt.Errorf("job %q is already running", name)
+	}
+
 	s.wg.Add(1)
 	defer s.wg.Done()
 
@@ -294,6 +301,29 @@ func (s *Scheduler) Entries() int {
 	return len(s.entries)
 }
 
+// ExecutingJob holds info about a currently executing cron job.
+type ExecutingJob struct {
+	Name      string    `json:"name"`
+	SessionID string    `json:"session_id"`
+	StartedAt time.Time `json:"started_at"`
+}
+
+// GetExecutingJobs returns the list of currently executing cron jobs.
+func (s *Scheduler) GetExecutingJobs() []ExecutingJob {
+	var result []ExecutingJob
+	s.executing.Range(func(key, value any) bool {
+		name := key.(string)
+		startTime := value.(time.Time)
+		result = append(result, ExecutingJob{
+			Name:      name,
+			SessionID: deriveCronSessionID(name),
+			StartedAt: startTime,
+		})
+		return true
+	})
+	return result
+}
+
 // addEntryLocked registers a job with the cron scheduler.
 // Caller must hold s.mu.
 func (s *Scheduler) addEntryLocked(job *Job) error {
@@ -319,11 +349,42 @@ func (s *Scheduler) addEntryLocked(job *Job) error {
 }
 
 // executeJob wraps job execution with tracking.
+// It enforces a hard timeout to guarantee the executing map is always cleaned up,
+// even if the underlying executor gets stuck (e.g. a tool blocks forever).
 func (s *Scheduler) executeJob(job *Job) {
+	// Skip if this job is already executing (prevents overlapping executions)
+	startTime := time.Now()
+	if prev, loaded := s.executing.LoadOrStore(job.Name, startTime); loaded {
+		prevStart := prev.(time.Time)
+		runningFor := time.Since(prevStart)
+		// Safety valve: if the previous execution has been "running" for longer
+		// than the hard timeout (+ 1min grace), it's a stale entry from a stuck
+		// execution. Force-clean it and proceed.
+		const hardTimeout = 30 * time.Minute
+		if runningFor > hardTimeout+1*time.Minute {
+			s.logger.Warn("force-cleaning stale executing entry",
+				"job_name", job.Name,
+				"previous_start", prevStart.Format(time.RFC3339),
+				"running_for", runningFor.Round(time.Second).String(),
+			)
+			s.executing.Delete(job.Name)
+			// Re-store with our new start time
+			s.executing.Store(job.Name, startTime)
+		} else {
+			s.logger.Warn("skipping overlapping execution, previous run still active",
+				"job_name", job.Name,
+				"previous_start", prevStart.Format(time.RFC3339),
+				"running_for", runningFor.Round(time.Second).String(),
+			)
+			return
+		}
+	}
+	defer s.executing.Delete(job.Name)
+
 	s.wg.Add(1)
 	defer s.wg.Done()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 
 	// Reload job to get latest config
@@ -340,17 +401,43 @@ func (s *Scheduler) executeJob(job *Job) {
 
 	s.logger.Info("executing scheduled job", "job_name", job.Name)
 
-	result := s.executor.Execute(ctx, currentJob)
-	if result.Error != nil {
-		s.logger.Error("job execution failed",
+	// Run executor in a goroutine so we can enforce the hard timeout.
+	// Without this, a stuck tool execution would block forever and
+	// the executing map entry would never be cleaned up.
+	type execResult struct {
+		result *ExecuteResult
+	}
+	ch := make(chan execResult, 1)
+	go func() {
+		ch <- execResult{result: s.executor.Execute(ctx, currentJob)}
+	}()
+
+	select {
+	case res := <-ch:
+		result := res.result
+		if result.Error != nil {
+			s.logger.Error("job execution failed",
+				"job_name", job.Name,
+				"error", result.Error,
+				"history_id", result.HistoryID,
+			)
+		} else {
+			s.logger.Info("job execution completed",
+				"job_name", job.Name,
+				"history_id", result.HistoryID,
+			)
+		}
+	case <-ctx.Done():
+		s.logger.Error("job execution timed out (hard deadline), cleaning up",
 			"job_name", job.Name,
-			"error", result.Error,
-			"history_id", result.HistoryID,
+			"timeout", "30m",
 		)
-	} else {
-		s.logger.Info("job execution completed",
-			"job_name", job.Name,
-			"history_id", result.HistoryID,
-		)
+		// Cancel the runner's session queue so the stuck worker exits
+		// and the next execution can start with a fresh worker.
+		sessionID := deriveCronSessionID(job.Name)
+		if cr, ok := s.executor.runner.(CancellableRunner); ok {
+			cr.CancelSession(sessionID)
+			s.logger.Info("cancelled stuck runner session", "job_name", job.Name, "sessionID", sessionID)
+		}
 	}
 }

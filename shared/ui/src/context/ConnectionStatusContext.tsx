@@ -355,6 +355,14 @@ export const useConnectionStatus = (): ConnectionStatusContextValue => {
   return context;
 };
 
+/**
+ * Safe version that returns null when outside ConnectionStatusProvider.
+ * Use this when the provider is optional (e.g. ChatPage).
+ */
+export const useConnectionStatusSafe = (): ConnectionStatusContextValue | null => {
+  return useContext(ConnectionStatusContext);
+};
+
 // ================================================================
 // Utility Hooks
 // ================================================================
@@ -381,4 +389,13 @@ export const useMCPStatus = (serverName: string): MCPConnectionStatus | undefine
 export const useHasConnectionIssues = (): boolean => {
   const { status } = useConnectionStatus();
   return status.overallHealth !== 'healthy' && status.overallHealth !== 'unknown';
+};
+
+/**
+ * Safe version: returns false when outside ConnectionStatusProvider.
+ */
+export const useHasConnectionIssuesSafe = (): boolean => {
+  const ctx = useConnectionStatusSafe();
+  if (!ctx) return false;
+  return ctx.status.overallHealth !== 'healthy' && ctx.status.overallHealth !== 'unknown';
 };

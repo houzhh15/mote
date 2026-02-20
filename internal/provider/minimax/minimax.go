@@ -12,6 +12,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -98,6 +99,19 @@ func Factory(apiKey string, maxTokens int) provider.ProviderFactory {
 	}
 }
 
+// Compile-time check for ConnectionResettable.
+var _ provider.ConnectionResettable = (*MinimaxProvider)(nil)
+
+// ResetConnections closes all idle HTTP connections, forcing fresh TCP
+// connections on the next request.  This prevents MiniMax's ALB from
+// associating subsequent requests with a degraded server-side session
+// (X-Session-Id) after sustained Chat API usage (e.g., compaction).
+func (p *MinimaxProvider) ResetConnections() {
+	p.httpClient.CloseIdleConnections()
+	p.streamClient.CloseIdleConnections()
+	logger.Info().Msg("MiniMax connections reset")
+}
+
 // ListModels returns the list of available MiniMax models.
 func ListModels() []string {
 	return AvailableModels
@@ -135,6 +149,23 @@ func (p *MinimaxProvider) Chat(ctx context.Context, req provider.ChatRequest) (*
 		return nil, p.handleErrorResponse(resp.StatusCode, body)
 	}
 
+	// Empty body with HTTP 200 is a server-side anomaly (ALB session
+	// degradation after sustained API usage, e.g. compaction).
+	// Return a retryable error so the runner's transient retry can handle it.
+	if len(body) == 0 {
+		logger.Warn().
+			Int("status", resp.StatusCode).
+			Str("x_session_id", resp.Header.Get("X-Session-Id")).
+			Msg("MiniMax Chat returned empty body")
+		p.httpClient.CloseIdleConnections()
+		return nil, &provider.ProviderError{
+			Code:      provider.ErrCodeServiceUnavailable,
+			Message:   "MiniMax Chat returned empty response (HTTP 200) — likely ALB session degradation",
+			Provider:  "minimax",
+			Retryable: true,
+		}
+	}
+
 	var chatResp chatResponse
 	if err := json.Unmarshal(body, &chatResp); err != nil {
 		logger.Error().Err(err).Str("body", string(body)).Msg("Failed to parse MiniMax response")
@@ -157,6 +188,27 @@ func (p *MinimaxProvider) Stream(ctx context.Context, req provider.ChatRequest) 
 		Int("message_count", len(chatReq.Messages)).
 		Msg("MiniMax Stream request")
 
+	// Diagnostic: dump message roles and tool_call structure for debugging
+	// ordering issues (e.g. MiniMax 2013 error)
+	for i, msg := range chatReq.Messages {
+		role := msg.Role
+		tcCount := len(msg.ToolCalls)
+		tcID := ""
+		if msg.ToolCallID != "" {
+			tcID = msg.ToolCallID
+		}
+		hasContent := msg.Content != nil && *msg.Content != ""
+		if tcCount > 0 || tcID != "" {
+			logger.Debug().
+				Int("idx", i).
+				Str("role", role).
+				Int("tool_calls", tcCount).
+				Str("tool_call_id", tcID).
+				Bool("has_content", hasContent).
+				Msg("MiniMax msg detail")
+		}
+	}
+
 	resp, err := p.doStreamRequest(ctx, "/chat/completions", chatReq)
 	if err != nil {
 		return nil, err
@@ -173,10 +225,72 @@ func (p *MinimaxProvider) Stream(ctx context.Context, req provider.ChatRequest) 
 	// convert to a synthetic stream so the caller gets a proper response.
 	contentType := resp.Header.Get("Content-Type")
 	if !strings.Contains(contentType, "text/event-stream") {
-		return p.handleNonStreamResponse(resp)
+		result, err := p.handleNonStreamResponse(resp)
+		if err != nil {
+			// If Stream endpoint returned empty body (ALB anomaly after
+			// sustained Chat usage e.g. compaction), fall back to the
+			// non-streaming Chat API which is not affected.
+			var pe *provider.ProviderError
+			if errors.As(err, &pe) && pe.Code == provider.ErrCodeServiceUnavailable {
+				logger.Warn().Msg("MiniMax Stream returned empty response — falling back to Chat API")
+				return p.streamViaChat(ctx, req)
+			}
+			return nil, err
+		}
+		return result, nil
 	}
 
 	return ProcessStream(resp.Body), nil
+}
+
+// streamViaChat falls back to the non-streaming Chat API when the Stream
+// endpoint returns an empty response (ALB anomaly after compaction).  The
+// Chat endpoint uses a different HTTP client and is unaffected by the
+// streaming endpoint's ALB session issue.  The ChatResponse is converted
+// to synthetic stream events so the caller sees no difference.
+func (p *MinimaxProvider) streamViaChat(ctx context.Context, req provider.ChatRequest) (<-chan provider.ChatEvent, error) {
+	chatResp, err := p.Chat(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("Chat fallback also failed: %w", err)
+	}
+
+	logger.Info().
+		Int("content_len", len(chatResp.Content)).
+		Int("tool_calls", len(chatResp.ToolCalls)).
+		Str("finish_reason", chatResp.FinishReason).
+		Msg("MiniMax streamViaChat fallback succeeded")
+
+	events := make(chan provider.ChatEvent, 2+len(chatResp.ToolCalls))
+	go func() {
+		defer close(events)
+
+		if chatResp.Content != "" {
+			events <- provider.ChatEvent{
+				Type:  provider.EventTypeContent,
+				Delta: chatResp.Content,
+			}
+		}
+
+		for i := range chatResp.ToolCalls {
+			tc := chatResp.ToolCalls[i]
+			tc.Index = i
+			events <- provider.ChatEvent{
+				Type:     provider.EventTypeToolCall,
+				ToolCall: &tc,
+			}
+		}
+
+		doneEvent := provider.ChatEvent{
+			Type:         provider.EventTypeDone,
+			FinishReason: chatResp.FinishReason,
+		}
+		if chatResp.Usage != nil {
+			doneEvent.Usage = chatResp.Usage
+		}
+		events <- doneEvent
+	}()
+
+	return events, nil
 }
 
 // handleNonStreamResponse handles the case where MiniMax returns a regular JSON
@@ -187,6 +301,39 @@ func (p *MinimaxProvider) handleNonStreamResponse(resp *http.Response) (<-chan p
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read non-stream response: %w", err)
+	}
+
+	// Empty body with non-SSE Content-Type is a server-side anomaly
+	// (e.g., transient gateway error returning 200 with empty body, or
+	// stale connection after sustained API usage during compaction).
+	// Close idle connections to force new TCP connections on retry.
+	if len(body) == 0 {
+		// Dump ALL response headers for diagnosis
+		allHeaders := make(map[string]string)
+		for key, vals := range resp.Header {
+			allHeaders[key] = strings.Join(vals, "; ")
+		}
+		headersJSON, _ := json.Marshal(allHeaders)
+
+		logger.Warn().
+			Int("status", resp.StatusCode).
+			Str("proto", resp.Proto).
+			Bool("close", resp.Close).
+			Int64("content_length_raw", resp.ContentLength).
+			Str("all_headers", string(headersJSON)).
+			Msg("MiniMax returned empty body — full response details")
+
+		// Reset connection pool — stale connections after long compaction
+		// sessions may be silently broken by upstream CDN/gateways.
+		p.streamClient.CloseIdleConnections()
+		p.httpClient.CloseIdleConnections()
+
+		return nil, &provider.ProviderError{
+			Code:      provider.ErrCodeServiceUnavailable,
+			Message:   fmt.Sprintf("MiniMax returned empty response (HTTP 200, Content-Length: 0, X-Session-Id: %s) — likely ALB session rejection after sustained API usage", resp.Header.Get("X-Session-Id")),
+			Provider:  "minimax",
+			Retryable: true,
+		}
 	}
 
 	var chatResp chatResponse
@@ -207,7 +354,9 @@ func (p *MinimaxProvider) handleNonStreamResponse(resp *http.Response) (<-chan p
 		content := ""
 		finishReason := "stop"
 		if len(chatResp.Choices) > 0 {
-			content = chatResp.Choices[0].Message.Content
+			if chatResp.Choices[0].Message.Content != nil {
+				content = *chatResp.Choices[0].Message.Content
+			}
 			if chatResp.Choices[0].FinishReason != "" {
 				finishReason = chatResp.Choices[0].FinishReason
 			}
@@ -301,9 +450,19 @@ func (p *MinimaxProvider) buildRequest(req provider.ChatRequest, stream bool) *c
 		}
 
 		chatMsg := chatMessage{
-			Role:    msg.Role,
-			Content: msg.Content,
+			Role: msg.Role,
 		}
+
+		// MiniMax requires content to be null (not empty string "") for
+		// assistant messages that only carry tool_calls.
+		// Go's string type can't represent null, so we use *string.
+		if msg.Content != "" {
+			chatMsg.Content = strPtr(msg.Content)
+		} else if msg.Role != "assistant" || len(msg.ToolCalls) == 0 {
+			// Non-assistant messages or assistant without tool calls: keep empty string
+			chatMsg.Content = strPtr(msg.Content)
+		}
+		// else: assistant with tool_calls and empty content → Content stays nil → JSON null
 
 		// Set tool_call_id for tool responses
 		if msg.Role == "tool" && msg.ToolCallID != "" {
@@ -355,7 +514,11 @@ func (p *MinimaxProvider) buildRequest(req provider.ChatRequest, stream bool) *c
 							att.Filename,
 							att.Metadata["language"],
 							att.Text)
-						chatReq.Messages[i].Content += contentText
+						if chatReq.Messages[i].Content != nil {
+							*chatReq.Messages[i].Content += contentText
+						} else {
+							chatReq.Messages[i].Content = strPtr(contentText)
+						}
 					}
 				}
 				break
@@ -404,11 +567,13 @@ func (p *MinimaxProvider) doStreamRequest(ctx context.Context, path string, body
 	url := p.endpoint + path
 
 	var reqBody io.Reader
+	var reqSize int
 	if body != nil {
 		data, err := json.Marshal(body)
 		if err != nil {
 			return nil, fmt.Errorf("failed to marshal request: %w", err)
 		}
+		reqSize = len(data)
 		reqBody = bytes.NewReader(data)
 	}
 
@@ -420,6 +585,8 @@ func (p *MinimaxProvider) doStreamRequest(ctx context.Context, path string, body
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+p.apiKey)
 
+	logger.Debug().Int("request_bytes", reqSize).Str("url", url).Msg("MiniMax doStreamRequest sending")
+
 	resp, err := p.streamClient.Do(req)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
@@ -427,6 +594,13 @@ func (p *MinimaxProvider) doStreamRequest(ctx context.Context, path string, body
 		}
 		return nil, fmt.Errorf("%w: %v", ErrConnectionFailed, err)
 	}
+
+	logger.Debug().
+		Int("status", resp.StatusCode).
+		Str("content_type", resp.Header.Get("Content-Type")).
+		Str("content_length", resp.Header.Get("Content-Length")).
+		Int("request_bytes", reqSize).
+		Msg("MiniMax doStreamRequest response")
 
 	return resp, nil
 }
@@ -436,6 +610,19 @@ func (p *MinimaxProvider) handleErrorResponse(statusCode int, body []byte) error
 	var errResp chatResponse
 	if err := json.Unmarshal(body, &errResp); err == nil && errResp.Error != nil {
 		msg := errResp.Error.Message
+		// Check for context window exceeded before switch
+		lowerMsg := strings.ToLower(msg)
+		if strings.Contains(lowerMsg, "context window") ||
+			strings.Contains(lowerMsg, "context length") ||
+			strings.Contains(lowerMsg, "too many tokens") {
+			return &provider.ProviderError{
+				Code:      provider.ErrCodeContextWindowExceeded,
+				Message:   msg,
+				Provider:  "minimax",
+				Retryable: true,
+			}
+		}
+
 		switch statusCode {
 		case http.StatusUnauthorized:
 			return fmt.Errorf("%w: %s", ErrAuthFailed, msg)
@@ -446,7 +633,15 @@ func (p *MinimaxProvider) handleErrorResponse(statusCode int, body []byte) error
 				Code:      provider.ErrCodeRateLimited,
 				Message:   msg,
 				Provider:  "minimax",
-				Retryable: true,
+				Retryable: false,
+			}
+		case http.StatusBadRequest:
+			// 400 errors are client-side (invalid params), retrying won't help
+			return &provider.ProviderError{
+				Code:      provider.ErrCodeInvalidRequest,
+				Message:   fmt.Sprintf("[%s] %s", errResp.Error.Type, msg),
+				Provider:  "minimax",
+				Retryable: false,
 			}
 		default:
 			return fmt.Errorf("minimax error (%d): [%s] %s", statusCode, errResp.Error.Type, msg)
@@ -473,7 +668,9 @@ func (p *MinimaxProvider) convertResponse(resp *chatResponse) *provider.ChatResp
 
 	if len(resp.Choices) > 0 {
 		choice := resp.Choices[0]
-		result.Content = choice.Message.Content
+		if choice.Message.Content != nil {
+			result.Content = *choice.Message.Content
+		}
 
 		if choice.FinishReason == "tool_calls" {
 			result.FinishReason = provider.FinishReasonToolCalls
@@ -488,6 +685,20 @@ func (p *MinimaxProvider) convertResponse(resp *chatResponse) *provider.ChatResp
 				Arguments: tc.Function.Arguments,
 			})
 		}
+
+		// MiniMax-M2.5 sometimes outputs tool calls as raw XML in content
+		// (e.g. <invoke name="read_file"><parameter name="path">...</parameter></invoke>)
+		// instead of using structured tool_calls. Detect and extract them.
+		if len(result.ToolCalls) == 0 && result.Content != "" {
+			if xmlCalls, cleanContent := ExtractXMLToolCalls(result.Content); len(xmlCalls) > 0 {
+				logger.Warn().
+					Int("extracted_calls", len(xmlCalls)).
+					Msg("MiniMax: extracted tool calls from XML in content")
+				result.ToolCalls = xmlCalls
+				result.Content = cleanContent
+				result.FinishReason = provider.FinishReasonToolCalls
+			}
+		}
 	}
 
 	if resp.Usage != nil {
@@ -499,6 +710,66 @@ func (p *MinimaxProvider) convertResponse(resp *chatResponse) *provider.ChatResp
 	}
 
 	return result
+}
+
+// xmlInvokePattern matches MiniMax's XML tool call format.
+// Handles both <invoke>...</invoke> and <invoke>...</invoke></minimax:tool_call>
+var xmlInvokePattern = regexp.MustCompile(`(?s)<invoke\s+name="([^"]+)">\s*((?:<parameter\s+name="[^"]*">[^<]*</parameter>\s*)*)</invoke>(?:\s*</minimax:tool_call>)?`)
+
+// xmlParamPattern matches individual parameter elements.
+var xmlParamPattern = regexp.MustCompile(`<parameter\s+name="([^"]*)">(.*?)</parameter>`)
+
+// ExtractXMLToolCalls parses raw XML tool calls from model content.
+// Returns extracted tool calls and the cleaned content with XML removed.
+func ExtractXMLToolCalls(content string) ([]provider.ToolCall, string) {
+	matches := xmlInvokePattern.FindAllStringSubmatchIndex(content, -1)
+	if len(matches) == 0 {
+		return nil, content
+	}
+
+	var calls []provider.ToolCall
+	for i, match := range matches {
+		fullMatch := content[match[0]:match[1]]
+		name := content[match[2]:match[3]]
+		paramsBlock := content[match[4]:match[5]]
+
+		// Parse parameters into JSON
+		params := make(map[string]interface{})
+		paramMatches := xmlParamPattern.FindAllStringSubmatch(paramsBlock, -1)
+		for _, pm := range paramMatches {
+			if len(pm) >= 3 {
+				params[pm[1]] = pm[2]
+			}
+		}
+
+		argsJSON, err := json.Marshal(params)
+		if err != nil {
+			logger.Warn().Err(err).Str("tool", name).Msg("failed to marshal XML tool call params")
+			continue
+		}
+
+		calls = append(calls, provider.ToolCall{
+			ID:        fmt.Sprintf("xmlcall_%d", i),
+			Type:      "function",
+			Name:      name,
+			Arguments: string(argsJSON),
+		})
+
+		_ = fullMatch // used via match indices
+	}
+
+	if len(calls) == 0 {
+		return nil, content
+	}
+
+	// Remove XML tool call blocks from content, also remove [tool] markers
+	cleaned := xmlInvokePattern.ReplaceAllString(content, "")
+	cleaned = strings.ReplaceAll(cleaned, "[tool]", "")
+	// Also remove any <minimax:tool_call> opening tags
+	cleaned = regexp.MustCompile(`<minimax:tool_call[^>]*>`).ReplaceAllString(cleaned, "")
+	cleaned = strings.TrimSpace(cleaned)
+
+	return calls, cleaned
 }
 
 // Ping checks if the MiniMax API is reachable and the API key is valid.

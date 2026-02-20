@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useCallback } from 'react';
 import { App as AntdApp } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
 import {
@@ -36,31 +36,31 @@ const App: React.FC = () => {
   });
   const [refreshSessionsTrigger, setRefreshSessionsTrigger] = React.useState(0);
 
-  const handleSelectSession = (sessionId: string) => {
+  const handleSelectSession = useCallback((sessionId: string) => {
     setSelectedSessionId(sessionId);
     localStorage.setItem(STORAGE_KEY_SESSION, sessionId);
     setCurrentPage('chat');
-  };
+  }, []);
 
-  const handleSessionCreated = (sessionId: string) => {
+  const handleSessionCreated = useCallback((sessionId: string) => {
     setSelectedSessionId(sessionId);
     localStorage.setItem(STORAGE_KEY_SESSION, sessionId);
     // 触发会话列表刷新
     setRefreshSessionsTrigger(prev => prev + 1);
-  };
+  }, []);
 
-  const handleNavigateToChat = (sessionId: string) => {
+  const handleNavigateToChat = useCallback((sessionId: string) => {
     setSelectedSessionId(sessionId);
     localStorage.setItem(STORAGE_KEY_SESSION, sessionId);
     setCurrentPage('chat');
     localStorage.setItem(STORAGE_KEY_PAGE, 'chat');
-  };
+  }, []);
 
-  const handleNavigate = (page: PageKey) => {
+  const handleNavigate = useCallback((page: PageKey) => {
     setCurrentPage(page);
     localStorage.setItem(STORAGE_KEY_PAGE, page);
     // Don't clear session when navigating - keep it for when user returns
-  };
+  }, []);
 
   const renderPage = () => {
     switch (currentPage) {
@@ -84,7 +84,7 @@ const App: React.FC = () => {
       case 'skill':
         return <SkillCenterPage />;
       case 'cron':
-        return <CronPage />;
+        return <CronPage onSelectSession={handleSelectSession} />;
       case 'mcp':
         return <MCPPage />;
       case 'settings':

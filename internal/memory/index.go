@@ -197,6 +197,11 @@ func (m *MemoryIndex) AddWithChunking(ctx context.Context, entry MemoryEntry) er
 // addSingleEntry adds a single memory entry without chunking logic.
 // This is the internal implementation used by both Add() and AddWithChunking().
 func (m *MemoryIndex) addSingleEntry(ctx context.Context, entry MemoryEntry) error {
+	// Reject empty content to prevent blank memory entries
+	if strings.TrimSpace(entry.Content) == "" {
+		return fmt.Errorf("memory content is empty")
+	}
+
 	// Generate ID if not provided
 	if entry.ID == "" {
 		entry.ID = uuid.New().String()

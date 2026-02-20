@@ -2,7 +2,7 @@ package compaction
 
 // Default prompts for memory flush
 const (
-	defaultMemoryFlushPrompt = `Before context compaction, please save any important information to memory using the memory_save tool. Focus on:
+	defaultMemoryFlushPrompt = `Before context compaction, please save any important information to memory using the mote_memory_add tool. Focus on:
 - Key decisions made during this conversation
 - Important facts or data mentioned
 - User preferences expressed
@@ -10,7 +10,7 @@ const (
 
 Review the conversation and save what matters most.`
 
-	defaultMemoryFlushSystemPrompt = `You are in a pre-compaction memory flush turn. Your task is to review the conversation history and identify important information that should be preserved in long-term memory before the context is compressed. Use the memory_save tool to store key facts, decisions, and preferences.`
+	defaultMemoryFlushSystemPrompt = `You are in a pre-compaction memory flush turn. Your task is to review the conversation history and identify important information that should be preserved in long-term memory before the context is compressed. Use the mote_memory_add tool to store key facts, decisions, and preferences.`
 )
 
 // MemoryFlushConfig holds configuration for pre-compaction memory flush.
@@ -73,17 +73,23 @@ type CompactionConfig struct {
 
 	// MemoryFlush holds configuration for pre-compaction memory flush.
 	MemoryFlush MemoryFlushConfig `json:"memory_flush" yaml:"memoryFlush"`
+
+	// ToolResultMaxBytes is the maximum byte size of a single tool result.
+	// Results exceeding this limit are pre-truncated before storing in history.
+	// Default: 65536 (64 KB)
+	ToolResultMaxBytes int `json:"tool_result_max_bytes" yaml:"toolResultMaxBytes"`
 }
 
 // DefaultConfig returns a CompactionConfig with default values.
 func DefaultConfig() CompactionConfig {
 	return CompactionConfig{
-		MaxContextTokens: 100000,
-		TriggerThreshold: 0.8,
-		KeepRecentCount:  10,
-		SummaryMaxTokens: 500,
-		ChunkMaxTokens:   16000,
-		FlushOnCompact:   true, // P1: Enable by default
-		MemoryFlush:      DefaultMemoryFlushConfig(),
+		MaxContextTokens:   48000,
+		TriggerThreshold:   0.8,
+		KeepRecentCount:    10,
+		SummaryMaxTokens:   500,
+		ChunkMaxTokens:     64000,
+		FlushOnCompact:     true, // P1: Enable by default
+		MemoryFlush:        DefaultMemoryFlushConfig(),
+		ToolResultMaxBytes: 65536, // 64 KB
 	}
 }

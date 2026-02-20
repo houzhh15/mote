@@ -48,7 +48,7 @@ func TestPolicyExecutor_Check_Allowlist(t *testing.T) {
 		allowed  bool
 	}{
 		{"allowed tool", "read_file", true},
-		{"allowed group member", "memory_search", true},
+		{"allowed group member", "mote_memory_search", true},
 		{"not in allowlist", "shell", false},
 	}
 

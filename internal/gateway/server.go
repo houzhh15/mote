@@ -49,6 +49,7 @@ type Server struct {
 	agentRunner      *runner.Runner
 	toolRegistry     *tools.Registry
 	memoryIndex      *memory.MemoryIndex
+	memoryManager    *memory.MemoryManager
 	mcpClient        *client.Manager
 	mcpServer        *server.Server
 	cronScheduler    *cron.Scheduler
@@ -139,6 +140,7 @@ func (s *Server) setupRoutes() {
 		Runner:           s.agentRunner,
 		Tools:            s.toolRegistry,
 		Memory:           s.memoryIndex,
+		MemoryManager:    s.memoryManager,
 		MCPClient:        s.mcpClient,
 		MCPServer:        s.mcpServer,
 		CronScheduler:    s.cronScheduler,
@@ -397,6 +399,14 @@ func (s *Server) SetMemoryIndex(m *memory.MemoryIndex) {
 	// Also update the API router
 	if s.apiRouter != nil {
 		s.apiRouter.SetMemory(m)
+	}
+}
+
+// SetMemoryManager sets the memory manager dependency.
+func (s *Server) SetMemoryManager(m *memory.MemoryManager) {
+	s.memoryManager = m
+	if s.apiRouter != nil {
+		s.apiRouter.SetMemoryManager(m)
 	}
 }
 

@@ -129,20 +129,26 @@ export const ChatManagerProvider: React.FC<{ children: React.ReactNode }> = ({ c
       chat.subscribers.add(callback);
       // 立即通知当前状态
       callback({ ...chat.state });
-      return () => {
-        chat.subscribers.delete(callback);
-      };
+    } else {
+      // 如果还没有 activeChat，添加到待处理订阅者
+      let pending = pendingSubscribersRef.current.get(sessionId);
+      if (!pending) {
+        pending = new Set();
+        pendingSubscribersRef.current.set(sessionId, pending);
+      }
+      pending.add(callback);
     }
     
-    // 如果还没有 activeChat，添加到待处理订阅者
-    let pending = pendingSubscribersRef.current.get(sessionId);
-    if (!pending) {
-      pending = new Set();
-      pendingSubscribersRef.current.set(sessionId, pending);
-    }
-    pending.add(callback);
-    
+    // unsubscribe 时动态查找，避免闭包捕获旧引用导致无法清理
+    // （startChat 会将回调从 pending 迁移到新的 ActiveChat.subscribers，
+    //   如果 unsubscribe 只在旧引用上操作就会泄漏）
     return () => {
+      // 从 activeChat 中移除
+      const currentChat = activeChatsRef.current.get(sessionId);
+      if (currentChat) {
+        currentChat.subscribers.delete(callback);
+      }
+      // 从 pending 中移除
       const p = pendingSubscribersRef.current.get(sessionId);
       if (p) {
         p.delete(callback);
@@ -218,9 +224,13 @@ export const ChatManagerProvider: React.FC<{ children: React.ReactNode }> = ({ c
         // 使用 RAF 节流，减少高频更新
         notifySubscribers(sessionId);
       } else if (event.type === 'thinking' && event.thinking) {
-        // Accumulate thinking content (append instead of replace)
-        accumulatedThinking += event.thinking;
+        // Replace thinking content per round (not accumulate) so panel shows current thinking only.
+        // When thinking arrives after a tool result, it's a new round — show fresh text.
+        accumulatedThinking = event.thinking;
         state.currentThinking = accumulatedThinking;
+        // Reset thinkingDone so UI re-shows the panel for new thinking rounds
+        // (e.g. MiniMax produces thinking before each tool call iteration)
+        state.thinkingDone = false;
         // thinking 也使用节流
         notifySubscribers(sessionId);
       } else if (event.type === 'tool_call' && event.tool_call) {
@@ -229,10 +239,8 @@ export const ChatManagerProvider: React.FC<{ children: React.ReactNode }> = ({ c
         if (toolName) {
           accumulatedToolCalls[toolName] = { name: toolName, status: 'running', arguments: toolArgs };
           state.currentToolCalls = { ...accumulatedToolCalls };
-          // Mark thinking as done when tool call starts
-          if (accumulatedThinking) {
-            state.thinkingDone = true;
-          }
+          // Don't mark thinking as done on tool_call — keep panel visible
+          // during tool call loops. Only hide when actual content arrives.
           // 工具调用开始时立即通知
           notifySubscribers(sessionId, true);
         }
@@ -249,10 +257,7 @@ export const ChatManagerProvider: React.FC<{ children: React.ReactNode }> = ({ c
             arguments: args || existing?.arguments,
           };
           state.currentToolCalls = { ...accumulatedToolCalls };
-          // Mark thinking as done when tool call updates
-          if (accumulatedThinking) {
-            state.thinkingDone = true;
-          }
+          // Don't mark thinking as done on tool_call_update — keep panel visible
           // 工具更新使用节流
           notifySubscribers(sessionId);
         }

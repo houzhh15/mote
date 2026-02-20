@@ -10,6 +10,7 @@ import (
 type HybridConfig struct {
 	VectorWeight float64 // Weight for vector search results (default 0.7)
 	TextWeight   float64 // Weight for text/FTS search results (default 0.3)
+	BM25Weight   float64 // Weight for BM25 search results (default 0.0, set >0 to enable)
 	MinScore     float64 // Minimum score threshold (default 0.35)
 	RRFConstant  int     // RRF constant k (default 60)
 }
@@ -41,6 +42,7 @@ type FTSSearcher interface {
 type HybridSearcher struct {
 	vectorSearcher VectorSearcher
 	ftsSearcher    FTSSearcher
+	bm25Searcher   BM25Searcher // Optional BM25 searcher (nil = disabled)
 	embedder       Embedder
 	config         HybridConfig
 }
@@ -49,6 +51,7 @@ type HybridSearcher struct {
 type HybridSearcherOptions struct {
 	VectorSearcher VectorSearcher
 	FTSSearcher    FTSSearcher
+	BM25Searcher   BM25Searcher // Optional
 	Embedder       Embedder
 	Config         HybridConfig
 }
@@ -66,6 +69,7 @@ func NewHybridSearcher(opts HybridSearcherOptions) *HybridSearcher {
 	return &HybridSearcher{
 		vectorSearcher: opts.VectorSearcher,
 		ftsSearcher:    opts.FTSSearcher,
+		bm25Searcher:   opts.BM25Searcher,
 		embedder:       opts.Embedder,
 		config:         config,
 	}
@@ -98,10 +102,19 @@ func (h *HybridSearcher) SearchWithEmbedding(ctx context.Context, query string, 
 
 	var vecResults, ftsResults []ScoredResult
 	var vecErr, ftsErr error
+	var bm25Results []ScoredResult
+	var bm25Err error
 	var wg sync.WaitGroup
 
-	// Run vector and FTS search in parallel
-	wg.Add(2)
+	// Determine how many parallel searches to run
+	hasBM25 := h.bm25Searcher != nil && h.config.BM25Weight > 0
+	searchCount := 2
+	if hasBM25 {
+		searchCount = 3
+	}
+
+	// Run searches in parallel
+	wg.Add(searchCount)
 
 	go func() {
 		defer wg.Done()
@@ -113,16 +126,40 @@ func (h *HybridSearcher) SearchWithEmbedding(ctx context.Context, query string, 
 		ftsResults, ftsErr = h.ftsSearcher.SearchFTS(ctx, query, fetchK)
 	}()
 
+	if hasBM25 {
+		go func() {
+			defer wg.Done()
+			bm25Results, bm25Err = h.bm25Searcher.SearchBM25(ctx, query, fetchK)
+		}()
+	}
+
 	wg.Wait()
 
 	// Handle errors - prefer partial results over complete failure
-	if vecErr != nil && ftsErr != nil {
+	allFailed := vecErr != nil && ftsErr != nil && (!hasBM25 || bm25Err != nil)
+	if allFailed {
 		return nil, vecErr
 	}
 	if vecErr != nil {
-		return h.convertToSearchResults(ftsResults[:min(len(ftsResults), topK)]), nil
+		vecResults = nil
 	}
 	if ftsErr != nil {
+		ftsResults = nil
+	}
+	if bm25Err != nil {
+		bm25Results = nil
+	}
+
+	// If BM25 is enabled, use three-way merge
+	if hasBM25 {
+		return h.mergeThreeWayResults(vecResults, ftsResults, bm25Results, topK), nil
+	}
+
+	// Legacy two-way merge
+	if vecResults == nil {
+		return h.convertToSearchResults(ftsResults[:min(len(ftsResults), topK)]), nil
+	}
+	if ftsResults == nil {
 		return h.convertToSearchResults(vecResults[:min(len(vecResults), topK)]), nil
 	}
 
@@ -190,6 +227,71 @@ func (h *HybridSearcher) convertToSearchResults(scored []ScoredResult) []SearchR
 			Source:  r.Source,
 		}
 	}
+	return results
+}
+
+// mergeThreeWayResults combines vector, FTS and BM25 results using three-way RRF.
+func (h *HybridSearcher) mergeThreeWayResults(vecResults, ftsResults, bm25Results []ScoredResult, topK int) []SearchResult {
+	rrfScores := make(map[string]float64)
+	idToResult := make(map[string]ScoredResult)
+
+	// Normalize weights
+	totalWeight := h.config.VectorWeight + h.config.TextWeight + h.config.BM25Weight
+	vecW := h.config.VectorWeight / totalWeight
+	ftsW := h.config.TextWeight / totalWeight
+	bm25W := h.config.BM25Weight / totalWeight
+
+	// Vector results
+	for rank, r := range vecResults {
+		rrfScore := vecW / float64(h.config.RRFConstant+rank+1)
+		rrfScores[r.ID] += rrfScore
+		if _, exists := idToResult[r.ID]; !exists {
+			idToResult[r.ID] = r
+		}
+	}
+
+	// FTS results
+	for rank, r := range ftsResults {
+		rrfScore := ftsW / float64(h.config.RRFConstant+rank+1)
+		rrfScores[r.ID] += rrfScore
+		if _, exists := idToResult[r.ID]; !exists {
+			idToResult[r.ID] = r
+		}
+	}
+
+	// BM25 results
+	for rank, r := range bm25Results {
+		rrfScore := bm25W / float64(h.config.RRFConstant+rank+1)
+		rrfScores[r.ID] += rrfScore
+		if _, exists := idToResult[r.ID]; !exists {
+			idToResult[r.ID] = r
+		}
+	}
+
+	// Build result list with minimum score filtering
+	var results []SearchResult
+	for id, score := range rrfScores {
+		if score < h.config.MinScore {
+			continue
+		}
+		r := idToResult[id]
+		results = append(results, SearchResult{
+			ID:      id,
+			Content: r.Content,
+			Score:   score,
+			Source:  r.Source,
+		})
+	}
+
+	// Sort by score descending
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Score > results[j].Score
+	})
+
+	if len(results) > topK {
+		results = results[:topK]
+	}
+
 	return results
 }
 

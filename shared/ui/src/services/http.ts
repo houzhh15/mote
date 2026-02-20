@@ -2,7 +2,7 @@
 // HTTP API Adapter - For Web mode (mote serve)
 // ================================================================
 
-import type { APIAdapter } from './adapter';
+import type { APIAdapter, MemorySyncResult, MemoryStats, MemoryExportResult } from './adapter';
 import type {
   ServiceStatus,
   Session,
@@ -10,6 +10,7 @@ import type {
   Memory,
   Tool,
   CronJob,
+  CronExecutingJob,
   MCPServer,
   Config,
   ChatRequest,
@@ -259,6 +260,48 @@ export const createHttpAdapter = (options: HttpAdapterOptions = {}): APIAdapter 
       // 204 No Content - no need to parse JSON
     },
 
+    syncMemory: async (): Promise<MemorySyncResult> => {
+      return fetchJSON<MemorySyncResult>('/api/v1/memory/sync', {
+        method: 'POST',
+        body: JSON.stringify({}),
+      });
+    },
+
+    getMemoryStats: async (): Promise<MemoryStats> => {
+      return fetchJSON<MemoryStats>('/api/v1/memory/stats');
+    },
+
+    getDailyLog: async (date?: string): Promise<{ date: string; content: string }> => {
+      const params = date ? `?date=${encodeURIComponent(date)}` : '';
+      return fetchJSON<{ date: string; content: string }>(`/api/v1/memory/daily${params}`);
+    },
+
+    appendDailyLog: async (content: string, section?: string): Promise<void> => {
+      await fetchJSON('/api/v1/memory/daily', {
+        method: 'POST',
+        body: JSON.stringify({ content, section }),
+      });
+    },
+
+    exportMemories: async (format?: string): Promise<MemoryExportResult> => {
+      const params = format ? `?format=${encodeURIComponent(format)}` : '';
+      return fetchJSON<MemoryExportResult>(`/api/v1/memory/export${params}`);
+    },
+
+    importMemories: async (memories: Array<{ content: string; source?: string }>): Promise<{ imported: number; total: number }> => {
+      return fetchJSON<{ imported: number; total: number }>('/api/v1/memory/import', {
+        method: 'POST',
+        body: JSON.stringify({ memories }),
+      });
+    },
+
+    batchDeleteMemories: async (ids: string[]): Promise<{ deleted: number; total: number }> => {
+      return fetchJSON<{ deleted: number; total: number }>('/api/v1/memory/batch', {
+        method: 'DELETE',
+        body: JSON.stringify({ ids }),
+      });
+    },
+
     // ============== Tools Service ==============
     getTools: async (): Promise<Tool[]> => {
       const data = await fetchJSON<{ tools: Tool[] }>('/api/v1/tools');
@@ -296,6 +339,11 @@ export const createHttpAdapter = (options: HttpAdapterOptions = {}): APIAdapter 
 
     deleteCronJob: async (id: string): Promise<void> => {
       await fetchJSON(`/api/v1/cron/jobs/${id}`, { method: 'DELETE' });
+    },
+
+    getCronExecuting: async (): Promise<CronExecutingJob[]> => {
+      const data = await fetchJSON<{ jobs: CronExecutingJob[] }>('/api/v1/cron/executing');
+      return data.jobs || [];
     },
 
     // ============== MCP Service ==============

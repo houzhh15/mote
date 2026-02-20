@@ -134,6 +134,13 @@ export interface CronJob {
   last_run?: string;
 }
 
+export interface CronExecutingJob {
+  name: string;
+  session_id: string;
+  started_at: string;
+  running_for: number; // seconds
+}
+
 export interface MCPServer {
   name: string;
   type?: 'stdio' | 'http';  // Used by backend API

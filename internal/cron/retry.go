@@ -59,6 +59,19 @@ func (p *RetryPolicy) ShouldRetry(attempt int, err error) bool {
 		return retryable.Retryable()
 	}
 
+	// Check provider errors via ShouldAutoRetry (e.g., ProviderError).
+	// This uses an interface to avoid importing the provider package.
+	// 400 Bad Request, 401 Auth, 403 Forbidden etc. return false,
+	// preventing wasteful retries on client-side errors.
+	type autoRetryChecker interface {
+		error
+		ShouldAutoRetry() bool
+	}
+	var checker autoRetryChecker
+	if errors.As(err, &checker) {
+		return checker.ShouldAutoRetry()
+	}
+
 	// By default, retry on error
 	return err != nil
 }

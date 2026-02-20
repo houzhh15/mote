@@ -36,159 +36,23 @@ body {
   transition: background-color 0.2s, color 0.2s;
 }
 
-/* Main content area background */
-:root[data-theme="dark"] .ant-layout,
-html.dark .ant-layout {
-  background-color: var(--content-bg) !important;
-}
+/*
+ * NOTE: Ant Design 5 darkAlgorithm (configured in ThemeContext) handles
+ * dark mode for all ant-* components automatically. Do NOT add !important
+ * overrides for .ant-input, .ant-card, .ant-modal, .ant-table, etc.
+ * Only override custom (non-ant) classes below.
+ */
 
-:root[data-theme="dark"] .ant-layout-content,
-html.dark .ant-layout-content {
-  background-color: var(--content-bg) !important;
-}
-
-/* Dark mode for common page patterns */
+/* Dark mode for custom page patterns */
 :root[data-theme="dark"] .page-header,
 html.dark .page-header {
-  background-color: var(--content-bg) !important;
-  border-color: var(--border-color) !important;
+  background-color: var(--content-bg);
+  border-color: var(--border-color);
 }
 
-/* Dark mode for new-chat-page specifically */
 :root[data-theme="dark"] .new-chat-page,
 html.dark .new-chat-page {
-  background-color: var(--content-bg) !important;
-}
-
-/* Dark mode for Ant Design components */
-:root[data-theme="dark"] .ant-input,
-:root[data-theme="dark"] .ant-input-textarea textarea,
-:root[data-theme="dark"] .ant-select-selector,
-html.dark .ant-input,
-html.dark .ant-input-textarea textarea,
-html.dark .ant-select-selector {
-  background-color: var(--input-bg) !important;
-  border-color: var(--border-color) !important;
-  color: var(--text-color) !important;
-}
-
-:root[data-theme="dark"] .ant-input::placeholder,
-:root[data-theme="dark"] .ant-input-textarea textarea::placeholder,
-html.dark .ant-input::placeholder,
-html.dark .ant-input-textarea textarea::placeholder {
-  color: var(--text-secondary) !important;
-}
-
-:root[data-theme="dark"] .ant-card,
-html.dark .ant-card {
-  background-color: var(--card-bg) !important;
-  border-color: var(--border-color) !important;
-}
-
-:root[data-theme="dark"] .ant-card-head,
-html.dark .ant-card-head {
-  border-color: var(--border-color) !important;
-}
-
-:root[data-theme="dark"] .ant-btn-default,
-html.dark .ant-btn-default {
-  background-color: var(--input-bg) !important;
-  border-color: var(--border-color) !important;
-  color: var(--text-color) !important;
-}
-
-:root[data-theme="dark"] .ant-modal-content,
-:root[data-theme="dark"] .ant-modal-header,
-html.dark .ant-modal-content,
-html.dark .ant-modal-header {
-  background-color: var(--card-bg) !important;
-}
-
-:root[data-theme="dark"] .ant-modal-title,
-html.dark .ant-modal-title {
-  color: var(--text-color) !important;
-}
-
-:root[data-theme="dark"] .ant-typography,
-html.dark .ant-typography {
-  color: var(--text-color) !important;
-}
-
-:root[data-theme="dark"] .ant-typography.ant-typography-secondary,
-html.dark .ant-typography.ant-typography-secondary {
-  color: var(--text-secondary) !important;
-}
-
-:root[data-theme="dark"] .ant-table,
-:root[data-theme="dark"] .ant-table-thead > tr > th,
-:root[data-theme="dark"] .ant-table-tbody > tr > td,
-html.dark .ant-table,
-html.dark .ant-table-thead > tr > th,
-html.dark .ant-table-tbody > tr > td {
-  background-color: var(--card-bg) !important;
-  border-color: var(--border-color) !important;
-  color: var(--text-color) !important;
-}
-
-:root[data-theme="dark"] .ant-table-tbody > tr:hover > td,
-html.dark .ant-table-tbody > tr:hover > td {
-  background-color: var(--hover-bg) !important;
-}
-
-:root[data-theme="dark"] .ant-descriptions-bordered .ant-descriptions-item-label,
-:root[data-theme="dark"] .ant-descriptions-bordered .ant-descriptions-item-content,
-html.dark .ant-descriptions-bordered .ant-descriptions-item-label,
-html.dark .ant-descriptions-bordered .ant-descriptions-item-content {
-  background-color: var(--card-bg) !important;
-  border-color: var(--border-color) !important;
-}
-
-:root[data-theme="dark"] .ant-select-dropdown,
-html.dark .ant-select-dropdown {
-  background-color: var(--card-bg) !important;
-}
-
-:root[data-theme="dark"] .ant-select-item,
-html.dark .ant-select-item {
-  color: var(--text-color) !important;
-}
-
-:root[data-theme="dark"] .ant-select-item-option-active,
-:root[data-theme="dark"] .ant-select-item-option-selected,
-html.dark .ant-select-item-option-active,
-html.dark .ant-select-item-option-selected {
-  background-color: var(--hover-bg) !important;
-}
-
-:root[data-theme="dark"] .ant-dropdown-menu,
-html.dark .ant-dropdown-menu {
-  background-color: var(--card-bg) !important;
-}
-
-:root[data-theme="dark"] .ant-dropdown-menu-item,
-html.dark .ant-dropdown-menu-item {
-  color: var(--text-color) !important;
-}
-
-:root[data-theme="dark"] .ant-dropdown-menu-item:hover,
-html.dark .ant-dropdown-menu-item:hover {
-  background-color: var(--hover-bg) !important;
-}
-
-:root[data-theme="dark"] .ant-message-notice-content,
-html.dark .ant-message-notice-content {
-  background-color: var(--card-bg) !important;
-  color: var(--text-color) !important;
-}
-
-:root[data-theme="dark"] .ant-popover-inner,
-html.dark .ant-popover-inner {
-  background-color: var(--card-bg) !important;
-}
-
-:root[data-theme="dark"] .ant-tooltip-inner,
-html.dark .ant-tooltip-inner {
-  background-color: var(--content-bg-secondary) !important;
+  background-color: var(--content-bg);
 }
 
 .mote-input textarea::placeholder {

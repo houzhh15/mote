@@ -2,14 +2,14 @@
 // CronPage - Shared cron jobs management page
 // ================================================================
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Typography, List, Card, Tag, Button, Space, Spin, Empty, message, Switch, Modal, Form, Input, Select, TimePicker, Radio, Checkbox, Tooltip, theme } from 'antd';
-import { PlusOutlined, DeleteOutlined, ClockCircleOutlined, EditOutlined, GithubOutlined, QuestionCircleOutlined } from '@ant-design/icons';
+import { PlusOutlined, DeleteOutlined, ClockCircleOutlined, EditOutlined, GithubOutlined, QuestionCircleOutlined, MessageOutlined, LoadingOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { useAPI } from '../context/APIContext';
 import { OllamaIcon } from '../components/OllamaIcon';
 import { MinimaxIcon } from '../components/MinimaxIcon';
-import type { CronJob, Model } from '../types';
+import type { CronJob, CronExecutingJob, Model } from '../types';
 
 const { Text } = Typography;
 
@@ -40,8 +40,8 @@ const parseCronToUI = (cron: string): { type: ScheduleType; time?: dayjs.Dayjs; 
 
   const [minute, hour, dayOfMonth, month, dayOfWeek] = parts;
 
-  // 每分钟: * * * * *
-  if (minute === '*' && hour === '*' && dayOfMonth === '*' && month === '*' && dayOfWeek === '*') {
+  // 每5分钟: */5 * * * *
+  if (minute === '*/5' && hour === '*' && dayOfMonth === '*' && month === '*' && dayOfWeek === '*') {
     return { type: 'every-minute' };
   }
 
@@ -76,7 +76,7 @@ const uiToCron = (type: ScheduleType, time?: dayjs.Dayjs, weekdays?: number[], m
 
   switch (type) {
     case 'every-minute':
-      return '* * * * *';
+      return '*/5 * * * *';
     case 'hourly':
       return `${minute} * * * *`;
     case 'daily':
@@ -95,7 +95,7 @@ const getScheduleDescription = (type: ScheduleType, time?: dayjs.Dayjs, weekdays
   const timeStr = time ? time.format('HH:mm') : '09:00';
   switch (type) {
     case 'every-minute':
-      return '每分钟执行';
+      return '每5分钟执行';
     case 'hourly':
       return `每小时的第 ${time?.minute() || 0} 分执行`;
     case 'daily':
@@ -121,7 +121,11 @@ const getProviderFromModel = (model?: string): 'copilot' | 'ollama' | 'minimax' 
   return 'copilot';
 };
 
-export const CronPage: React.FC = () => {
+interface CronPageProps {
+  onSelectSession?: (sessionId: string) => void;
+}
+
+export const CronPage: React.FC<CronPageProps> = ({ onSelectSession }) => {
   const api = useAPI();
   const { token } = theme.useToken();
   const [jobs, setJobs] = useState<CronJob[]>([]);
@@ -129,7 +133,9 @@ export const CronPage: React.FC = () => {
   const [modalVisible, setModalVisible] = useState(false);
   const [editingJob, setEditingJob] = useState<CronJob | null>(null);
   const [models, setModels] = useState<Model[]>([]);
+  const [executingJobs, setExecutingJobs] = useState<Map<string, CronExecutingJob>>(new Map());
   const [form] = Form.useForm();
+  const executingPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const fetchJobs = async () => {
     setLoading(true);
@@ -150,6 +156,20 @@ export const CronPage: React.FC = () => {
       setModels(response.models || []);
     } catch (error) {
       console.error('Failed to load models:', error);
+    }
+  };
+
+  const fetchExecuting = async () => {
+    if (!api.getCronExecuting) return;
+    try {
+      const executing = await api.getCronExecuting();
+      const map = new Map<string, CronExecutingJob>();
+      for (const ej of executing) {
+        map.set(ej.name, ej);
+      }
+      setExecutingJobs(map);
+    } catch {
+      // silently ignore polling errors
     }
   };
 
@@ -287,6 +307,12 @@ export const CronPage: React.FC = () => {
   useEffect(() => {
     fetchJobs();
     loadModels();
+    fetchExecuting();
+    // Poll executing status every 3 seconds
+    executingPollRef.current = setInterval(fetchExecuting, 3000);
+    return () => {
+      if (executingPollRef.current) clearInterval(executingPollRef.current);
+    };
   }, []);
 
   const grouped = getModelsByProvider();
@@ -312,15 +338,24 @@ export const CronPage: React.FC = () => {
         ) : (
           <List
             dataSource={jobs}
-            renderItem={(job) => (
+            renderItem={(job) => {
+              const executing = executingJobs.get(job.name);
+              const sessionId = job.session_id || `cron-${job.name}`;
+              return (
               <Card size="small" style={{ marginBottom: 12 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                  <div style={{ flex: 1 }}>
+                  <div style={{ flex: 1, minWidth: 0, overflow: 'hidden' }}>
                     <div style={{ marginBottom: 8, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
                       <Text strong style={{ fontSize: 13 }}>{job.name}</Text>
-                      <Tag color={job.enabled ? 'green' : 'default'} style={{ fontSize: 11 }}>
-                        {job.enabled ? '运行中' : '已停止'}
-                      </Tag>
+                      {executing ? (
+                        <Tag color="processing" icon={<LoadingOutlined />} style={{ fontSize: 11 }}>
+                          执行中 ({executing.running_for}s)
+                        </Tag>
+                      ) : (
+                        <Tag color={job.enabled ? 'green' : 'default'} style={{ fontSize: 11 }}>
+                          {job.enabled ? '已启用' : '已停止'}
+                        </Tag>
+                      )}
                       {job.model && (
                         <Tag 
                           color={getProviderFromModel(job.model) === 'ollama' ? 'orange' : getProviderFromModel(job.model) === 'minimax' ? 'purple' : 'blue'}
@@ -342,9 +377,11 @@ export const CronPage: React.FC = () => {
                         </Text>
                       </Tooltip>
                     </div>
-                    <Text ellipsis style={{ color: '#666', fontSize: 12 }}>{job.prompt}</Text>
+                    <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      <Text style={{ color: '#666', fontSize: 12 }}>{job.prompt}</Text>
+                    </div>
                     {job.workspace_path && (
-                      <div style={{ marginTop: 4 }}>
+                      <div style={{ marginTop: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         <Text type="secondary" style={{ fontSize: 11 }}>
                           📂 {job.workspace_alias ? `${job.workspace_alias} (${job.workspace_path})` : job.workspace_path}
                         </Text>
@@ -359,6 +396,16 @@ export const CronPage: React.FC = () => {
                     )}
                   </div>
                   <Space size={4}>
+                    {onSelectSession && (
+                      <Tooltip title="查看会话记录">
+                        <Button
+                          type="text"
+                          size="small"
+                          icon={<MessageOutlined />}
+                          onClick={() => onSelectSession(sessionId)}
+                        />
+                      </Tooltip>
+                    )}
                     <Switch
                       size="small"
                       checked={job.enabled}
@@ -380,7 +427,8 @@ export const CronPage: React.FC = () => {
                   </Space>
                 </div>
               </Card>
-            )}
+              );
+            }}
           />
         )}
       </Spin>
@@ -411,7 +459,7 @@ export const CronPage: React.FC = () => {
           >
             <Form.Item name="scheduleType" noStyle initialValue="daily">
               <Radio.Group style={{ marginBottom: 12 }}>
-                <Radio.Button value="every-minute">每分钟</Radio.Button>
+                <Radio.Button value="every-minute">每5分钟</Radio.Button>
                 <Radio.Button value="hourly">每小时</Radio.Button>
                 <Radio.Button value="daily">每天</Radio.Button>
                 <Radio.Button value="weekly">每周</Radio.Button>
@@ -427,7 +475,7 @@ export const CronPage: React.FC = () => {
                 if (scheduleType === 'every-minute') {
                   return (
                     <Text type="secondary" style={{ display: 'block', marginTop: 8 }}>
-                      任务将每分钟执行一次
+                      任务将每5分钟执行一次
                     </Text>
                   );
                 }

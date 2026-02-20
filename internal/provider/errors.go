@@ -1,7 +1,11 @@
 // Package provider defines the LLM provider interface and types.
 package provider
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+	"strings"
+)
 
 // ErrorCode defines Provider error codes
 type ErrorCode string
@@ -20,9 +24,10 @@ const (
 	ErrCodeModelNotFound      ErrorCode = "MODEL_NOT_FOUND"     // Requested model not found
 
 	// Network and request
-	ErrCodeNetworkError   ErrorCode = "NETWORK_ERROR"   // Network connectivity issues
-	ErrCodeInvalidRequest ErrorCode = "INVALID_REQUEST" // Malformed request
-	ErrCodeTimeout        ErrorCode = "TIMEOUT"         // Request timeout
+	ErrCodeNetworkError          ErrorCode = "NETWORK_ERROR"           // Network connectivity issues
+	ErrCodeInvalidRequest        ErrorCode = "INVALID_REQUEST"         // Malformed request
+	ErrCodeTimeout               ErrorCode = "TIMEOUT"                 // Request timeout
+	ErrCodeContextWindowExceeded ErrorCode = "CONTEXT_WINDOW_EXCEEDED" // Input exceeds model context window
 
 	// Unknown
 	ErrCodeUnknown ErrorCode = "UNKNOWN" // Unclassified error
@@ -86,4 +91,39 @@ func NewProviderErrorWithRetryAfter(code ErrorCode, message, provider string, re
 		Retryable:  true,
 		RetryAfter: retryAfter,
 	}
+}
+
+// IsContextWindowExceeded checks if the error indicates that the input
+// exceeded the model's context window limit.  It first checks for a typed
+// ProviderError with ErrCodeContextWindowExceeded, then falls back to
+// keyword matching on the error message for untyped errors.
+func IsContextWindowExceeded(err error) bool {
+	if err == nil {
+		return false
+	}
+	var pe *ProviderError
+	if errors.As(err, &pe) {
+		return pe.Code == ErrCodeContextWindowExceeded
+	}
+	// Fallback: keyword matching for providers that don't return typed errors
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "context window") ||
+		strings.Contains(msg, "context length exceeded") ||
+		strings.Contains(msg, "maximum context length") ||
+		strings.Contains(msg, "token limit exceeded") ||
+		strings.Contains(msg, "too many tokens")
+}
+
+// IsRetryable checks if the error is a transient provider error that
+// should be automatically retried (e.g., empty response, temporary
+// service unavailability).
+func IsRetryable(err error) bool {
+	if err == nil {
+		return false
+	}
+	var pe *ProviderError
+	if errors.As(err, &pe) {
+		return pe.Retryable
+	}
+	return false
 }

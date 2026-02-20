@@ -44,6 +44,7 @@ type RouterDeps struct {
 	Runner           *runner.Runner
 	Tools            *tools.Registry
 	Memory           *memory.MemoryIndex
+	MemoryManager    *memory.MemoryManager // New: MemoryManager replaces MemoryIndex
 	MCPClient        *client.Manager
 	MCPServer        *server.Server
 	DB               *storage.DB
@@ -64,6 +65,7 @@ type Router struct {
 	runner           *runner.Runner
 	tools            *tools.Registry
 	memory           *memory.MemoryIndex
+	memoryManager    *memory.MemoryManager // New: MemoryManager replaces MemoryIndex
 	mcpClient        *client.Manager
 	mcpServer        *server.Server
 	db               *storage.DB
@@ -90,6 +92,7 @@ func NewRouter(deps *RouterDeps) *Router {
 		runner:           deps.Runner,
 		tools:            deps.Tools,
 		memory:           deps.Memory,
+		memoryManager:    deps.MemoryManager,
 		mcpClient:        deps.MCPClient,
 		mcpServer:        deps.MCPServer,
 		db:               deps.DB,
@@ -124,6 +127,12 @@ func (r *Router) SetMCPClient(mcpClient *client.Manager) {
 // SetMemory updates the memory index dependency.
 func (r *Router) SetMemory(m *memory.MemoryIndex) {
 	r.memory = m
+}
+
+// SetMemoryManager updates the memory manager dependency.
+// When set, the new MemoryManager is used for search/add operations.
+func (r *Router) SetMemoryManager(m *memory.MemoryManager) {
+	r.memoryManager = m
 }
 
 // SetCronScheduler updates the cron scheduler dependency.
@@ -218,6 +227,7 @@ func (r *Router) RegisterRoutes(router *mux.Router) {
 	v1.HandleFunc("/cron/jobs/{name}", r.HandleUpdateCronJob).Methods(http.MethodPut)
 	v1.HandleFunc("/cron/jobs/{name}", r.HandleDeleteCronJob).Methods(http.MethodDelete)
 	v1.HandleFunc("/cron/jobs/{name}/run", r.HandleRunCronJob).Methods(http.MethodPost)
+	v1.HandleFunc("/cron/executing", r.HandleGetExecutingJobs).Methods(http.MethodGet)
 	v1.HandleFunc("/cron/history", r.HandleCronHistory).Methods(http.MethodGet)
 
 	// Config

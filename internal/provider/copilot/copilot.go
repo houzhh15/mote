@@ -621,17 +621,17 @@ func (p *CopilotProvider) parseAPIError(statusCode int, apiErr apiErrorResponse)
 		}
 	case "context_length_exceeded":
 		return &provider.ProviderError{
-			Code:      provider.ErrCodeInvalidRequest,
+			Code:      provider.ErrCodeContextWindowExceeded,
 			Message:   fmt.Sprintf("上下文长度超限: %s", errMsg),
 			Provider:  "copilot",
-			Retryable: false,
+			Retryable: true,
 		}
 	case "max_tokens_exceeded", "tokens_exceeded":
 		return &provider.ProviderError{
-			Code:      provider.ErrCodeInvalidRequest,
+			Code:      provider.ErrCodeContextWindowExceeded,
 			Message:   fmt.Sprintf("Token 数量超限: %s", errMsg),
 			Provider:  "copilot",
-			Retryable: false,
+			Retryable: true,
 		}
 	case "rate_limit_exceeded":
 		return &provider.ProviderError{

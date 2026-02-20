@@ -559,6 +559,19 @@ type CronHistoryResponse struct {
 	History []CronHistoryEntry `json:"history"`
 }
 
+// CronExecutingJob represents a currently executing cron job.
+type CronExecutingJob struct {
+	Name       string `json:"name"`
+	SessionID  string `json:"session_id"`
+	StartedAt  string `json:"started_at"`
+	RunningFor int    `json:"running_for"` // seconds
+}
+
+// CronExecutingResponse represents the response for currently executing cron jobs.
+type CronExecutingResponse struct {
+	Jobs []CronExecutingJob `json:"jobs"`
+}
+
 // =============================================================================
 // UI API Models
 // =============================================================================

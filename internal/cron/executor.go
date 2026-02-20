@@ -16,6 +16,13 @@ type Runner interface {
 	Run(ctx context.Context, prompt string, opts ...interface{}) (string, error)
 }
 
+// CancellableRunner is an optional interface that runners can implement
+// to support forceful cancellation of stuck sessions.
+type CancellableRunner interface {
+	Runner
+	CancelSession(sessionID string)
+}
+
 // ToolRegistry provides access to registered tools.
 type ToolRegistry interface {
 	Execute(ctx context.Context, name string, args map[string]interface{}) (interface{}, error)
@@ -55,7 +62,7 @@ type ExecutorConfig struct {
 // DefaultExecutorConfig returns default executor configuration.
 func DefaultExecutorConfig() ExecutorConfig {
 	return ExecutorConfig{
-		Timeout:     5 * time.Minute,
+		Timeout:     30 * time.Minute,
 		RetryPolicy: DefaultRetryPolicy(),
 	}
 }
@@ -221,9 +228,13 @@ func (e *Executor) executePrompt(ctx context.Context, job *Job) (string, error) 
 		return "", NonRetryable(fmt.Errorf("prompt is required"))
 	}
 
-	// Pass derived session ID to runner for workspace-aware execution
+	// Pass derived session ID and per-job model to runner for workspace-aware execution
 	sessionID := deriveCronSessionID(job.Name)
-	result, err := e.runner.Run(ctx, payload.Prompt, sessionID)
+	opts := []interface{}{sessionID}
+	if payload.Model != "" {
+		opts = append(opts, payload.Model)
+	}
+	result, err := e.runner.Run(ctx, payload.Prompt, opts...)
 	if err != nil {
 		return "", err
 	}

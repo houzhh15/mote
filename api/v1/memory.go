@@ -16,7 +16,7 @@ import (
 
 // HandleMemorySearch searches memories by semantic similarity.
 func (r *Router) HandleMemorySearch(w http.ResponseWriter, req *http.Request) {
-	if r.memory == nil {
+	if r.memory == nil && r.memoryManager == nil {
 		handlers.SendError(w, http.StatusServiceUnavailable, ErrCodeServiceUnavailable, "Memory index not available")
 		return
 	}
@@ -38,7 +38,22 @@ func (r *Router) HandleMemorySearch(w http.ResponseWriter, req *http.Request) {
 	}
 
 	ctx := req.Context()
-	results, err := r.memory.Search(ctx, searchReq.Query, topK)
+
+	// Use MemoryManager if available, else fall back to legacy MemoryIndex
+	var results []memory.SearchResult
+	var err error
+	if r.memoryManager != nil {
+		opts := memory.ExtendedSearchOptions{
+			SearchOptions: memory.SearchOptions{TopK: topK},
+			Mode:          memory.SearchModeAuto,
+		}
+		if searchReq.MinImportance > 0 {
+			opts.ImportanceMin = searchReq.MinImportance
+		}
+		results, err = r.memoryManager.Search(ctx, searchReq.Query, opts)
+	} else {
+		results, err = r.memory.Search(ctx, searchReq.Query, topK)
+	}
 	if err != nil {
 		handlers.SendError(w, http.StatusInternalServerError, ErrCodeInternalError, err.Error())
 		return
@@ -92,7 +107,7 @@ func (r *Router) HandleMemorySearch(w http.ResponseWriter, req *http.Request) {
 
 // HandleAddMemory adds a new memory entry.
 func (r *Router) HandleAddMemory(w http.ResponseWriter, req *http.Request) {
-	if r.memory == nil {
+	if r.memory == nil && r.memoryManager == nil {
 		handlers.SendError(w, http.StatusServiceUnavailable, ErrCodeServiceUnavailable, "Memory index not available")
 		return
 	}
@@ -141,7 +156,13 @@ func (r *Router) HandleAddMemory(w http.ResponseWriter, req *http.Request) {
 		CaptureMethod: memory.CaptureMethodManual,
 	}
 
-	if err := r.memory.Add(ctx, entry); err != nil {
+	// Use MemoryManager if available, else fall back to legacy MemoryIndex
+	if r.memoryManager != nil {
+		if err := r.memoryManager.Add(ctx, entry); err != nil {
+			handlers.SendError(w, http.StatusInternalServerError, ErrCodeInternalError, err.Error())
+			return
+		}
+	} else if err := r.memory.Add(ctx, entry); err != nil {
 		handlers.SendError(w, http.StatusInternalServerError, ErrCodeInternalError, err.Error())
 		return
 	}
@@ -154,7 +175,7 @@ func (r *Router) HandleAddMemory(w http.ResponseWriter, req *http.Request) {
 
 // HandleDeleteMemory deletes a memory entry.
 func (r *Router) HandleDeleteMemory(w http.ResponseWriter, req *http.Request) {
-	if r.memory == nil {
+	if r.memory == nil && r.memoryManager == nil {
 		handlers.SendError(w, http.StatusServiceUnavailable, ErrCodeServiceUnavailable, "Memory index not available")
 		return
 	}
@@ -163,7 +184,13 @@ func (r *Router) HandleDeleteMemory(w http.ResponseWriter, req *http.Request) {
 	id := vars["id"]
 
 	ctx := req.Context()
-	if err := r.memory.Delete(ctx, id); err != nil {
+	var err error
+	if r.memoryManager != nil {
+		err = r.memoryManager.Delete(ctx, id)
+	} else {
+		err = r.memory.Delete(ctx, id)
+	}
+	if err != nil {
 		handlers.SendError(w, http.StatusNotFound, ErrCodeNotFound, "Memory not found")
 		return
 	}
@@ -180,7 +207,7 @@ type UpdateMemoryRequest struct {
 
 // HandleUpdateMemory updates an existing memory entry.
 func (r *Router) HandleUpdateMemory(w http.ResponseWriter, req *http.Request) {
-	if r.memory == nil {
+	if r.memory == nil && r.memoryManager == nil {
 		handlers.SendError(w, http.StatusServiceUnavailable, ErrCodeServiceUnavailable, "Memory index not available")
 		return
 	}
@@ -206,7 +233,13 @@ func (r *Router) HandleUpdateMemory(w http.ResponseWriter, req *http.Request) {
 	ctx := req.Context()
 
 	// Get existing entry to preserve fields
-	existing, err := r.memory.GetByID(ctx, id)
+	var existing *memory.MemoryEntry
+	var err error
+	if r.memoryManager != nil {
+		existing, err = r.memoryManager.GetByID(ctx, id)
+	} else {
+		existing, err = r.memory.GetByID(ctx, id)
+	}
 	if err != nil {
 		if err == memory.ErrMemoryNotFound {
 			handlers.SendError(w, http.StatusNotFound, ErrCodeNotFound, "Memory not found")
@@ -226,14 +259,24 @@ func (r *Router) HandleUpdateMemory(w http.ResponseWriter, req *http.Request) {
 	}
 
 	// Delete old and add updated (since we don't have a direct update method)
-	if err := r.memory.Delete(ctx, id); err != nil {
-		handlers.SendError(w, http.StatusInternalServerError, ErrCodeInternalError, err.Error())
-		return
-	}
-
-	if err := r.memory.Add(ctx, *existing); err != nil {
-		handlers.SendError(w, http.StatusInternalServerError, ErrCodeInternalError, err.Error())
-		return
+	if r.memoryManager != nil {
+		if err := r.memoryManager.Delete(ctx, id); err != nil {
+			handlers.SendError(w, http.StatusInternalServerError, ErrCodeInternalError, err.Error())
+			return
+		}
+		if err := r.memoryManager.Add(ctx, *existing); err != nil {
+			handlers.SendError(w, http.StatusInternalServerError, ErrCodeInternalError, err.Error())
+			return
+		}
+	} else {
+		if err := r.memory.Delete(ctx, id); err != nil {
+			handlers.SendError(w, http.StatusInternalServerError, ErrCodeInternalError, err.Error())
+			return
+		}
+		if err := r.memory.Add(ctx, *existing); err != nil {
+			handlers.SendError(w, http.StatusInternalServerError, ErrCodeInternalError, err.Error())
+			return
+		}
 	}
 
 	handlers.SendJSON(w, http.StatusOK, MemoryEntryResponse{
@@ -249,7 +292,7 @@ func (r *Router) HandleUpdateMemory(w http.ResponseWriter, req *http.Request) {
 
 // HandleGetMemory retrieves a single memory entry by ID.
 func (r *Router) HandleGetMemory(w http.ResponseWriter, req *http.Request) {
-	if r.memory == nil {
+	if r.memory == nil && r.memoryManager == nil {
 		handlers.SendError(w, http.StatusServiceUnavailable, ErrCodeServiceUnavailable, "Memory index not available")
 		return
 	}
@@ -262,7 +305,13 @@ func (r *Router) HandleGetMemory(w http.ResponseWriter, req *http.Request) {
 	}
 
 	ctx := req.Context()
-	entry, err := r.memory.GetByID(ctx, id)
+	var entry *memory.MemoryEntry
+	var err error
+	if r.memoryManager != nil {
+		entry, err = r.memoryManager.GetByID(ctx, id)
+	} else {
+		entry, err = r.memory.GetByID(ctx, id)
+	}
 	if err != nil {
 		if err == memory.ErrMemoryNotFound {
 			handlers.SendError(w, http.StatusNotFound, ErrCodeNotFound, "Memory not found")
@@ -286,7 +335,7 @@ func (r *Router) HandleGetMemory(w http.ResponseWriter, req *http.Request) {
 
 // HandleListMemory returns all memories with pagination.
 func (r *Router) HandleListMemory(w http.ResponseWriter, req *http.Request) {
-	if r.memory == nil {
+	if r.memory == nil && r.memoryManager == nil {
 		handlers.SendError(w, http.StatusServiceUnavailable, ErrCodeServiceUnavailable, "Memory index not available")
 		return
 	}
@@ -311,13 +360,25 @@ func (r *Router) HandleListMemory(w http.ResponseWriter, req *http.Request) {
 	ctx := req.Context()
 
 	// Get total count
-	total, err := r.memory.Count(ctx)
-	if err != nil {
-		handlers.SendError(w, http.StatusInternalServerError, ErrCodeInternalError, err.Error())
+	var total int
+	var totalErr error
+	if r.memoryManager != nil {
+		total, totalErr = r.memoryManager.Count(ctx)
+	} else {
+		total, totalErr = r.memory.Count(ctx)
+	}
+	if totalErr != nil {
+		handlers.SendError(w, http.StatusInternalServerError, ErrCodeInternalError, totalErr.Error())
 		return
 	}
 
-	results, err := r.memory.List(ctx, limit, offset)
+	var results []memory.SearchResult
+	var err error
+	if r.memoryManager != nil {
+		results, err = r.memoryManager.List(ctx, limit, offset)
+	} else {
+		results, err = r.memory.List(ctx, limit, offset)
+	}
 	if err != nil {
 		handlers.SendError(w, http.StatusInternalServerError, ErrCodeInternalError, err.Error())
 		return
@@ -369,7 +430,7 @@ type Deleter interface {
 
 // HandleMemorySync handles POST /memory/sync - rebuilds index from markdown files.
 func (r *Router) HandleMemorySync(w http.ResponseWriter, req *http.Request) {
-	if r.memory == nil {
+	if r.memory == nil && r.memoryManager == nil {
 		handlers.SendError(w, http.StatusServiceUnavailable, ErrCodeServiceUnavailable, "Memory index not available")
 		return
 	}
@@ -381,6 +442,25 @@ func (r *Router) HandleMemorySync(w http.ResponseWriter, req *http.Request) {
 	_ = json.NewDecoder(req.Body).Decode(&syncReq)
 
 	ctx := req.Context()
+
+	// Use MemoryManager for full sync when available
+	if r.memoryManager != nil {
+		result, err := r.memoryManager.FullSync(ctx)
+		if err != nil {
+			handlers.SendError(w, http.StatusInternalServerError, ErrCodeInternalError, err.Error())
+			return
+		}
+		handlers.SendJSON(w, http.StatusOK, map[string]any{
+			"synced":   result.Created,
+			"updated":  result.Updated,
+			"deleted":  result.Deleted,
+			"errors":   result.Errors,
+			"duration": result.Duration.String(),
+			"status":   "ok",
+		})
+		return
+	}
+
 	count, err := r.memory.SyncFromMarkdown(ctx, syncReq.Force)
 	if err != nil {
 		handlers.SendError(w, http.StatusInternalServerError, ErrCodeInternalError, err.Error())
@@ -395,7 +475,7 @@ func (r *Router) HandleMemorySync(w http.ResponseWriter, req *http.Request) {
 
 // HandleGetDaily handles GET /memory/daily - gets today's or a specific date's log.
 func (r *Router) HandleGetDaily(w http.ResponseWriter, req *http.Request) {
-	if r.memory == nil {
+	if r.memory == nil && r.memoryManager == nil {
 		handlers.SendError(w, http.StatusServiceUnavailable, ErrCodeServiceUnavailable, "Memory index not available")
 		return
 	}
@@ -414,7 +494,12 @@ func (r *Router) HandleGetDaily(w http.ResponseWriter, req *http.Request) {
 		date = time.Now()
 	}
 
-	content, err := r.memory.GetDailyLog(req.Context(), date)
+	var content string
+	if r.memoryManager != nil {
+		content, err = r.memoryManager.GetDailyLog(req.Context(), date)
+	} else {
+		content, err = r.memory.GetDailyLog(req.Context(), date)
+	}
 	if err != nil {
 		handlers.SendError(w, http.StatusInternalServerError, ErrCodeInternalError, err.Error())
 		return
@@ -428,7 +513,7 @@ func (r *Router) HandleGetDaily(w http.ResponseWriter, req *http.Request) {
 
 // HandleAppendDaily handles POST /memory/daily - appends to today's log.
 func (r *Router) HandleAppendDaily(w http.ResponseWriter, req *http.Request) {
-	if r.memory == nil {
+	if r.memory == nil && r.memoryManager == nil {
 		handlers.SendError(w, http.StatusServiceUnavailable, ErrCodeServiceUnavailable, "Memory index not available")
 		return
 	}
@@ -447,7 +532,13 @@ func (r *Router) HandleAppendDaily(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	if err := r.memory.AppendDailyLog(req.Context(), appendReq.Content, appendReq.Section); err != nil {
+	var err error
+	if r.memoryManager != nil {
+		err = r.memoryManager.AppendDailyLog(req.Context(), appendReq.Content, appendReq.Section)
+	} else {
+		err = r.memory.AppendDailyLog(req.Context(), appendReq.Content, appendReq.Section)
+	}
+	if err != nil {
 		handlers.SendError(w, http.StatusInternalServerError, ErrCodeInternalError, err.Error())
 		return
 	}
@@ -460,7 +551,7 @@ func (r *Router) HandleAppendDaily(w http.ResponseWriter, req *http.Request) {
 
 // HandleMemoryExport handles GET /memory/export - exports memories.
 func (r *Router) HandleMemoryExport(w http.ResponseWriter, req *http.Request) {
-	if r.memory == nil {
+	if r.memory == nil && r.memoryManager == nil {
 		handlers.SendError(w, http.StatusServiceUnavailable, ErrCodeServiceUnavailable, "Memory index not available")
 		return
 	}
@@ -471,7 +562,13 @@ func (r *Router) HandleMemoryExport(w http.ResponseWriter, req *http.Request) {
 	}
 
 	ctx := req.Context()
-	entries, err := r.memory.List(ctx, 10000, 0) // Export up to 10k entries
+	var entries []memory.SearchResult
+	var err error
+	if r.memoryManager != nil {
+		entries, err = r.memoryManager.List(ctx, 10000, 0)
+	} else {
+		entries, err = r.memory.List(ctx, 10000, 0) // Export up to 10k entries
+	}
 	if err != nil {
 		handlers.SendError(w, http.StatusInternalServerError, ErrCodeInternalError, err.Error())
 		return
@@ -515,7 +612,7 @@ func (r *Router) HandleMemoryExport(w http.ResponseWriter, req *http.Request) {
 
 // HandleMemoryImport handles POST /memory/import - imports memories from file.
 func (r *Router) HandleMemoryImport(w http.ResponseWriter, req *http.Request) {
-	if r.memory == nil {
+	if r.memory == nil && r.memoryManager == nil {
 		handlers.SendError(w, http.StatusServiceUnavailable, ErrCodeServiceUnavailable, "Memory index not available")
 		return
 	}
@@ -548,7 +645,13 @@ func (r *Router) HandleMemoryImport(w http.ResponseWriter, req *http.Request) {
 			Content: m.Content,
 			Source:  source,
 		}
-		if err := r.memory.Add(ctx, entry); err != nil {
+		var addErr error
+		if r.memoryManager != nil {
+			addErr = r.memoryManager.Add(ctx, entry)
+		} else {
+			addErr = r.memory.Add(ctx, entry)
+		}
+		if addErr != nil {
 			// Log but continue importing
 			continue
 		}
@@ -564,7 +667,7 @@ func (r *Router) HandleMemoryImport(w http.ResponseWriter, req *http.Request) {
 
 // HandleBatchDelete handles DELETE /memory/batch - deletes multiple memories.
 func (r *Router) HandleBatchDelete(w http.ResponseWriter, req *http.Request) {
-	if r.memory == nil {
+	if r.memory == nil && r.memoryManager == nil {
 		handlers.SendError(w, http.StatusServiceUnavailable, ErrCodeServiceUnavailable, "Memory index not available")
 		return
 	}
@@ -586,7 +689,13 @@ func (r *Router) HandleBatchDelete(w http.ResponseWriter, req *http.Request) {
 	ctx := req.Context()
 	deleted := 0
 	for _, id := range deleteReq.IDs {
-		if err := r.memory.Delete(ctx, id); err == nil {
+		var delErr error
+		if r.memoryManager != nil {
+			delErr = r.memoryManager.Delete(ctx, id)
+		} else {
+			delErr = r.memory.Delete(ctx, id)
+		}
+		if delErr == nil {
 			deleted++
 		}
 	}
@@ -600,12 +709,50 @@ func (r *Router) HandleBatchDelete(w http.ResponseWriter, req *http.Request) {
 
 // HandleMemoryStats handles GET /memory/stats - returns memory statistics.
 func (r *Router) HandleMemoryStats(w http.ResponseWriter, req *http.Request) {
-	if r.memory == nil {
+	if r.memory == nil && r.memoryManager == nil {
 		handlers.SendError(w, http.StatusServiceUnavailable, ErrCodeServiceUnavailable, "Memory index not available")
 		return
 	}
 
 	ctx := req.Context()
+
+	// Use MemoryManager stats when available (includes system info)
+	if r.memoryManager != nil {
+		stats, err := r.memoryManager.Stats(ctx)
+		if err != nil {
+			handlers.SendError(w, http.StatusInternalServerError, ErrCodeInternalError, err.Error())
+			return
+		}
+		// Also compute per-category breakdown
+		entries, listErr := r.memoryManager.List(ctx, 100000, 0)
+		if listErr == nil {
+			byCategory := make(map[string]int)
+			byCaptureMethod := make(map[string]int)
+			autoCaptureToday := 0
+			today := time.Now().Truncate(24 * time.Hour)
+			for _, entry := range entries {
+				cat := entry.Category
+				if cat == "" {
+					cat = memory.CategoryOther
+				}
+				byCategory[cat]++
+				method := entry.CaptureMethod
+				if method == "" {
+					method = memory.CaptureMethodManual
+				}
+				byCaptureMethod[method]++
+				if method == memory.CaptureMethodAuto && !entry.CreatedAt.Before(today) {
+					autoCaptureToday++
+				}
+			}
+			stats["by_category"] = byCategory
+			stats["by_capture_method"] = byCaptureMethod
+			stats["auto_capture_today"] = autoCaptureToday
+			stats["total"] = len(entries)
+		}
+		handlers.SendJSON(w, http.StatusOK, stats)
+		return
+	}
 
 	// Get all memories to calculate stats
 	entries, err := r.memory.List(ctx, 100000, 0)

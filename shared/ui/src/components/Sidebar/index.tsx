@@ -3,7 +3,7 @@
  *
  * 组合 SidebarHeader/SidebarMenu/SessionList 三个子组件
  */
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { SidebarHeader } from './SidebarHeader';
 import { SidebarMenu, type PageKey } from './SidebarMenu';
 import { SessionList } from './SessionList';
@@ -32,7 +32,7 @@ export interface SidebarProps {
   refreshTrigger?: number;
 }
 
-export const Sidebar: React.FC<SidebarProps> = ({
+export const Sidebar = React.memo<SidebarProps>(({
   currentPage,
   currentSessionId,
   onNavigate,
@@ -47,53 +47,67 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [sessions, setSessions] = useState<Session[]>([]);
   const [loading, setLoading] = useState(false);
   const [searchKeyword, setSearchKeyword] = useState('');
+  const isMountedRef = useRef(true);
 
-  // 获取会话列表
-  const fetchSessions = async () => {
+  useEffect(() => {
+    return () => { isMountedRef.current = false; };
+  }, []);
+
+  // 获取会话列表 — 批量更新 (React 18 auto-batches in async too)
+  const fetchSessions = useCallback(async () => {
     setLoading(true);
     try {
       const data = await api.getSessions();
-      setSessions(data);
+      if (isMountedRef.current) {
+        setSessions(data);
+      }
     } catch (error) {
       console.error('Failed to fetch sessions:', error);
     } finally {
-      setLoading(false);
+      if (isMountedRef.current) {
+        setLoading(false);
+      }
     }
-  };
+  }, [api]);
 
   useEffect(() => {
     fetchSessions();
     // 每 30 秒刷新一次
     const interval = setInterval(fetchSessions, 30000);
     return () => clearInterval(interval);
-  }, []);
+  }, [fetchSessions]);
 
   // 监听 refreshTrigger 变化，触发刷新
   useEffect(() => {
     if (refreshTrigger !== undefined) {
       fetchSessions();
     }
-  }, [refreshTrigger]);
+  }, [refreshTrigger, fetchSessions]);
 
-  const handleNavigate = (page: PageKey) => {
-    onNavigate(page);
-  };
-
-  const handleSettingsClick = () => {
+  const handleSettingsClick = useCallback(() => {
     if (onSettingsClick) {
       onSettingsClick();
     } else {
       onNavigate('settings');
     }
-  };
+  }, [onSettingsClick, onNavigate]);
 
-  const handleSelectSession = (sessionId: string) => {
+  const handleSelectSession = useCallback((sessionId: string) => {
     onSelectSession?.(sessionId);
-  };
+  }, [onSelectSession]);
 
-  const handleSearchChange = (keyword: string) => {
-    setSearchKeyword(keyword);
-  };
+  const handleSessionDeleted = useCallback((sessionId: string) => {
+    fetchSessions();
+    onSessionDeleted?.(sessionId);
+  }, [fetchSessions, onSessionDeleted]);
+
+  const handleSessionRenamed = useCallback(() => {
+    fetchSessions();
+  }, [fetchSessions]);
+
+  const handleViewHistory = useCallback(() => {
+    onNavigate('sessions');
+  }, [onNavigate]);
 
   return (
     <div
@@ -103,7 +117,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     >
       <SidebarHeader
         searchKeyword={searchKeyword}
-        onSearchChange={handleSearchChange}
+        onSearchChange={setSearchKeyword}
         onSettingsClick={handleSettingsClick}
         collapsed={collapsed}
         onCollapse={onCollapse}
@@ -111,7 +125,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       <div className="sidebar-content">
         <SidebarMenu
           currentPage={currentPage}
-          onNavigate={handleNavigate}
+          onNavigate={onNavigate}
           collapsed={collapsed}
         />
         <SessionList
@@ -119,25 +133,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
           currentSessionId={currentSessionId}
           searchKeyword={searchKeyword}
           onSelectSession={handleSelectSession}
-          onSessionDeleted={(sessionId) => {
-            // 刷新会话列表
-            fetchSessions();
-            // 通知外部
-            onSessionDeleted?.(sessionId);
-          }}
-          onSessionRenamed={() => {
-            // 刷新会话列表以显示新名称
-            fetchSessions();
-          }}
+          onSessionDeleted={handleSessionDeleted}
+          onSessionRenamed={handleSessionRenamed}
           loading={loading}
           collapsed={collapsed}
-          onViewHistory={() => onNavigate('sessions')}
+          onViewHistory={handleViewHistory}
         />
       </div>
     </div>
   );
-};
-
+});
+Sidebar.displayName = 'Sidebar';
 // Re-export types and sub-components
 export type { PageKey } from './SidebarMenu';
 export { SidebarHeader } from './SidebarHeader';

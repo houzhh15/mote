@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/gorilla/mux"
 
@@ -238,6 +239,31 @@ func (r *Router) HandleCronHistory(w http.ResponseWriter, req *http.Request) {
 	})
 }
 
+// HandleGetExecutingJobs returns the list of currently executing cron jobs.
+func (r *Router) HandleGetExecutingJobs(w http.ResponseWriter, req *http.Request) {
+	if r.cronScheduler == nil {
+		handlers.SendJSON(w, http.StatusOK, CronExecutingResponse{Jobs: []CronExecutingJob{}})
+		return
+	}
+
+	executing := r.cronScheduler.GetExecutingJobs()
+	now := time.Now()
+	var jobs []CronExecutingJob
+	for _, ej := range executing {
+		jobs = append(jobs, CronExecutingJob{
+			Name:       ej.Name,
+			SessionID:  ej.SessionID,
+			StartedAt:  ej.StartedAt.Format("2006-01-02T15:04:05Z07:00"),
+			RunningFor: int(now.Sub(ej.StartedAt).Seconds()),
+		})
+	}
+	if jobs == nil {
+		jobs = []CronExecutingJob{}
+	}
+
+	handlers.SendJSON(w, http.StatusOK, CronExecutingResponse{Jobs: jobs})
+}
+
 // cronJobFromInternal converts internal cron.Job to API CronJob.
 func cronJobFromInternal(j *cron.Job) CronJob {
 	// Parse payload to extract prompt and model
@@ -258,6 +284,7 @@ func cronJobFromInternal(j *cron.Job) CronJob {
 		Prompt:         prompt,
 		Model:          model,
 		Enabled:        j.Enabled,
+		SessionID:      "cron-" + j.Name,
 		WorkspacePath:  j.WorkspacePath,
 		WorkspaceAlias: j.WorkspaceAlias,
 		LastRun:        j.LastRun,

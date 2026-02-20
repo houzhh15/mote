@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"mote/internal/memory"
 	"mote/internal/provider"
 )
 
@@ -20,24 +19,11 @@ Conversation to summarize:
 
 Provide a concise summary:`
 
-const extractKeyInfoPrompt = `Extract key facts, decisions, and learnings from this conversation that should be remembered long-term. Format as bullet points. Be concise and focus only on truly important information.
-
-Conversation:
-%s
-
-Key information to remember:`
-
-// MemoryFlusher is an interface for flushing memories before compaction.
-type MemoryFlusher interface {
-	AppendDailyLog(ctx context.Context, content, section string) error
-}
-
 // Compactor handles compression of conversation history.
 type Compactor struct {
 	config          CompactionConfig
 	provider        provider.Provider
 	counter         *TokenCounter
-	memoryFlusher   MemoryFlusher  // P1: Optional memory flusher for pre-compaction save
 	compactionCount map[string]int // session → compaction count
 }
 
@@ -131,7 +117,12 @@ func (c *Compactor) Compact(ctx context.Context, messages []provider.Message, pr
 	if keepCount > len(convMsgs) {
 		keepCount = len(convMsgs)
 	}
-	splitIdx := adjustKeepBoundary(convMsgs, len(convMsgs)-keepCount)
+	// Initial split index
+	rawSplitIdx := len(convMsgs) - keepCount
+
+	// Adjust boundary to avoid splitting tool call pairs
+	splitIdx := adjustKeepBoundary(convMsgs, rawSplitIdx)
+
 	keptMsgs := convMsgs[splitIdx:]
 	toCompact := convMsgs[:splitIdx]
 
@@ -169,12 +160,31 @@ func (c *Compactor) Compact(ctx context.Context, messages []provider.Message, pr
 // An optional provider override can be passed to use the session's provider.
 func (c *Compactor) CompactWithFallback(ctx context.Context, messages []provider.Message, provOverride ...provider.Provider) []provider.Message {
 	result, err := c.Compact(ctx, messages, provOverride...)
-	if err == nil {
+	if err == nil && c.hasConversationContent(result) {
 		return result
 	}
 
 	// Fallback to simple truncation
-	return c.truncate(messages)
+	truncated := c.truncate(messages)
+	if c.hasConversationContent(truncated) {
+		return truncated
+	}
+
+	// Safety net: if both compact and truncate produced invalid results,
+	// return the original messages unchanged.  Sending too many tokens is
+	// better than sending an invalid (empty) request.
+	return messages
+}
+
+// hasConversationContent checks that a message list contains at least one
+// user or assistant message, which is the minimum for a valid LLM request.
+func (c *Compactor) hasConversationContent(messages []provider.Message) bool {
+	for _, m := range messages {
+		if m.Role == provider.RoleUser || m.Role == provider.RoleAssistant {
+			return true
+		}
+	}
+	return false
 }
 
 // separateMessages splits messages into system and conversation messages.
@@ -243,9 +253,49 @@ func (c *Compactor) summarizeChunk(ctx context.Context, chunk []provider.Message
 	return resp.Content, nil
 }
 
+// truncateMessageContent truncates a single message's content to fit within
+// maxTokens, appending a truncation notice.  Returns a shallow copy.
+func (c *Compactor) truncateMessageContent(msg provider.Message, maxTokens int) provider.Message {
+	msgTokens := c.counter.EstimateMessages([]provider.Message{msg})
+	if msgTokens <= maxTokens || len(msg.Content) == 0 {
+		return msg
+	}
+
+	// Rough ratio: cut content proportionally.
+	ratio := float64(maxTokens) / float64(msgTokens)
+	if ratio > 0.95 {
+		return msg
+	}
+	cutLen := int(float64(len(msg.Content)) * ratio)
+	if cutLen < 200 {
+		cutLen = 200
+	}
+	if cutLen >= len(msg.Content) {
+		return msg
+	}
+
+	truncated := msg
+	truncated.Content = msg.Content[:cutLen] + "\n\n[... content truncated due to length ...]"
+	return truncated
+}
+
 // truncate performs simple truncation keeping recent messages.
+// It guarantees the result always contains at least the most recent user
+// message round (user + optional assistant/tool follow-ups) so the request
+// sent to the provider is never empty.
+//
+// Strategy:
+//  1. Walk backward through conversation messages, keeping as many as fit.
+//  2. If a single message is too large to fit, truncate its content instead
+//     of discarding it entirely.  This handles the common case of HTTP tool
+//     results containing huge web pages.
+//  3. As a last resort, force-keep the most recent round with truncation.
 func (c *Compactor) truncate(messages []provider.Message) []provider.Message {
 	systemMsgs, convMsgs := c.separateMessages(messages)
+
+	if len(convMsgs) == 0 {
+		return messages
+	}
 
 	// Calculate available space
 	systemTokens := c.counter.EstimateMessages(systemMsgs)
@@ -254,11 +304,28 @@ func (c *Compactor) truncate(messages []provider.Message) []provider.Message {
 		availableTokens = 1000
 	}
 
-	// Keep most recent messages that fit (walk backward, accumulate tokens)
+	// Maximum tokens a single message is allowed to consume.
+	// This prevents one huge tool result from eating all available space.
+	maxSingleMsgTokens := availableTokens / 2
+
+	// Keep most recent messages that fit (walk backward).
+	// Oversized messages are truncated to maxSingleMsgTokens before the
+	// fit check so they don't block subsequent (older) messages.
 	keptTokens := 0
 	splitIdx := len(convMsgs)
+	truncatedMap := make(map[int]provider.Message) // index → truncated copy
+
 	for i := len(convMsgs) - 1; i >= 0; i-- {
-		msgTokens := c.counter.EstimateMessages([]provider.Message{convMsgs[i]})
+		msg := convMsgs[i]
+		msgTokens := c.counter.EstimateMessages([]provider.Message{msg})
+
+		// If this single message exceeds the cap, truncate its content.
+		if msgTokens > maxSingleMsgTokens {
+			msg = c.truncateMessageContent(msg, maxSingleMsgTokens)
+			msgTokens = c.counter.EstimateMessages([]provider.Message{msg})
+			truncatedMap[i] = msg
+		}
+
 		if keptTokens+msgTokens > availableTokens {
 			break
 		}
@@ -268,78 +335,37 @@ func (c *Compactor) truncate(messages []provider.Message) []provider.Message {
 
 	// Adjust boundary to avoid splitting tool call pairs
 	splitIdx = adjustKeepBoundary(convMsgs, splitIdx)
-	keptMsgs := convMsgs[splitIdx:]
+
+	// Build kept messages, using truncated copies where available.
+	var keptMsgs []provider.Message
+	for i := splitIdx; i < len(convMsgs); i++ {
+		if tm, ok := truncatedMap[i]; ok {
+			keptMsgs = append(keptMsgs, tm)
+		} else {
+			keptMsgs = append(keptMsgs, convMsgs[i])
+		}
+	}
+
+	// Safety: if nothing fits even after truncation, force-keep the most
+	// recent complete conversation round with aggressive truncation.
+	if len(keptMsgs) == 0 {
+		roundStart := len(convMsgs) - 1
+		for roundStart > 0 && convMsgs[roundStart].Role != provider.RoleUser {
+			roundStart--
+		}
+		round := convMsgs[roundStart:]
+
+		maxPerMsg := availableTokens / len(round)
+		if maxPerMsg < 50 {
+			maxPerMsg = 50
+		}
+		for _, m := range round {
+			keptMsgs = append(keptMsgs, c.truncateMessageContent(m, maxPerMsg))
+		}
+	}
 
 	result := make([]provider.Message, 0, len(systemMsgs)+len(keptMsgs))
 	result = append(result, systemMsgs...)
 	result = append(result, keptMsgs...)
 	return result
-}
-
-// SetMemoryFlusher sets the memory flusher for pre-compaction saves.
-func (c *Compactor) SetMemoryFlusher(flusher MemoryFlusher) {
-	c.memoryFlusher = flusher
-}
-
-// SetMemoryIndex sets a MemoryIndex as the memory flusher.
-func (c *Compactor) SetMemoryIndex(m *memory.MemoryIndex) {
-	c.memoryFlusher = m
-}
-
-// CompactWithFlush extracts key info and saves to memory before compacting.
-// An optional provider override can be passed to use the session's provider.
-func (c *Compactor) CompactWithFlush(ctx context.Context, messages []provider.Message, provOverride ...provider.Provider) ([]provider.Message, error) {
-	var override provider.Provider
-	if len(provOverride) > 0 {
-		override = provOverride[0]
-	}
-	prov := c.resolveProvider(override)
-
-	// First, flush important info to memory if configured
-	if c.memoryFlusher != nil && c.config.FlushOnCompact {
-		_ = c.flushToMemory(ctx, messages, prov) // Ignore error - compaction should still proceed
-	}
-
-	// Then do normal compaction
-	return c.Compact(ctx, messages, prov)
-}
-
-// flushToMemory extracts key information and saves it to the daily log.
-func (c *Compactor) flushToMemory(ctx context.Context, messages []provider.Message, prov provider.Provider) error {
-	if prov == nil {
-		return nil
-	}
-
-	// Separate conversation messages (skip system)
-	_, convMsgs := c.separateMessages(messages)
-	if len(convMsgs) < 3 {
-		return nil // Not enough content to extract
-	}
-
-	// Format messages for extraction
-	var sb strings.Builder
-	for _, msg := range convMsgs {
-		sb.WriteString(fmt.Sprintf("[%s]: %s\n", msg.Role, msg.Content))
-	}
-
-	prompt := fmt.Sprintf(extractKeyInfoPrompt, sb.String())
-
-	req := provider.ChatRequest{
-		Messages: []provider.Message{
-			{Role: provider.RoleUser, Content: prompt},
-		},
-		MaxTokens: c.config.SummaryMaxTokens,
-	}
-
-	resp, err := prov.Chat(ctx, req)
-	if err != nil {
-		return fmt.Errorf("extract key info: %w", err)
-	}
-
-	if resp.Content == "" {
-		return nil
-	}
-
-	// Save to daily log
-	return c.memoryFlusher.AppendDailyLog(ctx, resp.Content, "压缩前提取")
 }

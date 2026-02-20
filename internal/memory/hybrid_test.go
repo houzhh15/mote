@@ -72,9 +72,9 @@ func TestDefaultHybridConfig(t *testing.T) {
 	if config.TextWeight != 0.3 {
 		t.Errorf("expected TextWeight 0.3, got %f", config.TextWeight)
 	}
-	// MinScore should be low (0.001) because RRF scores are small (max ~0.016 with k=60)
-	if config.MinScore != 0.001 {
-		t.Errorf("expected MinScore 0.001, got %f", config.MinScore)
+	// MinScore should filter low-relevance results; DefaultHybridConfig uses 0.005
+	if config.MinScore != 0.005 {
+		t.Errorf("expected MinScore 0.005, got %f", config.MinScore)
 	}
 	if config.RRFConstant != 60 {
 		t.Errorf("expected RRFConstant 60, got %d", config.RRFConstant)

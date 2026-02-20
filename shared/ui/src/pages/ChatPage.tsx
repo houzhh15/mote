@@ -4,7 +4,7 @@
 
 import React, { useState, useRef, useEffect, useCallback, useMemo, memo } from 'react';
 import { Input, Button, Typography, Space, Spin, message, Select, Tooltip, Collapse, Modal, Tag, theme, Dropdown } from 'antd';
-import { SendOutlined, ClearOutlined, PlusOutlined, ToolOutlined, FolderOutlined, FolderOpenOutlined, LinkOutlined, DisconnectOutlined, GithubOutlined, StopOutlined, CopyOutlined, EditOutlined, DeleteOutlined, ThunderboltOutlined, PauseOutlined, PlayCircleOutlined, CloseCircleFilled } from '@ant-design/icons';
+import { SendOutlined, ClearOutlined, PlusOutlined, ToolOutlined, FolderOutlined, FolderOpenOutlined, LinkOutlined, DisconnectOutlined, GithubOutlined, StopOutlined, CopyOutlined, EditOutlined, DeleteOutlined, ThunderboltOutlined, PauseOutlined, PlayCircleOutlined, CloseCircleFilled, ClockCircleOutlined, LoadingOutlined } from '@ant-design/icons';
 import { MinimaxIcon } from '../components/MinimaxIcon';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -18,7 +18,7 @@ import { FileSelector } from '../components/FileSelector';
 import type { FileSelectorMode } from '../components/FileSelector';
 import { OllamaIcon } from '../components/OllamaIcon';
 import { StatusIndicator, ErrorBanner } from '../components';
-import { useConnectionStatus, useHasConnectionIssues } from '../context/ConnectionStatusContext';
+import { useConnectionStatusSafe, useHasConnectionIssuesSafe } from '../context/ConnectionStatusContext';
 import moteLogo from '../assets/mote_logo.png';
 import userAvatar from '../assets/user.png';
 import type { Message, Model, Workspace, ErrorDetail, Skill, ReconfigureSessionResponse, ImageAttachment } from '../types';
@@ -290,6 +290,102 @@ const escapeHtml = (str: string): string => {
 };
 
 // ================================================================
+// ThinkingPanel - Fixed above input area, subscribes independently
+// ================================================================
+interface ThinkingPanelProps {
+  sessionId: string | undefined;
+  tokenColors: TokenColors;
+  effectiveTheme: string;
+  streaming: boolean;
+}
+
+const ThinkingPanel: React.FC<ThinkingPanelProps> = ({ sessionId, tokenColors, effectiveTheme, streaming }) => {
+  const chatManager = useChatManager();
+  const thinkingRef = useRef<HTMLDivElement>(null);
+  const thinkingFadeTimerRef = useRef<ReturnType<typeof setTimeout>>();
+  const thinkingDoneRef = useRef(false);
+
+  useEffect(() => {
+    if (!sessionId || !streaming) {
+      // Not streaming: hide immediately
+      if (thinkingRef.current) {
+        thinkingRef.current.style.display = 'none';
+      }
+      thinkingDoneRef.current = false;
+      return;
+    }
+
+    const unsubscribe = chatManager.subscribe(sessionId, (state) => {
+      if (!thinkingRef.current) return;
+
+      const thinkingText = state.currentThinking || '';
+      const thinkingSpan = thinkingRef.current.querySelector('.thinking-text');
+      if (thinkingSpan) {
+        thinkingSpan.textContent = thinkingText;
+      }
+
+      const hasThinking = !!(thinkingText && thinkingText.trim());
+
+      if (hasThinking && !state.thinkingDone) {
+        // Thinking in progress: show
+        if (thinkingFadeTimerRef.current) {
+          clearTimeout(thinkingFadeTimerRef.current);
+          thinkingFadeTimerRef.current = undefined;
+        }
+        thinkingDoneRef.current = false;
+        thinkingRef.current.style.display = 'block';
+        thinkingRef.current.style.opacity = '1';
+        thinkingRef.current.style.transition = '';
+      } else if (hasThinking && state.thinkingDone && !thinkingDoneRef.current) {
+        // Thinking just ended: fade out
+        thinkingDoneRef.current = true;
+        thinkingRef.current.style.transition = 'opacity 0.6s ease-out';
+        thinkingRef.current.style.opacity = '0';
+        thinkingFadeTimerRef.current = setTimeout(() => {
+          if (thinkingRef.current) {
+            thinkingRef.current.style.display = 'none';
+          }
+        }, 600);
+      } else if (!hasThinking) {
+        thinkingRef.current.style.display = 'none';
+      }
+    });
+
+    return () => {
+      unsubscribe();
+      if (thinkingFadeTimerRef.current) {
+        clearTimeout(thinkingFadeTimerRef.current);
+      }
+    };
+  }, [sessionId, streaming, chatManager]);
+
+  return (
+    <div
+      ref={thinkingRef}
+      style={{
+        display: 'none',
+        background: effectiveTheme === 'dark' ? '#2a2a2a' : '#fafafa',
+        color: tokenColors.colorTextSecondary,
+        padding: '6px 12px',
+        borderRadius: 8,
+        fontSize: 12,
+        fontStyle: 'italic',
+        marginBottom: 8,
+        borderLeft: `3px solid ${tokenColors.colorPrimary}`,
+        maxHeight: 120,
+        overflowY: 'auto',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', marginBottom: 2, fontWeight: 500, fontStyle: 'normal', fontSize: 11, opacity: 0.7 }}>
+        <Spin size="small" style={{ marginRight: 6 }} />
+        思考中...
+      </div>
+      <span className="thinking-text" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}></span>
+    </div>
+  );
+};
+
+// ================================================================
 // Streaming Content Component - Self-managed state for isolation
 // Uses internal state + direct ChatManager subscription to prevent
 // parent component re-renders from causing flicker
@@ -315,15 +411,12 @@ const StreamingContent: React.FC<StreamingContentProps> = ({ sessionId, tokenCol
   // 所有 DOM 元素引用
   const contentRef = useRef<HTMLPreElement>(null);
   const contentWrapperRef = useRef<HTMLDivElement>(null);
-  const thinkingRef = useRef<HTMLDivElement>(null);
   const toolCallsRef = useRef<HTMLDivElement>(null);
   const toolCallsContentRef = useRef<HTMLDivElement>(null);
   
   // 状态存储在 ref 中
   const lastContentLengthRef = useRef(0);
   const lastToolCallsJsonRef = useRef('');
-  const thinkingFadeTimerRef = useRef<ReturnType<typeof setTimeout>>();
-  const thinkingDoneRef = useRef(false);
 
   // 使用 useLayoutEffect 确保 DOM 已准备好
   useEffect(() => {
@@ -350,45 +443,7 @@ const StreamingContent: React.FC<StreamingContentProps> = ({ sessionId, tokenCol
         contentWrapperRef.current.style.display = hasContent ? 'block' : 'none';
       }
       
-      // === 2. 更新 thinking 文本 ===
-      if (thinkingRef.current) {
-        const thinkingText = state.currentThinking || '';
-        const thinkingSpan = thinkingRef.current.querySelector('.thinking-text');
-        if (thinkingSpan) {
-          thinkingSpan.textContent = thinkingText;
-        }
-        
-        const hasThinking = !!(thinkingText && thinkingText.trim());
-        
-        if (hasThinking && !state.thinkingDone) {
-          // Thinking 进行中：显示并重置状态
-          if (thinkingFadeTimerRef.current) {
-            clearTimeout(thinkingFadeTimerRef.current);
-            thinkingFadeTimerRef.current = undefined;
-          }
-          thinkingDoneRef.current = false;
-          thinkingRef.current.style.display = 'block';
-          thinkingRef.current.style.opacity = '1';
-          thinkingRef.current.style.transition = '';
-          // thinking 增长时也请求滚动
-          onScrollRequest?.();
-        } else if (hasThinking && state.thinkingDone && !thinkingDoneRef.current) {
-          // Thinking 刚结束：启动淡出动画
-          thinkingDoneRef.current = true;
-          thinkingRef.current.style.transition = 'opacity 0.6s ease-out';
-          thinkingRef.current.style.opacity = '0';
-          thinkingFadeTimerRef.current = setTimeout(() => {
-            if (thinkingRef.current) {
-              thinkingRef.current.style.display = 'none';
-            }
-          }, 600);
-        } else if (!hasThinking) {
-          // 没有 thinking 内容：直接隐藏
-          thinkingRef.current.style.display = 'none';
-        }
-      }
-      
-      // === 3. 更新 Tool Calls（只有结构变化时才更新 DOM）===
+      // === 2. 更新 Tool Calls（只有结构变化时才更新 DOM）===
       const newToolCalls = state.currentToolCalls || {};
       const newToolCallsJson = JSON.stringify(newToolCalls);
       
@@ -456,9 +511,6 @@ const StreamingContent: React.FC<StreamingContentProps> = ({ sessionId, tokenCol
 
     return () => {
       unsubscribe();
-      if (thinkingFadeTimerRef.current) {
-        clearTimeout(thinkingFadeTimerRef.current);
-      }
     };
   }, [sessionId, chatManager, onScrollRequest, tokenColors]);
 
@@ -482,30 +534,6 @@ const StreamingContent: React.FC<StreamingContentProps> = ({ sessionId, tokenCol
           <img src={moteLogo} alt="AI" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
-          {/* Thinking content - 初始隐藏，由 JS 控制显示和淡出 */}
-          <div
-            ref={thinkingRef}
-            style={{
-              display: 'none',
-              background: effectiveTheme === 'dark' ? '#2a2a2a' : '#fafafa',
-              color: tokenColors.colorTextSecondary,
-              padding: '8px 12px',
-              borderRadius: 8,
-              fontSize: 12,
-              fontStyle: 'italic',
-              marginBottom: 8,
-              borderLeft: `3px solid ${tokenColors.colorPrimary}`,
-              maxHeight: 200,
-              overflowY: 'auto',
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', marginBottom: 4, fontWeight: 500, fontStyle: 'normal', fontSize: 11, opacity: 0.7 }}>
-              <Spin size="small" style={{ marginRight: 6 }} />
-              思考中...
-            </div>
-            <span className="thinking-text" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}></span>
-          </div>
-
           {/* Tool Calls - 初始隐藏，由 JS 控制显示和内容 */}
           <div 
             ref={toolCallsRef}
@@ -767,15 +795,9 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
     colorWarningText: token.colorWarningText,
   }), [effectiveTheme]); // Only recalculate when theme changes
   
-  // Connection status (may not be available if ConnectionStatusProvider is not present)
-  let connectionStatus: ReturnType<typeof useConnectionStatus> | null = null;
-  let hasConnectionIssues = false;
-  try {
-    connectionStatus = useConnectionStatus();
-    hasConnectionIssues = useHasConnectionIssues();
-  } catch {
-    // ConnectionStatusProvider not available, ignore
-  }
+  // Connection status (safe hooks — return null/false when provider is absent)
+  const connectionStatus = useConnectionStatusSafe();
+  const hasConnectionIssues = useHasConnectionIssuesSafe();
   
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputValue, setInputValue] = useState('');
@@ -831,6 +853,11 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
   // Truncation state - when response is cut off due to max_tokens
   const [truncated, setTruncated] = useState(false);
   const [truncatedInfo, setTruncatedInfo] = useState<{ reason: string; pendingToolCalls: number } | null>(null);
+
+  // Cron session state
+  const isCronSession = sessionId?.startsWith('cron-') ?? false;
+  const [cronExecuting, setCronExecuting] = useState(false);
+  const cronPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // 检测用户是否在消息列表底部附近
   const isNearBottom = useCallback(() => {
@@ -1102,6 +1129,38 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
       }
     });
   }, [initializeSession, initialSessionId, processPendingMessage]);
+
+  // Poll cron executing status when viewing a cron session
+  useEffect(() => {
+    if (!isCronSession || !sessionId || !api.getCronExecuting) {
+      setCronExecuting(false);
+      return;
+    }
+    let stopped = false;
+    const poll = async () => {
+      try {
+        const executing = await api.getCronExecuting!();
+        const isRunning = executing.some(ej => ej.session_id === sessionId);
+        setCronExecuting(isRunning);
+        if (!isRunning) {
+          // Cron is not running — refresh messages once then stop polling
+          if (cronPollRef.current) { clearInterval(cronPollRef.current); cronPollRef.current = null; }
+          stopped = true;
+          try {
+            const msgs = await api.getSessionMessages(sessionId);
+            setMessages(msgs);
+          } catch { /* ignore */ }
+        }
+      } catch { /* ignore polling errors */ }
+    };
+    poll();
+    if (!stopped) {
+      cronPollRef.current = setInterval(poll, 3000);
+    }
+    return () => {
+      if (cronPollRef.current) { clearInterval(cronPollRef.current); cronPollRef.current = null; }
+    };
+  }, [isCronSession, sessionId, api]);
 
   // Subscribe to ChatManager state for background task persistence
   useEffect(() => {
@@ -1822,6 +1881,26 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
       if (!isUser && isJsonContent && !hasToolCalls) {
         return null;
       }
+
+      // For cron sessions, user messages are cron-triggered prompts - show with system style
+      if (isCronSession && isUser) {
+        return (
+          <div key={`msg-${index}-${msg.timestamp || index}`} style={{ padding: '6px 0' }}>
+            <div style={{ 
+              display: 'flex', alignItems: 'center', gap: 8, 
+              padding: '8px 12px', 
+              background: tokenColors.colorBgLayout,
+              borderRadius: 6,
+              border: `1px dashed ${tokenColors.colorBorderSecondary}`,
+            }}>
+              <ClockCircleOutlined style={{ color: tokenColors.colorTextSecondary, fontSize: 12, flexShrink: 0 }} />
+              <Text style={{ color: tokenColors.colorTextSecondary, fontSize: 12 }}>
+                定时触发: {msg.content.length > 100 ? msg.content.slice(0, 100) + '...' : msg.content}
+              </Text>
+            </div>
+          </div>
+        );
+      }
       
       return (
         <MessageItem
@@ -1837,7 +1916,7 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
         />
       );
     });
-  }, [messages, effectiveTheme, tokenColors, handleCopyCallback, handleEditCallback, handleDeleteCallback]);
+  }, [messages, effectiveTheme, tokenColors, isCronSession, handleCopyCallback, handleEditCallback, handleDeleteCallback]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -1865,6 +1944,26 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
         </div>
       )}
       
+      {/* Cron Session Banner - shown when viewing a cron session */}
+      {isCronSession && (
+        <div style={{ 
+          padding: '8px 24px', 
+          background: token.colorInfoBg || '#e6f4ff',
+          borderBottom: `1px solid ${token.colorInfoBorder || '#91caff'}`,
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+        }}>
+          <ClockCircleOutlined style={{ color: token.colorInfo || '#1677ff', fontSize: 14 }} />
+          <Text style={{ color: token.colorInfoText || '#0958d9', fontSize: 13 }}>
+            {cronExecuting 
+              ? '定时任务正在执行中，下方消息将自动更新...'
+              : '这是定时任务的会话记录。定时触发的提示词显示为系统消息。'}
+          </Text>
+          {cronExecuting && <LoadingOutlined style={{ color: token.colorInfo || '#1677ff' }} />}
+        </div>
+      )}
+
       {/* Truncation Banner - shown when response is cut off due to max_tokens */}
       {truncated && truncatedInfo && (
         <div style={{ 
@@ -2237,6 +2336,13 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
 
       {/* Input Area */}
       <div style={{ padding: 16, borderTop: `1px solid ${tokenColors.colorBorderSecondary}`, background: tokenColors.colorBgContainer, position: 'relative' }}>
+        {/* Thinking Panel - fixed above input */}
+        <ThinkingPanel
+          sessionId={sessionId}
+          tokenColors={tokenColors}
+          effectiveTheme={effectiveTheme}
+          streaming={streaming}
+        />
         {/* Prompt Selector */}
         <PromptSelector
           visible={promptSelectorVisible}

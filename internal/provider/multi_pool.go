@@ -81,14 +81,22 @@ func (m *MultiProviderPool) GetProvider(modelID string) (Provider, string, error
 		} else if strings.HasPrefix(modelID, "minimax:") {
 			providerName = "minimax"
 		} else {
-			// Try copilot first, then copilot-acp as fallback.
-			// This avoids hardcoding "copilot" when only copilot-acp is enabled.
+			// No prefix — try copilot providers first, then fall back to
+			// the first registered provider so we don't fail when only
+			// minimax/ollama is enabled without a prefix.
 			if _, exists := m.pools["copilot"]; exists {
 				providerName = "copilot"
 			} else if _, exists := m.pools["copilot-acp"]; exists {
 				providerName = "copilot-acp"
 			} else {
-				providerName = "copilot" // will trigger "not registered" error below
+				// Pick first available provider as last resort
+				for name := range m.pools {
+					providerName = name
+					break
+				}
+				if providerName == "" {
+					return nil, "", fmt.Errorf("no providers registered")
+				}
 			}
 		}
 	}

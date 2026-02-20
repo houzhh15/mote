@@ -9,7 +9,7 @@
 // Reference: WAILS_GUI_WEB_UI_REUSE.md
 // ================================================================
 
-import type { APIAdapter } from './adapter';
+import type { APIAdapter, MemorySyncResult, MemoryStats, MemoryExportResult } from './adapter';
 import type {
   ServiceStatus,
   Session,
@@ -17,6 +17,7 @@ import type {
   Memory,
   Tool,
   CronJob,
+  CronExecutingJob,
   MCPServer,
   Config,
   ChatRequest,
@@ -328,6 +329,36 @@ export function createWailsAdapter(app: WailsApp): APIAdapter {
       await callAPI('DELETE', `/api/v1/memory/${id}`);
     },
 
+    syncMemory: async (): Promise<MemorySyncResult> => {
+      return callAPI<MemorySyncResult>('POST', '/api/v1/memory/sync', {});
+    },
+
+    getMemoryStats: async (): Promise<MemoryStats> => {
+      return callAPI<MemoryStats>('GET', '/api/v1/memory/stats');
+    },
+
+    getDailyLog: async (date?: string): Promise<{ date: string; content: string }> => {
+      const params = date ? `?date=${encodeURIComponent(date)}` : '';
+      return callAPI<{ date: string; content: string }>('GET', `/api/v1/memory/daily${params}`);
+    },
+
+    appendDailyLog: async (content: string, section?: string): Promise<void> => {
+      await callAPI('POST', '/api/v1/memory/daily', { content, section });
+    },
+
+    exportMemories: async (format?: string): Promise<MemoryExportResult> => {
+      const params = format ? `?format=${encodeURIComponent(format)}` : '';
+      return callAPI<MemoryExportResult>('GET', `/api/v1/memory/export${params}`);
+    },
+
+    importMemories: async (memories: Array<{ content: string; source?: string }>): Promise<{ imported: number; total: number }> => {
+      return callAPI<{ imported: number; total: number }>('POST', '/api/v1/memory/import', { memories });
+    },
+
+    batchDeleteMemories: async (ids: string[]): Promise<{ deleted: number; total: number }> => {
+      return callAPI<{ deleted: number; total: number }>('DELETE', '/api/v1/memory/batch', { ids });
+    },
+
     // ============== Tools Service ==============
     getTools: async (): Promise<Tool[]> => {
       const data = await callAPI<{ tools: Tool[] }>('GET', '/api/v1/tools');
@@ -412,6 +443,11 @@ export function createWailsAdapter(app: WailsApp): APIAdapter {
 
     deleteCronJob: async (id: string): Promise<void> => {
       await callAPI('DELETE', `/api/v1/cron/jobs/${id}`);
+    },
+
+    getCronExecuting: async (): Promise<CronExecutingJob[]> => {
+      const data = await callAPI<{ jobs: CronExecutingJob[] }>('GET', '/api/v1/cron/executing');
+      return data.jobs || [];
     },
 
     // ============== MCP Service ==============

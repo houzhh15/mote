@@ -335,6 +335,18 @@ func (p *OllamaProvider) handleErrorResponse(statusCode int, body []byte) error 
 		if statusCode == http.StatusNotFound {
 			return fmt.Errorf("%w: %s", ErrModelNotFound, errResp.Error)
 		}
+		// Check for context window exceeded
+		lowerErr := strings.ToLower(errResp.Error)
+		if strings.Contains(lowerErr, "context length") ||
+			strings.Contains(lowerErr, "too many tokens") ||
+			strings.Contains(lowerErr, "maximum context") {
+			return &provider.ProviderError{
+				Code:      provider.ErrCodeContextWindowExceeded,
+				Message:   errResp.Error,
+				Provider:  "ollama",
+				Retryable: true,
+			}
+		}
 		return fmt.Errorf("ollama error: %s", errResp.Error)
 	}
 

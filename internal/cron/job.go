@@ -115,6 +115,7 @@ type HistoryEntry struct {
 // PromptPayload is the payload structure for prompt-type jobs.
 type PromptPayload struct {
 	Prompt    string `json:"prompt"`
+	Model     string `json:"model,omitempty"`
 	MaxTokens int    `json:"max_tokens,omitempty"`
 	AgentID   string `json:"agent_id,omitempty"`
 }

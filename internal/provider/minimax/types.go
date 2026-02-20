@@ -105,9 +105,14 @@ type chatRequest struct {
 // chatMessage represents a message in OpenAI format.
 type chatMessage struct {
 	Role       string         `json:"role"`
-	Content    string         `json:"content"`
+	Content    *string        `json:"content"`
 	ToolCalls  []chatToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string         `json:"tool_call_id,omitempty"`
+}
+
+// strPtr returns a pointer to a string. Used for chatMessage.Content.
+func strPtr(s string) *string {
+	return &s
 }
 
 // chatTool represents a tool definition in OpenAI format.

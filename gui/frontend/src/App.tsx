@@ -91,7 +91,7 @@ const App: React.FC = () => {
     return createWailsAdapter(wailsApp as Parameters<typeof createWailsAdapter>[0]);
   }, [wailsApp]);
 
-  const handleSelectSession = (sessionId: string) => {
+  const handleSelectSession = useCallback((sessionId: string) => {
     setSelectedSessionId(sessionId);
     // Persist to localStorage
     try {
@@ -100,7 +100,7 @@ const App: React.FC = () => {
       console.error('Failed to save session ID:', e);
     }
     setCurrentPage('chat');
-  };
+  }, []);
 
   const handleSessionCreated = useCallback((sessionId: string) => {
     // Store the session ID so we can restore it when navigating back
@@ -115,10 +115,10 @@ const App: React.FC = () => {
     setRefreshSessionsTrigger(prev => prev + 1);
   }, []);
 
-  const handleNavigate = (page: PageKey) => {
+  const handleNavigate = useCallback((page: PageKey) => {
     // Don't clear session when navigating - preserve chat state
     setCurrentPage(page);
-  };
+  }, []);
 
   const handleNavigateToChat = useCallback((sessionId: string) => {
     setSelectedSessionId(sessionId);
@@ -163,7 +163,7 @@ const App: React.FC = () => {
       case 'mcp':
         return <MCPPage />;
       case 'cron':
-        return <CronPage />;
+        return <CronPage onSelectSession={handleSelectSession} />;
       default:
         return (
           <NewChatPage

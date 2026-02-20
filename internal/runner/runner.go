@@ -15,6 +15,7 @@ import (
 	"mote/internal/channel/reminders"
 	"mote/internal/compaction"
 	"mote/internal/config"
+	internalContext "mote/internal/context"
 	"mote/internal/hooks"
 	"mote/internal/mcp/client"
 	"mote/internal/memory"
@@ -22,6 +23,7 @@ import (
 	"mote/internal/policy/approval"
 	"mote/internal/prompt"
 	"mote/internal/provider"
+	"mote/internal/provider/minimax"
 	"mote/internal/scheduler"
 	"mote/internal/skills"
 	"mote/internal/storage"
@@ -56,8 +58,9 @@ type Runner struct {
 	mu           sync.RWMutex
 
 	// M04: Optional advanced components
-	compactor   *compaction.Compactor
-	memoryIndex *memory.MemoryIndex
+	compactor      *compaction.Compactor
+	memoryIndex    *memory.MemoryIndex
+	contextManager *internalContext.Manager // M04-Enhanced: Context compression with persistence
 
 	// M07: Skills and Hooks integration
 	skillManager *skills.Manager
@@ -87,6 +90,10 @@ type Runner struct {
 	// Pause control
 	pauseController PauseController
 	pauseMu         sync.RWMutex
+
+	// Session-level execution queue: serializes runs per session to prevent
+	// concurrent access when cron/API trigger overlapping requests.
+	runQueue *scheduler.RunQueue
 }
 
 // NewRunner creates a new Runner with a single provider.
@@ -105,6 +112,7 @@ func NewRunner(
 		history:       NewHistoryManager(config.MaxMessages, config.MaxTokens*10),
 		sessionTokens: make(map[string]*SessionTokens),
 		flushStates:   make(map[string]*memoryFlushState),
+		runQueue:      scheduler.NewRunQueue(10, 5*time.Minute),
 	}
 }
 
@@ -126,6 +134,7 @@ func NewRunnerWithPool(
 		history:       NewHistoryManager(config.MaxMessages, config.MaxTokens*10),
 		sessionTokens: make(map[string]*SessionTokens),
 		flushStates:   make(map[string]*memoryFlushState),
+		runQueue:      scheduler.NewRunQueue(10, 5*time.Minute),
 	}
 }
 
@@ -256,42 +265,11 @@ func (r *Runner) SetCompactor(c *compaction.Compactor) {
 	r.compactor = c
 }
 
-// persistCompactedMessages converts compacted provider.Messages to storage.Messages
-// and persists them to the database, replacing the old session messages.
-// This avoids re-compacting the same messages on every subsequent request.
-func (r *Runner) persistCompactedMessages(sessionID string, messages []provider.Message) {
-	// Convert provider.Message → storage.Message (skip system messages since
-	// system prompts are rebuilt each request by SystemPromptBuilder)
-	var storeMsgs []*storage.Message
-	now := time.Now()
-	for _, msg := range messages {
-		if msg.Role == provider.RoleSystem {
-			continue
-		}
-
-		sm := &storage.Message{
-			SessionID:  sessionID,
-			Role:       string(msg.Role),
-			Content:    msg.Content,
-			ToolCallID: msg.ToolCallID,
-			CreatedAt:  now,
-		}
-
-		// Convert tool calls
-		if len(msg.ToolCalls) > 0 {
-			sm.ToolCalls = convertToolCalls(msg.ToolCalls)
-		}
-
-		storeMsgs = append(storeMsgs, sm)
-	}
-
-	if err := r.sessions.ReplaceMessages(sessionID, storeMsgs); err != nil {
-		slog.Warn("failed to persist compacted messages, will re-compact next time",
-			"sessionID", sessionID, "error", err)
-	} else {
-		slog.Info("persisted compacted messages to database",
-			"sessionID", sessionID, "messageCount", len(storeMsgs))
-	}
+// SetContextManager sets the context manager for advanced context compression.
+func (r *Runner) SetContextManager(cm *internalContext.Manager) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.contextManager = cm
 }
 
 // SetMemory sets the optional M04 memory index.
@@ -645,11 +623,8 @@ func (r *Runner) Run(ctx context.Context, sessionID, userInput string, attachmen
 
 	events := make(chan Event, 100)
 
-	go func() {
-		// Order matters! LIFO - last declared runs first
-		// 1. close(events) - runs last
-		// 2. cancel() - runs second
-		// 3. recover - runs first (catches panics before other defers)
+	// Enqueue through session-level queue to serialize concurrent requests
+	_, enqueueErr := r.runQueue.Enqueue(sessionID, ctx, func(qCtx context.Context) error {
 		defer close(events)
 		if cancel != nil {
 			defer cancel()
@@ -660,14 +635,28 @@ func (r *Runner) Run(ctx context.Context, sessionID, userInput string, attachmen
 				events <- NewErrorEvent(fmt.Errorf("internal error: %v", rec))
 			}
 		}()
-		r.runLoop(ctx, sessionID, userInput, attachments, events)
-	}()
+		r.runLoop(qCtx, sessionID, userInput, attachments, events)
+		return nil
+	})
+	if enqueueErr != nil {
+		close(events)
+		if cancel != nil {
+			cancel()
+		}
+		return nil, fmt.Errorf("session %s is busy: %w", sessionID, enqueueErr)
+	}
 
 	return events, nil
 }
 
 // RunWithModel starts an agent run with a specific model and scenario.
 // If the session doesn't exist, it will be created with the specified model and scenario.
+// CancelSession cancels all pending and running tasks for a session.
+// This is used by cron to abort stuck executions so subsequent runs can proceed.
+func (r *Runner) CancelSession(sessionID string) {
+	r.runQueue.Cancel(sessionID)
+}
+
 func (r *Runner) RunWithModel(ctx context.Context, sessionID, userInput, model, scenario string, attachments ...provider.Attachment) (<-chan Event, error) {
 	if r.provider == nil && r.providerPool == nil {
 		return nil, ErrNoProvider
@@ -684,11 +673,8 @@ func (r *Runner) RunWithModel(ctx context.Context, sessionID, userInput, model, 
 
 	events := make(chan Event, 100)
 
-	go func() {
-		// Order matters! LIFO - last declared runs first
-		// 1. close(events) - runs last
-		// 2. cancel() - runs second
-		// 3. recover - runs first (catches panics before other defers)
+	// Enqueue through session-level queue to serialize concurrent requests
+	_, enqueueErr := r.runQueue.Enqueue(sessionID, ctx, func(qCtx context.Context) error {
 		defer close(events)
 		if cancel != nil {
 			defer cancel()
@@ -699,8 +685,16 @@ func (r *Runner) RunWithModel(ctx context.Context, sessionID, userInput, model, 
 				events <- NewErrorEvent(fmt.Errorf("internal error: %v", rec))
 			}
 		}()
-		r.runLoopWithModel(ctx, sessionID, userInput, model, scenario, attachments, events)
-	}()
+		r.runLoopWithModel(qCtx, sessionID, userInput, model, scenario, attachments, events)
+		return nil
+	})
+	if enqueueErr != nil {
+		close(events)
+		if cancel != nil {
+			cancel()
+		}
+		return nil, fmt.Errorf("session %s is busy: %w", sessionID, enqueueErr)
+	}
 
 	return events, nil
 }
@@ -852,6 +846,18 @@ func (r *Runner) runLoopCore(ctx context.Context, cached *scheduler.CachedSessio
 	consecutiveToolErrors := 0
 	const maxConsecutiveToolErrors = 3
 
+	// Track whether we've already retried after a context window overflow
+	contextRetried := false
+
+	// Track transient provider error retries (allow up to 2 retries)
+	transientRetries := 0
+	const maxTransientRetries = 2
+
+	// After compaction, the next iteration should use Chat (non-streaming)
+	// instead of Stream.  MiniMax's Stream endpoint returns empty responses
+	// after sustained Chat API usage during compaction.
+	useChat := false
+
 	// Main iteration loop
 	for iteration := 0; iteration < r.config.MaxIterations; iteration++ {
 		slog.Debug("runLoopCore: starting iteration", "sessionID", sessionID, "iteration", iteration, "maxIterations", r.config.MaxIterations)
@@ -864,6 +870,7 @@ func (r *Runner) runLoopCore(ctx context.Context, cached *scheduler.CachedSessio
 		select {
 		case <-ctx.Done():
 			slog.Warn("runLoopCore: context cancelled", "sessionID", sessionID, "iteration", iteration, "error", ctx.Err())
+			_, _ = r.sessions.AddMessage(sessionID, provider.RoleAssistant, "[任务被取消或超时]", nil, "")
 			events <- NewErrorEvent(ErrContextCanceled)
 			return
 		default:
@@ -876,11 +883,42 @@ func (r *Runner) runLoopCore(ctx context.Context, cached *scheduler.CachedSessio
 				slog.Info("runLoopCore: compacting messages", "sessionID", sessionID, "iteration", iteration, "messageCount", len(messages))
 				compacted := r.compactor.CompactWithFallback(ctx, messages, prov)
 				slog.Info("runLoopCore: compaction done", "sessionID", sessionID, "iteration", iteration, "newMessageCount", len(compacted))
-				messages = compacted
-				// Persist compacted messages so future loads don't need re-compaction
-				r.persistCompactedMessages(sessionID, compacted)
-				// Increment compaction count after successful compaction
-				r.compactor.IncrementCompactionCount(sessionID)
+
+				// Reset provider connections after compaction: compaction makes
+				// multiple sequential Chat API calls which can cause MiniMax's
+				// ALB to associate the session (X-Session-Id) with a degraded
+				// state, resulting in empty-body responses on subsequent Stream
+				// requests.  Closing all connections forces new TCP connections
+				// and a fresh ALB session.
+				if resettable, ok := prov.(provider.ConnectionResettable); ok {
+					resettable.ResetConnections()
+					slog.Info("runLoopCore: reset provider connections after compaction", "sessionID", sessionID)
+				}
+
+				// After compaction, proactively use Chat mode for the next
+				// iteration to avoid Stream endpoint failure.  The Stream
+				// endpoint is unreliable after sustained Chat API usage.
+				useChat = true
+				slog.Info("runLoopCore: will use Chat mode for next iteration after compaction", "sessionID", sessionID)
+
+				// Sanity check: compacted result must have at least a user or
+				// assistant message.  If not, skip compaction and proceed with
+				// the original messages (may exceed token limit but is better
+				// than sending an invalid request).
+				hasConv := false
+				for _, m := range compacted {
+					if m.Role == provider.RoleUser || m.Role == provider.RoleAssistant {
+						hasConv = true
+						break
+					}
+				}
+				if hasConv {
+					messages = compacted
+					r.compactor.IncrementCompactionCount(sessionID)
+				} else {
+					slog.Warn("runLoopCore: compaction result has no conversation messages, skipping",
+						"sessionID", sessionID, "iteration", iteration)
+				}
 			}
 		} else if compressed, changed := r.history.Compress(messages); changed {
 			slog.Debug("runLoopCore: history compressed", "sessionID", sessionID, "iteration", iteration)
@@ -895,9 +933,50 @@ func (r *Runner) runLoopCore(ctx context.Context, cached *scheduler.CachedSessio
 		}
 		req := r.buildChatRequest(messages, sessionModel, sessionID, attachments)
 
-		// Call provider
-		resp, err := r.callProviderWith(ctx, prov, req, events, iteration)
+		// Call provider — use Chat mode after compaction to avoid MiniMax
+		// Stream endpoint failure, then switch back to Stream.
+		var resp *provider.ChatResponse
+		var err error
+		if useChat {
+			slog.Info("runLoopCore: using Chat mode (post-compaction)", "sessionID", sessionID, "iteration", iteration)
+			resp, err = r.callProviderChatWith(ctx, prov, req, events)
+			useChat = false // only one iteration in Chat mode
+		} else {
+			resp, err = r.callProviderWith(ctx, prov, req, events, iteration)
+		}
 		if err != nil {
+			// Reactive retry: on context window overflow, compact and retry once
+			if provider.IsContextWindowExceeded(err) && !contextRetried && r.compactor != nil {
+				contextRetried = true
+				slog.Warn("runLoopCore: context window exceeded, compacting and retrying",
+					"sessionID", sessionID, "iteration", iteration)
+				events <- NewContentEvent("\n\n⚠️ Context window exceeded — compacting history and retrying…\n\n")
+				compacted := r.compactor.CompactWithFallback(ctx, messages, prov)
+				if len(compacted) > 0 {
+					messages = compacted
+					continue
+				}
+			}
+			// Reactive retry: on transient provider errors (e.g., empty response, temporary unavailability)
+			// Allow up to 3 retries with exponential backoff (2s, 4s, 8s)
+			if provider.IsRetryable(err) && transientRetries < maxTransientRetries {
+				transientRetries++
+				// Longer backoff: 10s, 20s, 30s, 40s, 50s — MiniMax empty responses
+				// often persist for 30+ seconds after sustained API usage (compaction).
+				backoff := time.Duration(transientRetries*10) * time.Second
+				slog.Warn("runLoopCore: transient provider error, retrying with backoff",
+					"sessionID", sessionID, "iteration", iteration,
+					"retry", transientRetries, "maxRetries", maxTransientRetries,
+					"backoff", backoff, "error", err)
+				events <- NewContentEvent(fmt.Sprintf("\n\n⚠️ Provider transient error — retrying in %s… (%d/%d)\n\n", backoff, transientRetries, maxTransientRetries))
+				select {
+				case <-ctx.Done():
+					events <- NewErrorEvent(ctx.Err())
+					return
+				case <-time.After(backoff):
+				}
+				continue
+			}
 			events <- NewErrorEvent(err)
 			return
 		}
@@ -980,6 +1059,9 @@ func (r *Runner) runLoopCore(ctx context.Context, cached *scheduler.CachedSessio
 			if respContent != "" {
 				// Save assistant message
 				_, _ = r.sessions.AddMessage(sessionID, provider.RoleAssistant, respContent, nil, "")
+			} else {
+				// Save a placeholder so cron sessions don't lose the final response
+				_, _ = r.sessions.AddMessage(sessionID, provider.RoleAssistant, "[任务已完成，无文本响应]", nil, "")
 			}
 
 			// M07: Trigger after_response hook
@@ -1047,26 +1129,16 @@ func (r *Runner) runLoopCore(ctx context.Context, cached *scheduler.CachedSessio
 
 		// Execute tools and add results (with session context for skill tools)
 		slog.Info("runLoopCore: executing tools", "sessionID", sessionID, "iteration", iteration, "toolCount", len(resp.ToolCalls))
-		toolResults := r.executeToolsWithSession(ctx, resp.ToolCalls, events, sessionID, "")
-		slog.Info("runLoopCore: tools executed", "sessionID", sessionID, "iteration", iteration, "resultsCount", len(toolResults))
+		toolResults, toolErrorCount := r.executeToolsWithSession(ctx, resp.ToolCalls, events, sessionID, "")
+		slog.Info("runLoopCore: tools executed", "sessionID", sessionID, "iteration", iteration, "resultsCount", len(toolResults), "errorCount", toolErrorCount)
 		messages = append(messages, toolResults...)
 
-		// Check for consecutive tool errors to prevent infinite loops
-		allErrors := true
-		for _, result := range toolResults {
-			// Check if the result indicates an error (contains common error patterns)
-			content := result.Content
-			if !strings.Contains(content, "Error:") &&
-				!strings.Contains(content, "error:") &&
-				!strings.Contains(content, "failed:") &&
-				!strings.Contains(content, "missing required parameter") &&
-				!strings.Contains(content, "tool call failed") {
-				allErrors = false
-				break
-			}
-		}
+		// Check for consecutive tool errors to prevent infinite loops.
+		// Use the actual IsError flag from tool execution, not string matching on content,
+		// to avoid false positives when reading files that contain error-handling code.
+		allErrors := len(toolResults) > 0 && toolErrorCount == len(toolResults)
 
-		if len(toolResults) > 0 && allErrors {
+		if allErrors {
 			consecutiveToolErrors++
 			slog.Warn("runLoopCore: tool execution returned errors",
 				"sessionID", sessionID,
@@ -1079,9 +1151,11 @@ func (r *Runner) runLoopCore(ctx context.Context, cached *scheduler.CachedSessio
 					"sessionID", sessionID,
 					"consecutiveErrors", consecutiveToolErrors)
 				// Add a message to inform the LLM
+				errMsg := "[System: Multiple consecutive tool call errors detected. Stopping to prevent infinite loop. Please review the error messages and try a different approach.]"
+				_, _ = r.sessions.AddMessage(sessionID, provider.RoleAssistant, errMsg, nil, "")
 				events <- Event{
 					Type:    EventTypeContent,
-					Content: "\n\n[System: Multiple consecutive tool call errors detected. Stopping to prevent infinite loop. Please review the error messages and try a different approach.]\n",
+					Content: "\n\n" + errMsg + "\n",
 				}
 				events <- NewDoneEvent(&totalUsage)
 				return
@@ -1100,8 +1174,10 @@ func (r *Runner) runLoopCore(ctx context.Context, cached *scheduler.CachedSessio
 		slog.Info("runLoopCore: iteration saved, continuing to next", "sessionID", sessionID, "iteration", iteration)
 	}
 
-	// Max iterations reached
+	// Max iterations reached — save a summary so the result is visible in session history
 	slog.Warn("runLoopCore: max iterations reached", "sessionID", sessionID, "maxIterations", r.config.MaxIterations)
+	maxIterMsg := fmt.Sprintf("[已达到最大迭代次数 (%d)，任务执行被中止]", r.config.MaxIterations)
+	_, _ = r.sessions.AddMessage(sessionID, provider.RoleAssistant, maxIterMsg, nil, "")
 	events <- NewErrorEvent(ErrMaxIterations)
 }
 
@@ -1148,10 +1224,22 @@ func (r *Runner) runACPMode(ctx context.Context, cached *scheduler.CachedSession
 			slog.Info("runACPMode: compaction done",
 				"sessionID", sessionID,
 				"afterCount", len(compacted))
-			messages = compacted
-			// Persist compacted messages so future loads don't need re-compaction
-			r.persistCompactedMessages(sessionID, compacted)
-			r.compactor.IncrementCompactionCount(sessionID)
+
+			// Sanity check: must have at least one conversation message
+			hasConv := false
+			for _, m := range compacted {
+				if m.Role == provider.RoleUser || m.Role == provider.RoleAssistant {
+					hasConv = true
+					break
+				}
+			}
+			if hasConv {
+				messages = compacted
+				r.compactor.IncrementCompactionCount(sessionID)
+			} else {
+				slog.Warn("runACPMode: compaction result has no conversation messages, skipping",
+					"sessionID", sessionID)
+			}
 		}
 	} else if compressed, changed := r.history.Compress(messages); changed {
 		slog.Info("runACPMode: history compressed (fallback)",
@@ -1228,8 +1316,21 @@ func (r *Runner) runACPMode(ctx context.Context, cached *scheduler.CachedSession
 	// Stream from ACP provider
 	provEvents, err := prov.Stream(ctx, req)
 	if err != nil {
-		events <- NewErrorEvent(err)
-		return
+		// Reactive retry: on context window overflow, compact and retry once
+		if provider.IsContextWindowExceeded(err) && r.compactor != nil {
+			slog.Warn("runACPMode: context window exceeded, compacting and retrying",
+				"sessionID", sessionID)
+			events <- NewContentEvent("\n\n⚠️ Context window exceeded — compacting history and retrying…\n\n")
+			compacted := r.compactor.CompactWithFallback(ctx, messages, prov)
+			if len(compacted) > 0 {
+				req.Messages = compacted
+				provEvents, err = prov.Stream(ctx, req)
+			}
+		}
+		if err != nil {
+			events <- NewErrorEvent(err)
+			return
+		}
 	}
 
 	var assistantContent strings.Builder
@@ -1327,8 +1428,6 @@ func (r *Runner) runACPMode(ctx context.Context, cached *scheduler.CachedSession
 
 // buildMessages constructs the message list for the provider.
 func (r *Runner) buildMessages(ctx context.Context, cached *scheduler.CachedSession, userInput string) ([]provider.Message, error) {
-	var messages []provider.Message
-
 	// Build system prompt using SystemPromptBuilder (primary) or static config (fallback)
 	var sysPromptContent string
 	var err error
@@ -1364,10 +1463,21 @@ func (r *Runner) buildMessages(ctx context.Context, cached *scheduler.CachedSess
 		}
 	}
 
-	messages = append(messages, provider.Message{
-		Role:    provider.RoleSystem,
-		Content: sysPromptContent,
-	})
+	// Use Context Manager if available (preferred for advanced compression)
+	if r.contextManager != nil {
+		messages, err := r.contextManager.BuildContext(ctx, cached.Session.ID, sysPromptContent, userInput)
+		if err != nil {
+			slog.Warn("context manager failed, falling back to legacy method",
+				"sessionID", cached.Session.ID,
+				"error", err)
+			// Fall through to legacy method
+		} else {
+			return messages, nil
+		}
+	}
+
+	// Legacy method: manual message loading
+	var messages []provider.Message
 
 	// Add history messages
 	for _, msg := range cached.Messages {
@@ -1644,6 +1754,27 @@ func (r *Runner) processStreamResponse(ctx context.Context, streamCh <-chan prov
 
 	resp.Content = contentBuilder
 
+	// MiniMax-M2.5 sometimes outputs tool calls as raw XML in content
+	// (e.g. <invoke name="read_file">...</invoke>) instead of structured
+	// tool_calls. After accumulating all content, check for this pattern
+	// and extract them as proper tool calls.
+	if len(pendingToolCalls) == 0 && resp.Content != "" && strings.Contains(resp.Content, "<invoke ") {
+		if xmlCalls, cleanContent := minimax.ExtractXMLToolCalls(resp.Content); len(xmlCalls) > 0 {
+			slog.Warn("processStreamResponse: extracted XML tool calls from content",
+				"count", len(xmlCalls),
+				"originalLen", len(resp.Content),
+				"cleanLen", len(cleanContent))
+			for i := range xmlCalls {
+				tc := xmlCalls[i]
+				resp.ToolCalls = append(resp.ToolCalls, tc)
+				storageTc := providerToStorageToolCall(tc)
+				events <- NewToolCallEvent(storageTc)
+			}
+			resp.Content = cleanContent
+			resp.FinishReason = provider.FinishReasonToolCalls
+		}
+	}
+
 	// Fallback: if content is empty but thinking content was received,
 	// use thinking as the response content. This handles the case where
 	// models with reasoning_split put all output into reasoning_content
@@ -1688,14 +1819,16 @@ func (r *Runner) processStreamResponse(ctx context.Context, streamCh <-chan prov
 // Deprecated: Use executeToolsWithSession for session-aware execution.
 //
 //nolint:unused // Reserved for backward compatibility
-func (r *Runner) executeTools(ctx context.Context, toolCalls []provider.ToolCall, events chan<- Event) []provider.Message {
+func (r *Runner) executeTools(ctx context.Context, toolCalls []provider.ToolCall, events chan<- Event) ([]provider.Message, int) {
 	return r.executeToolsWithSession(ctx, toolCalls, events, "", "")
 }
 
 // executeToolsWithSession executes tool calls with session context for policy checks.
 // It sends heartbeat events every 15 seconds during long-running tool executions to keep the connection alive.
-func (r *Runner) executeToolsWithSession(ctx context.Context, toolCalls []provider.ToolCall, events chan<- Event, sessionID, agentID string) []provider.Message {
+// Returns the tool result messages and the count of tool executions that returned errors.
+func (r *Runner) executeToolsWithSession(ctx context.Context, toolCalls []provider.ToolCall, events chan<- Event, sessionID, agentID string) ([]provider.Message, int) {
 	var results []provider.Message
+	errorCount := 0
 
 	// Start heartbeat goroutine to keep connection alive during tool execution
 	heartbeatCtx, cancelHeartbeat := context.WithCancel(ctx)
@@ -1871,6 +2004,18 @@ func (r *Runner) executeToolsWithSession(ctx context.Context, toolCalls []provid
 			isError = result.IsError
 		}
 
+		// Pre-truncate oversized tool results before storing in message history
+		maxBytes := DefaultMaxToolResultBytes
+		if r.compactionConfig != nil && r.compactionConfig.ToolResultMaxBytes > 0 {
+			maxBytes = r.compactionConfig.ToolResultMaxBytes
+		}
+		if len(output) > maxBytes {
+			before := len(output)
+			output = TruncateToolResult(output, maxBytes)
+			slog.Info("executeToolsWithSession: truncated oversized tool result",
+				"tool", toolName, "beforeBytes", before, "afterBytes", len(output), "maxBytes", maxBytes)
+		}
+
 		// M07: Trigger after_tool_call hook
 		afterHookCtx := hooks.NewContext(hooks.HookAfterToolCall)
 		afterHookCtx.ToolCall = &hooks.ToolCallContext{
@@ -1892,9 +2037,13 @@ func (r *Runner) executeToolsWithSession(ctx context.Context, toolCalls []provid
 			Content:    output,
 			ToolCallID: tc.ID,
 		})
+
+		if isError {
+			errorCount++
+		}
 	}
 
-	return results
+	return results, errorCount
 }
 
 // providerToStorageToolCall converts a provider ToolCall to a storage ToolCall.
@@ -2050,8 +2199,24 @@ func (r *Runner) executeMemoryFlush(ctx context.Context, sessionID string, event
 	// Build flush request with memory flush prompts
 	messages := []provider.Message{
 		{Role: provider.RoleSystem, Content: cfg.SystemPrompt},
-		{Role: provider.RoleUser, Content: cfg.Prompt},
 	}
+
+	// Inject recent conversation history so the LLM has context for what to save
+	if histSnippet := r.buildFlushHistory(sessionID, 16000, 2000); histSnippet != "" {
+		messages = append(messages, provider.Message{
+			Role:    provider.RoleUser,
+			Content: "Here is the recent conversation for context:\n\n" + histSnippet,
+		})
+		messages = append(messages, provider.Message{
+			Role:    provider.RoleAssistant,
+			Content: "Understood. I will review the conversation and save important information to memory.",
+		})
+	}
+
+	messages = append(messages, provider.Message{
+		Role:    provider.RoleUser,
+		Content: cfg.Prompt,
+	})
 
 	// Build tools for memory flush (only memory-related tools)
 	var tools []provider.Tool
@@ -2059,7 +2224,7 @@ func (r *Runner) executeMemoryFlush(ctx context.Context, sessionID string, event
 		for _, t := range r.registry.List() {
 			// Only include memory-related tools for flush
 			name := t.Name()
-			if name == "memory_save" || name == "memory_recall" {
+			if name == "mote_memory_add" || name == "mote_memory_search" {
 				params, _ := json.Marshal(t.Parameters())
 				tools = append(tools, provider.Tool{
 					Type: "function",
@@ -2086,9 +2251,9 @@ func (r *Runner) executeMemoryFlush(ctx context.Context, sessionID string, event
 		return err
 	}
 
-	// Process any tool calls (e.g., memory_save) with session context
+	// Process any tool calls (e.g., mote_memory_add) with session context
 	if len(resp.ToolCalls) > 0 {
-		r.executeToolsWithSession(ctx, resp.ToolCalls, events, sessionID, "")
+		r.executeToolsWithSession(ctx, resp.ToolCalls, events, sessionID, "") //nolint:errcheck // memory flush doesn't need error tracking
 	}
 
 	// Update flush state
@@ -2102,6 +2267,44 @@ func (r *Runner) executeMemoryFlush(ctx context.Context, sessionID string, event
 		"toolCalls", len(resp.ToolCalls))
 
 	return nil
+}
+
+// buildFlushHistory returns a compact text snippet of recent session messages
+// for injection into the memory flush prompt. maxTotalChars limits the overall
+// output, maxPerMsg caps individual message content.
+func (r *Runner) buildFlushHistory(sessionID string, maxTotalChars, maxPerMsg int) string {
+	msgs, err := r.sessions.GetMessages(sessionID)
+	if err != nil || len(msgs) == 0 {
+		return ""
+	}
+
+	// Walk backwards, collecting messages until budget is exhausted
+	var lines []string
+	total := 0
+	for i := len(msgs) - 1; i >= 0; i-- {
+		m := msgs[i]
+		if m.Role == "system" {
+			continue
+		}
+		content := m.Content
+		if len(content) > maxPerMsg {
+			content = content[:maxPerMsg] + "…[truncated]"
+		}
+		line := fmt.Sprintf("[%s]: %s", m.Role, content)
+		if total+len(line) > maxTotalChars {
+			break
+		}
+		lines = append(lines, line)
+		total += len(line)
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	// Reverse to chronological order
+	for i, j := 0, len(lines)-1; i < j; i, j = i+1, j-1 {
+		lines[i], lines[j] = lines[j], lines[i]
+	}
+	return strings.Join(lines, "\n")
 }
 
 // PauseSession 暂停指定会话的执行

@@ -9,6 +9,7 @@ import type {
   Memory,
   Tool,
   CronJob,
+  CronExecutingJob,
   MCPServer,
   Config,
   ChatRequest,
@@ -32,6 +33,44 @@ import type {
   UpdateOptions,
   UpdateResult,
 } from '../types';
+
+/**
+ * Memory sync result
+ */
+export interface MemorySyncResult {
+  synced?: number;
+  created?: number;
+  updated?: number;
+  deleted?: number;
+  errors?: number;
+  duration?: string;
+  status: string;
+}
+
+/**
+ * Memory statistics
+ */
+export interface MemoryStats {
+  total: number;
+  by_category?: Record<string, number>;
+  by_capture_method?: Record<string, number>;
+  auto_capture_today?: number;
+  auto_recall_today?: number;
+  index_entries?: number;
+  content_sections?: number;
+  watch_enabled?: boolean;
+  capture_enabled?: boolean;
+  capture_mode?: string;
+}
+
+/**
+ * Memory export result
+ */
+export interface MemoryExportResult {
+  count: number;
+  exported: string;
+  memories: Array<{ id: string; content: string; source: string; created_at: string }>;
+}
 
 /**
  * API Adapter interface - implemented by Wails and HTTP adapters
@@ -84,6 +123,41 @@ export interface APIAdapter {
   updateMemory?(id: string, content: string, category?: string): Promise<Memory>;
   deleteMemory(id: string): Promise<void>;
   
+  /**
+   * Sync memories from markdown files
+   */
+  syncMemory?(): Promise<MemorySyncResult>;
+  
+  /**
+   * Get memory statistics
+   */
+  getMemoryStats?(): Promise<MemoryStats>;
+  
+  /**
+   * Get daily log for a date (defaults to today)
+   */
+  getDailyLog?(date?: string): Promise<{ date: string; content: string }>;
+  
+  /**
+   * Append content to today's daily log
+   */
+  appendDailyLog?(content: string, section?: string): Promise<void>;
+  
+  /**
+   * Export all memories
+   */
+  exportMemories?(format?: string): Promise<MemoryExportResult>;
+  
+  /**
+   * Import memories from data
+   */
+  importMemories?(memories: Array<{ content: string; source?: string }>): Promise<{ imported: number; total: number }>;
+  
+  /**
+   * Batch delete memories by IDs
+   */
+  batchDeleteMemories?(ids: string[]): Promise<{ deleted: number; total: number }>;
+  
   // ============== Tools Service ==============
   getTools(): Promise<Tool[]>;
   
@@ -103,6 +177,8 @@ export interface APIAdapter {
   updateCronJob(id: string, updates: Partial<CronJob>): Promise<CronJob>;
   toggleCronJob(id: string, enabled: boolean): Promise<void>;
   deleteCronJob(id: string): Promise<void>;
+  /** Get currently executing cron jobs */
+  getCronExecuting?(): Promise<CronExecutingJob[]>;
   
   // ============== MCP Service ==============
   getMCPServers(): Promise<MCPServer[]>;
@@ -341,12 +417,20 @@ export const createNoopAdapter = (): APIAdapter => ({
   getMemories: async () => ({ memories: [], total: 0, limit: 100, offset: 0 }),
   searchMemories: async () => [],
   deleteMemory: async () => {},
+  syncMemory: async () => ({ status: 'ok', synced: 0 }),
+  getMemoryStats: async () => ({ total: 0 }),
+  getDailyLog: async () => ({ date: new Date().toISOString().slice(0, 10), content: '' }),
+  appendDailyLog: async () => {},
+  exportMemories: async () => ({ count: 0, exported: new Date().toISOString(), memories: [] }),
+  importMemories: async () => ({ imported: 0, total: 0 }),
+  batchDeleteMemories: async () => ({ deleted: 0, total: 0 }),
   getTools: async () => [],
   getCronJobs: async () => [],
   createCronJob: async () => ({ id: '', name: '', schedule: '', prompt: '', enabled: false }),
   updateCronJob: async () => ({ id: '', name: '', schedule: '', prompt: '', enabled: false }),
   toggleCronJob: async () => {},
   deleteCronJob: async () => {},
+  getCronExecuting: async () => [],
   getMCPServers: async () => [],
   createMCPServer: async () => ({ name: '', transport: 'stdio', command: '', status: 'stopped' }),
   updateMCPServer: async () => ({ name: '', transport: 'stdio', command: '', status: 'stopped' }),

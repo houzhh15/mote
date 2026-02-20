@@ -15,8 +15,12 @@ var ToolGroups = map[string][]string{
 		"exec",
 	},
 	"group:memory": {
-		"memory_search",
-		"memory_add",
+		"mote_memory_search",
+		"mote_memory_add",
+		"mote_memory_list",
+		"mote_memory_get",
+		"mote_memory_delete",
+		"mote_memory_daily",
 	},
 	"group:mcp": {
 		"mcp_*", // Wildcard for all MCP tools

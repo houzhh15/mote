@@ -36,3 +36,12 @@ type SessionResettable interface {
 	// The next request for this conversationID will create fresh resources.
 	ResetSession(conversationID string)
 }
+
+// ConnectionResettable indicates a provider that can reset its HTTP connection
+// pools.  This is used after sustained API usage (e.g., compaction) to force
+// new TCP connections and avoid stale ALB session affinity.
+type ConnectionResettable interface {
+	// ResetConnections closes all idle connections in the provider's HTTP
+	// client pools, forcing fresh TCP connections on the next request.
+	ResetConnections()
+}

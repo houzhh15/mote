@@ -116,6 +116,11 @@ export const SessionsPage: React.FC<SessionsPageProps> = ({ onSelectSession }) =
                       <Text strong ellipsis style={{ flex: 1 }}>
                         {session.title || session.preview || `会话 ${session.id.slice(0, 8)}`}
                       </Text>
+                      {session.scenario === 'cron' && (
+                        <Tag color="cyan" style={{ marginLeft: 8, fontSize: 11 }}>
+                          <ClockCircleOutlined style={{ marginRight: 2 }} />定时
+                        </Tag>
+                      )}
                       {session.model && (
                         <Tag 
                           color={getProviderFromModel(session.model) === 'ollama' ? 'orange' : getProviderFromModel(session.model) === 'minimax' ? 'purple' : 'blue'}

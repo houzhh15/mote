@@ -17,6 +17,7 @@ import (
 	"mote/internal/cli/defaults"
 	"mote/internal/compaction"
 	"mote/internal/config"
+	internalContext "mote/internal/context"
 	"mote/internal/cron"
 	"mote/internal/gateway"
 	"mote/internal/gateway/websocket"
@@ -304,35 +305,65 @@ func (s *Server) run() {
 	// Set embedded server reference on gateway for hot reload support
 	s.gatewayServer.SetEmbeddedServer(s)
 
-	// Determine default provider and model
+	// Determine default provider — prefer explicit config, then auto-detect
+	// from the enabled providers list. Never hardcode a specific provider
+	// as fallback since the user may only have minimax/ollama enabled.
 	defaultProviderName := s.cfg.Provider.Default
-	if defaultProviderName == "" {
-		defaultProviderName = "copilot"
+	if defaultProviderName == "copilot" {
+		// copilot REST API is disabled; migrate to copilot-acp (CLI mode)
+		defaultProviderName = "copilot-acp"
 	}
-
-	// Get default chat model — must match the default provider's capabilities.
-	// Validate the model is compatible with the default provider to prevent
-	// routing API-only models (e.g., grok-code-fast-1) to ACP CLI.
-	chatModel = s.cfg.Copilot.Model
-	if chatModel == "" {
-		if defaultProviderName == "copilot-acp" {
-			chatModel = copilot.ACPDefaultModel
+	if defaultProviderName == "" {
+		// Auto-detect: use the first actually-enabled provider
+		if len(enabledProviders) > 0 {
+			defaultProviderName = enabledProviders[0]
 		} else {
-			chatModel = copilot.DefaultModel
+			defaultProviderName = "copilot-acp" // last resort
 		}
 	}
+	s.logger.Info().Str("default_provider", defaultProviderName).Msg("Default provider determined")
 
-	// Cross-validate: ensure chatModel is compatible with the default provider.
-	// This catches misconfigurations like copilot.model=grok-code-fast-1 with provider.default=copilot-acp.
-	if defaultProviderName == "copilot-acp" && !copilot.IsACPModel(chatModel) {
-		s.logger.Warn().Str("model", chatModel).Str("fallback", copilot.ACPDefaultModel).
-			Msg("Default model is not compatible with copilot-acp provider, using ACP default")
-		chatModel = copilot.ACPDefaultModel
-	} else if defaultProviderName == "copilot" && !copilot.IsAPIModel(chatModel) && !copilot.IsACPModel(chatModel) {
-		// For copilot provider, allow both API and ACP models (ACP models may be used via fallback)
-		s.logger.Warn().Str("model", chatModel).Str("fallback", copilot.DefaultModel).
-			Msg("Default model is not recognized, using copilot default")
-		chatModel = copilot.DefaultModel
+	// Determine default chat model based on the default provider.
+	// Each provider has its own default model; we pick the right one
+	// instead of always assuming copilot.
+	chatModel = s.cfg.Copilot.Model // explicit config takes priority
+	if chatModel == "" {
+		switch defaultProviderName {
+		case "copilot-acp":
+			chatModel = copilot.ACPDefaultModel
+		case "copilot":
+			chatModel = copilot.DefaultModel
+		case "minimax":
+			chatModel = "minimax:" + minimax.DefaultModel
+		case "ollama":
+			if s.cfg.Ollama.Model != "" {
+				chatModel = "ollama:" + s.cfg.Ollama.Model
+			} else {
+				chatModel = "ollama:" + ollama.DefaultModel
+			}
+		default:
+			chatModel = copilot.ACPDefaultModel
+		}
+	} else {
+		// Explicit copilot.model is set — cross-validate against the default provider.
+		if defaultProviderName == "copilot-acp" && !copilot.IsACPModel(chatModel) {
+			s.logger.Warn().Str("model", chatModel).Str("fallback", copilot.ACPDefaultModel).
+				Msg("Default model is not compatible with copilot-acp provider, using ACP default")
+			chatModel = copilot.ACPDefaultModel
+		} else if defaultProviderName == "minimax" {
+			// copilot.model is set but default provider is minimax — use minimax default
+			s.logger.Warn().Str("copilot_model", chatModel).Str("provider", defaultProviderName).
+				Msg("copilot.model ignored because default provider is minimax")
+			chatModel = "minimax:" + minimax.DefaultModel
+		} else if defaultProviderName == "ollama" {
+			s.logger.Warn().Str("copilot_model", chatModel).Str("provider", defaultProviderName).
+				Msg("copilot.model ignored because default provider is ollama")
+			if s.cfg.Ollama.Model != "" {
+				chatModel = "ollama:" + s.cfg.Ollama.Model
+			} else {
+				chatModel = "ollama:" + ollama.DefaultModel
+			}
+		}
 	}
 
 	// Get cron model
@@ -450,6 +481,12 @@ func (s *Server) run() {
 	compactor := compaction.NewCompactor(compactorConfig, defaultProvider)
 	agentRunner.SetCompactor(compactor)
 
+	// Initialize Context Manager (enhanced M04 compression with persistence)
+	// Memory will be wired later in initializeMemory
+	contextConfig := internalContext.DefaultConfig()
+	contextManager := internalContext.NewManager(s.db, compactor, nil, contextConfig)
+	agentRunner.SetContextManager(contextManager)
+
 	// Initialize skills system
 	homeDir, _ := os.UserHomeDir()
 	skillsDir := filepath.Join(homeDir, ".mote", "skills")
@@ -514,7 +551,7 @@ func (s *Server) run() {
 	}
 
 	// Initialize Memory system
-	s.initializeMemory(db, agentRunner, s.gatewayServer, hookManager)
+	s.initializeMemory(db, agentRunner, s.gatewayServer, hookManager, contextManager)
 
 	// Set dependencies on gateway
 	s.gatewayServer.SetAgentRunner(agentRunner)
@@ -983,34 +1020,57 @@ func (s *Server) reloadConfig() error {
 }
 
 // initializeMemory initializes the memory subsystem.
-func (s *Server) initializeMemory(db *storage.DB, agentRunner *runner.Runner, gatewayServer *gateway.Server, hookManager *hooks.Manager) {
+func (s *Server) initializeMemory(db *storage.DB, agentRunner *runner.Runner, gatewayServer *gateway.Server, hookManager *hooks.Manager, contextManager *internalContext.Manager) {
 	memoryEmbedder := memory.NewSimpleEmbedder(384)
-	memoryIndex, err := memory.NewMemoryIndex(db.DB, memoryEmbedder, memory.IndexConfig{
-		Dimensions:     384,
-		EnableFTS:      true,
-		EnableVec:      true, // Enable vector search
-		ChunkThreshold: 2000, // Auto-chunk content > 2000 chars
-	})
+
+	homeDir, _ := os.UserHomeDir()
+	moteDir := filepath.Join(homeDir, ".mote")
+
+	// Create MemoryManager (the new unified entry point)
+	memoryManager, err := memory.NewMemoryManager(
+		db.DB,
+		memoryEmbedder,
+		memory.ManagerConfig{
+			BaseDir:       moteDir,
+			EnableWatch:   true,
+			EnableCapture: s.cfg.Memory.AutoCapture.Enabled,
+			CaptureMode:   memory.CaptureModeLLMSummary,
+			IndexConfig: memory.IndexConfig{
+				Dimensions:     384,
+				EnableFTS:      true,
+				EnableVec:      true,
+				ChunkThreshold: 2000,
+			},
+			HybridConfig: memory.DefaultHybridConfig(),
+			BM25Config:   memory.DefaultBM25Config(),
+			BatchConfig:  memory.DefaultBatchConfig(),
+		},
+		s.logger,
+	)
 	if err != nil {
-		s.logger.Warn().Err(err).Msg("Failed to initialize memory index")
+		s.logger.Warn().Err(err).Msg("Failed to initialize memory manager")
 		return
 	}
 
-	// Initialize MarkdownStore
-	homeDir, _ := os.UserHomeDir()
-	moteDir := filepath.Join(homeDir, ".mote")
-	markdownStore, err := memory.NewMarkdownStore(memory.MarkdownStoreOptions{
-		BaseDir: moteDir,
-		Logger:  s.logger,
-	})
-	if err != nil {
-		s.logger.Warn().Err(err).Msg("Failed to initialize markdown store")
-	} else {
-		memoryIndex.SetMarkdownStore(markdownStore)
-	}
+	// Run initial sync (non-blocking)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if initErr := memoryManager.Init(ctx); initErr != nil {
+			s.logger.Warn().Err(initErr).Msg("Memory manager init failed")
+		}
+	}()
 
+	// Get the legacy MemoryIndex from IndexManager for backward compatibility
+	memoryIndex := memoryManager.GetIndexManager().GetLegacyIndex()
+
+	// Inject dependencies: legacy MemoryIndex for backward compat, MemoryManager for new features
 	agentRunner.SetMemory(memoryIndex)
 	gatewayServer.SetMemoryIndex(memoryIndex)
+	gatewayServer.SetMemoryManager(memoryManager)
+	if contextManager != nil {
+		contextManager.SetMemory(memoryIndex)
+	}
 
 	// Initialize auto-capture and auto-recall if enabled
 	if s.cfg.Memory.AutoCapture.Enabled || s.cfg.Memory.AutoRecall.Enabled {
@@ -1158,39 +1218,67 @@ type cronRunnerAdapter struct {
 }
 
 func (a *cronRunnerAdapter) Run(ctx context.Context, prompt string, opts ...interface{}) (string, error) {
-	// Extract session ID from opts — executor passes the derived session ID
-	// (via deriveCronSessionID, e.g. "cron-myJob") directly.
+	// Extract session ID and optional per-job model from opts.
+	// opts[0] = sessionID (string), opts[1] = model (string, optional)
 	var sessionID string
+	var jobModel string
 	if len(opts) > 0 {
 		if id, ok := opts[0].(string); ok {
 			sessionID = id
+		}
+	}
+	if len(opts) > 1 {
+		if m, ok := opts[1].(string); ok {
+			jobModel = m
 		}
 	}
 	if sessionID == "" {
 		sessionID = "cron-job:unknown"
 	}
 
-	// Run the prompt with cron-specific model
-	events, err := a.runner.RunWithModel(ctx, sessionID, prompt, a.cronModel, "cron")
+	// Use per-job model if specified, otherwise fall back to global cron model
+	effectiveModel := a.cronModel
+	if jobModel != "" {
+		effectiveModel = jobModel
+	}
+
+	// Run the prompt with the effective model
+	events, err := a.runner.RunWithModel(ctx, sessionID, prompt, effectiveModel, "cron")
 	if err != nil {
 		return "", err
 	}
 
-	// Collect the response
+	// Collect the response, but also watch for context cancellation.
+	// Without this select, a stuck tool execution would block forever
+	// even after the cron timeout fires.
 	var result strings.Builder
-	for event := range events {
-		switch event.Type {
-		case runner.EventTypeContent:
-			result.WriteString(event.Content)
-		case runner.EventTypeError:
-			if event.Error != nil {
-				return "", fmt.Errorf("agent error: %v", event.Error)
+	for {
+		select {
+		case event, ok := <-events:
+			if !ok {
+				return result.String(), nil
 			}
-			return "", fmt.Errorf("agent error: %s", event.ErrorMsg)
+			switch event.Type {
+			case runner.EventTypeContent:
+				result.WriteString(event.Content)
+			case runner.EventTypeError:
+				if event.Error != nil {
+					return "", fmt.Errorf("agent error: %v", event.Error)
+				}
+				return "", fmt.Errorf("agent error: %s", event.ErrorMsg)
+			}
+		case <-ctx.Done():
+			// Context cancelled (cron timeout). Cancel the session's RunQueue
+			// to abort stuck tool execution and free the worker for next run.
+			a.runner.CancelSession(sessionID)
+			return "", ctx.Err()
 		}
 	}
+}
 
-	return result.String(), nil
+// CancelSession implements cron.CancellableRunner.
+func (a *cronRunnerAdapter) CancelSession(sessionID string) {
+	a.runner.CancelSession(sessionID)
 }
 
 // acpToolRegistryAdapter adapts tools.Registry to copilot.ToolRegistryInterface.
