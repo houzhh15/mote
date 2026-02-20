@@ -94,7 +94,43 @@ func (b *BaseOrchestrator) compressIfNeeded(ctx context.Context, messages []prov
 			return compacted
 		}
 	}
-	return messages
+	
+	// Fallback: simple compression if we have too many messages
+	// Keep system messages and the most recent conversation messages
+	if len(messages) <= b.config.MaxTokens/1000 { // Rough heuristic: ~1000 tokens per message
+		return messages
+	}
+	
+	var systemMsgs []provider.Message
+	var convMsgs []provider.Message
+	
+	for _, msg := range messages {
+		if msg.Role == provider.RoleSystem {
+			systemMsgs = append(systemMsgs, msg)
+		} else {
+			convMsgs = append(convMsgs, msg)
+		}
+	}
+	
+	// Keep approx 80% of max messages to leave room for response
+	maxConvMessages := (b.config.MaxTokens / 1000) * 4 / 5
+	if maxConvMessages < 10 {
+		maxConvMessages = 10
+	}
+	
+	// Keep most recent conversation messages
+	startIdx := 0
+	if len(convMsgs) > maxConvMessages {
+		startIdx = len(convMsgs) - maxConvMessages
+	}
+	keptConv := convMsgs[startIdx:]
+	
+	// Combine system + kept messages
+	result := make([]provider.Message, 0, len(systemMsgs)+len(keptConv))
+	result = append(result, systemMsgs...)
+	result = append(result, keptConv...)
+	
+	return result
 }
 
 // buildChatRequest 构建聊天请求

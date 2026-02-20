@@ -734,7 +734,7 @@ func (r *Runner) runLoopWithModel(ctx context.Context, sessionID, userInput, mod
 	}
 
 	// Continue with the rest of the run loop (reuse the common logic)
-	r.runLoopCore(ctx, cached, sessionID, userInput, attachments, prov, events)
+	r.runLoopCoreWithOrchestrator(ctx, cached, sessionID, userInput, attachments, prov, events)
 }
 
 // runLoop is the main agent execution loop.
@@ -760,7 +760,7 @@ func (r *Runner) runLoop(ctx context.Context, sessionID, userInput string, attac
 	slog.Debug("runLoop got provider", "sessionID", sessionID, "sessionModel", sessionModel, "providerName", prov.Name())
 
 	// Call the core loop with the resolved provider
-	r.runLoopCore(ctx, cached, sessionID, userInput, attachments, prov, events)
+	r.runLoopCoreWithOrchestrator(ctx, cached, sessionID, userInput, attachments, prov, events)
 }
 
 // runLoopCore is the core agent execution loop that takes a resolved provider.
