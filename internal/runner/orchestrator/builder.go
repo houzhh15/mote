@@ -21,6 +21,7 @@ type BuilderOptions struct {
 	SkillManager *skills.Manager
 	HookManager  *hooks.Manager
 	MCPManager   *client.Manager
+	ToolExecutor ToolExecutorFunc
 }
 
 // OrchestratorBuilder 构建器用于创建 Orchestrator
@@ -53,6 +54,9 @@ func (b *OrchestratorBuilder) Build(prov provider.Provider) Orchestrator {
 	}
 	if b.opts.MCPManager != nil {
 		base.SetMCPManager(b.opts.MCPManager)
+	}
+	if b.opts.ToolExecutor != nil {
+		base.SetToolExecutor(b.opts.ToolExecutor)
 	}
 
 	// 根据 provider 类型选择合适的 orchestrator

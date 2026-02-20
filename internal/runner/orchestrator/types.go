@@ -47,3 +47,8 @@ type LoopState struct {
 
 // Usage 是 runner/types.Usage 的别名
 type Usage = types.Usage
+
+// ToolExecutorFunc 执行工具调用并返回结果。
+// 该函数由 Runner 注入，包含完整的工具执行逻辑（策略检查、钩子、心跳、截断等）。
+// 返回工具结果消息列表和错误数量（仅统计实际执行错误，不含 JSON 解析/策略拒绝等）。
+type ToolExecutorFunc func(ctx context.Context, toolCalls []provider.ToolCall, sessionID string) ([]provider.Message, int)

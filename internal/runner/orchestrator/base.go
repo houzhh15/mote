@@ -25,6 +25,7 @@ type BaseOrchestrator struct {
 	skillManager *skills.Manager
 	hookManager  *hooks.Manager
 	mcpManager   *client.Manager
+	toolExecutor ToolExecutorFunc
 
 	// Configuration
 	config Config
@@ -66,6 +67,11 @@ func (b *BaseOrchestrator) SetHookManager(hm *hooks.Manager) {
 // SetMCPManager 设置 MCP 管理器
 func (b *BaseOrchestrator) SetMCPManager(m *client.Manager) {
 	b.mcpManager = m
+}
+
+// SetToolExecutor 设置工具执行器
+func (b *BaseOrchestrator) SetToolExecutor(te ToolExecutorFunc) {
+	b.toolExecutor = te
 }
 
 // triggerHook 触发钩子

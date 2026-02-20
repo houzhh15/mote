@@ -829,6 +829,10 @@ func (r *Runner) runLoopCoreWithOrchestrator(ctx context.Context, cached *schedu
 		SkillManager: r.skillManager,
 		HookManager:  r.hookManager,
 		MCPManager:   r.mcpManager,
+		// Inject full tool executor from Runner (includes policy, hooks, heartbeat, truncation)
+		ToolExecutor: func(ctx context.Context, toolCalls []provider.ToolCall, sessionID string) ([]provider.Message, int) {
+			return r.executeToolsWithSession(ctx, toolCalls, events, sessionID, "")
+		},
 	})
 
 	// 构建合适的 orchestrator（根据 provider 类型）
