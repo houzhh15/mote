@@ -12,7 +12,7 @@ import (
 	"mote/internal/policy"
 	"mote/internal/policy/approval"
 	"mote/internal/provider"
-	"mote/internal/runner"
+	"mote/internal/runner/types"
 	"mote/internal/scheduler"
 	"mote/internal/storage"
 	"mote/internal/tools"
@@ -57,8 +57,8 @@ func (o *StandardOrchestrator) SetCompactionConfig(cc *compaction.CompactionConf
 }
 
 // Run 执行标准循环
-func (o *StandardOrchestrator) Run(ctx context.Context, request *RunRequest) (<-chan runner.Event, error) {
-	events := make(chan runner.Event, 100)
+func (o *StandardOrchestrator) Run(ctx context.Context, request *RunRequest) (<-chan types.Event, error) {
+	events := make(chan types.Event, 100)
 	
 	go func() {
 		defer close(events)
@@ -83,7 +83,7 @@ func (o *StandardOrchestrator) Run(ctx context.Context, request *RunRequest) (<-
 		hookCtx.Session = &hooks.SessionContext{ID: request.SessionID}
 		
 		if result, _ := o.triggerHook(ctx, hookCtx); result != nil && !result.Continue {
-			events <- runner.NewErrorEvent(runner.ErrHookInterrupted)
+			events <- types.NewErrorEvent(ErrHookInterrupted)
 			return
 		}
 		
@@ -98,7 +98,7 @@ func (o *StandardOrchestrator) Run(ctx context.Context, request *RunRequest) (<-
 		// Add user message to session
 		_, err := o.sessions.AddMessage(request.SessionID, provider.RoleUser, userInput, nil, "")
 		if err != nil {
-			events <- runner.NewErrorEvent(err)
+			events <- types.NewErrorEvent(err)
 			return
 		}
 		
@@ -106,7 +106,7 @@ func (o *StandardOrchestrator) Run(ctx context.Context, request *RunRequest) (<-
 		// TODO: Integrate MessageBuilder component
 		messages, err := o.buildMessagesLegacy(ctx, request.CachedSession, userInput)
 		if err != nil {
-			events <- runner.NewErrorEvent(err)
+			events <- types.NewErrorEvent(err)
 			return
 		}
 		
@@ -137,7 +137,7 @@ func (o *StandardOrchestrator) Run(ctx context.Context, request *RunRequest) (<-
 			case <-ctx.Done():
 				slog.Warn("StandardOrchestrator: context cancelled", "sessionID", request.SessionID)
 				_, _ = o.sessions.AddMessage(request.SessionID, provider.RoleAssistant, "[任务被取消或超时]", nil, "")
-				events <- runner.NewErrorEvent(runner.ErrContextCanceled)
+				events <- types.NewErrorEvent(ErrContextCanceled)
 				return
 			default:
 			}
@@ -193,7 +193,7 @@ func (o *StandardOrchestrator) Run(ctx context.Context, request *RunRequest) (<-
 			// Call provider with retry logic
 			resp, err := o.callProviderWithRetry(ctx, request.Provider, req, events, state)
 			if err != nil {
-				events <- runner.NewErrorEvent(err)
+				events <- types.NewErrorEvent(err)
 				return
 			}
 			
@@ -205,14 +205,14 @@ func (o *StandardOrchestrator) Run(ctx context.Context, request *RunRequest) (<-
 				
 				// Send final content
 				if resp.Content != "" {
-					events <- runner.Event{Type: runner.EventTypeContent, Content: resp.Content}
+					events <- types.Event{Type: types.EventTypeContent, Content: resp.Content}
 				}
 				
 				// Save assistant message
 				_, _ = o.sessions.AddMessage(request.SessionID, provider.RoleAssistant, resp.Content, nil, "")
 				
 				// Send done event
-				events <- runner.Event{Type: runner.EventTypeDone}
+				events <- types.Event{Type: types.EventTypeDone}
 				return
 			}
 			
@@ -231,7 +231,7 @@ func (o *StandardOrchestrator) Run(ctx context.Context, request *RunRequest) (<-
 			// Check consecutive tool errors
 			if state.TotalConsecutiveErrors >= maxConsecutiveToolErrors {
 				slog.Warn("StandardOrchestrator: too many consecutive tool errors", "sessionID", request.SessionID)
-				events <- runner.NewErrorEvent(fmt.Errorf("too many consecutive tool errors"))
+				events <- types.NewErrorEvent(fmt.Errorf("too many consecutive tool errors"))
 				return
 			}
 			
@@ -249,14 +249,14 @@ func (o *StandardOrchestrator) Run(ctx context.Context, request *RunRequest) (<-
 		}
 		
 		// Max iterations reached
-		events <- runner.NewErrorEvent(fmt.Errorf("max iterations (%d) reached", o.config.MaxIterations))
+		events <- types.NewErrorEvent(fmt.Errorf("max iterations (%d) reached", o.config.MaxIterations))
 	}()
 	
 	return events, nil
 }
 
 // callProviderWithRetry 调用提供商并处理重试
-func (o *StandardOrchestrator) callProviderWithRetry(ctx context.Context, prov provider.Provider, req provider.ChatRequest, events chan<- runner.Event, state *LoopState) (*provider.ChatResponse, error) {
+func (o *StandardOrchestrator) callProviderWithRetry(ctx context.Context, prov provider.Provider, req provider.ChatRequest, events chan<- types.Event, state *LoopState) (*provider.ChatResponse, error) {
 	var resp *provider.ChatResponse
 	var err error
 	
@@ -280,7 +280,7 @@ func (o *StandardOrchestrator) callProviderWithRetry(ctx context.Context, prov p
 			}
 			if event.Delta != "" {
 				resp.Content += event.Delta
-				events <- runner.Event{Type: runner.EventTypeContent, Content: event.Delta}
+				events <- types.Event{Type: types.EventTypeContent, Content: event.Delta}
 			}
 			if event.FinishReason != "" {
 				resp.FinishReason = event.FinishReason
@@ -299,7 +299,7 @@ func (o *StandardOrchestrator) callProviderWithRetry(ctx context.Context, prov p
 		if provider.IsContextWindowExceeded(err) && !state.ContextRetried && o.compactor != nil {
 			state.ContextRetried = true
 			slog.Warn("StandardOrchestrator: context window exceeded, will retry after compression", "sessionID", req.ConversationID)
-			events <- runner.NewContentEvent("\n\n⚠️ Context window exceeded — compacting history and retrying…\n\n")
+			events <- types.NewContentEvent("\n\n⚠️ Context window exceeded — compacting history and retrying…\n\n")
 			return nil, err // Caller will handle retry
 		}
 		
@@ -311,7 +311,7 @@ func (o *StandardOrchestrator) callProviderWithRetry(ctx context.Context, prov p
 				"retry", state.TransientRetries,
 				"backoff", backoff,
 				"error", err)
-			events <- runner.NewContentEvent(fmt.Sprintf("\n\n⚠️ Provider transient error — retrying in %s… (%d/%d)\n\n", backoff, state.TransientRetries, maxTransientRetries))
+			events <- types.NewContentEvent(fmt.Sprintf("\n\n⚠️ Provider transient error — retrying in %s… (%d/%d)\n\n", backoff, state.TransientRetries, maxTransientRetries))
 			time.Sleep(backoff)
 			return nil, err // Caller will handle retry
 		}
@@ -323,7 +323,7 @@ func (o *StandardOrchestrator) callProviderWithRetry(ctx context.Context, prov p
 }
 
 // executeToolsSimple 简化的工具执行（暂时直接调用 registry）
-func (o *StandardOrchestrator) executeToolsSimple(ctx context.Context, toolCalls []provider.ToolCall, events chan<- runner.Event, sessionID string) ([]provider.Message, int) {
+func (o *StandardOrchestrator) executeToolsSimple(ctx context.Context, toolCalls []provider.ToolCall, events chan<- types.Event, sessionID string) ([]provider.Message, int) {
 	var results []provider.Message
 	errorCount := 0
 	
@@ -353,7 +353,7 @@ func (o *StandardOrchestrator) executeToolsSimple(ctx context.Context, toolCalls
 					Content:    errMsg,
 					ToolCallID: tc.ID,
 				})
-				events <- runner.NewToolResultEvent(tc.ID, toolName, errMsg, true, 0)
+				events <- types.NewToolResultEvent(tc.ID, toolName, errMsg, true, 0)
 				errorCount++
 				continue
 			}
@@ -379,7 +379,7 @@ func (o *StandardOrchestrator) executeToolsSimple(ctx context.Context, toolCalls
 		}
 		
 		// Emit tool result event
-		events <- runner.NewToolResultEvent(tc.ID, toolName, output, isError, duration.Milliseconds())
+		events <- types.NewToolResultEvent(tc.ID, toolName, output, isError, duration.Milliseconds())
 		
 		// Add tool result message
 		results = append(results, provider.Message{

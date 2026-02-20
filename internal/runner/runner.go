@@ -24,6 +24,7 @@ import (
 	"mote/internal/prompt"
 	"mote/internal/provider"
 	"mote/internal/provider/minimax"
+	"mote/internal/runner/orchestrator"
 	"mote/internal/scheduler"
 	"mote/internal/skills"
 	"mote/internal/storage"
@@ -1179,6 +1180,104 @@ func (r *Runner) runLoopCore(ctx context.Context, cached *scheduler.CachedSessio
 	maxIterMsg := fmt.Sprintf("[已达到最大迭代次数 (%d)，任务执行被中止]", r.config.MaxIterations)
 	_, _ = r.sessions.AddMessage(sessionID, provider.RoleAssistant, maxIterMsg, nil, "")
 	events <- NewErrorEvent(ErrMaxIterations)
+}
+
+// runLoopCoreWithOrchestrator 使用新的模块化 Orchestrator 架构执行核心循环
+func (r *Runner) runLoopCoreWithOrchestrator(ctx context.Context, cached *scheduler.CachedSession, sessionID, userInput string, attachments []provider.Attachment, prov provider.Provider, events chan<- Event) {
+	// M07: Trigger session_create hook for new sessions
+	if len(cached.Messages) == 0 {
+		hookCtx := hooks.NewContext(hooks.HookSessionCreate)
+		hookCtx.Session = &hooks.SessionContext{
+			ID:        sessionID,
+			CreatedAt: time.Now(),
+		}
+		_, _ = r.triggerHook(ctx, hookCtx)
+	}
+
+	// M07: Trigger before_message hook
+	hookCtx := hooks.NewContext(hooks.HookBeforeMessage)
+	hookCtx.Message = &hooks.MessageContext{
+		Content: userInput,
+		Role:    string(provider.RoleUser),
+		From:    "user",
+	}
+	hookCtx.Session = &hooks.SessionContext{ID: sessionID}
+
+	result, _ := r.triggerHook(ctx, hookCtx)
+	if result != nil && !result.Continue {
+		events <- NewErrorEvent(ErrHookInterrupted)
+		return
+	}
+	// Apply modifications
+	if result != nil && result.Modified {
+		if modified, ok := result.Data["content"].(string); ok {
+			userInput = modified
+		}
+	}
+
+	// MCP JSON preprocessing - detect and handle MCP configurations directly
+	if r.mcpManager != nil {
+		if result := r.PreprocessMCPInput(ctx, userInput); result != nil && result.Handled {
+			// Save user message
+			_, _ = r.sessions.AddMessage(sessionID, provider.RoleUser, userInput, nil, "")
+			// Save response as assistant message
+			_, _ = r.sessions.AddMessage(sessionID, provider.RoleAssistant, result.Response, nil, "")
+			// Send response event
+			events <- Event{
+				Type:    EventTypeContent,
+				Content: result.Response,
+			}
+			events <- Event{Type: EventTypeDone}
+			return
+		}
+	}
+
+	// 创建 Orchestrator builder
+	orchBuilder := orchestrator.NewBuilder(orchestrator.BuilderOptions{
+		Sessions:     r.sessions,
+		Registry:     r.registry,
+		Config: orchestrator.Config{
+			MaxIterations: r.config.MaxIterations,
+			MaxTokens:     r.config.MaxTokens,
+			Temperature:   r.config.Temperature,
+			StreamOutput:  true,
+			Timeout:       r.config.Timeout,
+		},
+		Compactor:    r.compactor,
+		SystemPrompt: r.systemPrompt,
+		SkillManager: r.skillManager,
+		HookManager:  r.hookManager,
+		MCPManager:   r.mcpManager,
+	})
+
+	// 构建合适的 orchestrator（根据 provider 类型）
+	orch := orchBuilder.Build(prov)
+
+	// 创建运行请求
+	req := &orchestrator.RunRequest{
+		SessionID:     sessionID,
+		UserInput:     userInput,
+		Attachments:   attachments,
+		Provider:      prov,
+		CachedSession: cached,
+	}
+
+	// 执行 orchestrator
+	slog.Info("runLoopCoreWithOrchestrator: starting orchestrator",
+		"sessionID", sessionID,
+		"provider", prov.Name(),
+		"orchestratorType", fmt.Sprintf("%T", orch))
+
+	orchEvents, err := orch.Run(ctx, req)
+	if err != nil {
+		events <- NewErrorEvent(err)
+		return
+	}
+
+	// 转发所有事件，转换为 runner.Event
+	for event := range orchEvents {
+		events <- FromTypesEvent(event)
+	}
 }
 
 // runACPMode handles execution for ACP providers.

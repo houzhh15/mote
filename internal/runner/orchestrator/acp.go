@@ -8,8 +8,8 @@ import (
 	"strings"
 
 	"mote/internal/provider"
-	"mote/internal/runner"
 	"mote/internal/runner/message"
+	"mote/internal/runner/types"
 	"mote/internal/scheduler"
 	"mote/internal/skills"
 	"mote/internal/storage"
@@ -40,8 +40,8 @@ func (o *ACPOrchestrator) SetMessageBuilder(builder message.Builder) {
 }
 
 // Run 执行 ACP 模式的运行循环
-func (o *ACPOrchestrator) Run(ctx context.Context, request *RunRequest) (<-chan runner.Event, error) {
-	events := make(chan runner.Event, 100)
+func (o *ACPOrchestrator) Run(ctx context.Context, request *RunRequest) (<-chan types.Event, error) {
+	events := make(chan types.Event, 100)
 
 	go func() {
 		defer close(events)
@@ -52,7 +52,7 @@ func (o *ACPOrchestrator) Run(ctx context.Context, request *RunRequest) (<-chan 
 }
 
 // runACPLoop 执行 ACP 循环的核心逻辑
-func (o *ACPOrchestrator) runACPLoop(ctx context.Context, request *RunRequest, events chan<- runner.Event) {
+func (o *ACPOrchestrator) runACPLoop(ctx context.Context, request *RunRequest, events chan<- types.Event) {
 	sessionID := request.SessionID
 	userInput := request.UserInput
 	prov := request.Provider
@@ -61,7 +61,7 @@ func (o *ACPOrchestrator) runACPLoop(ctx context.Context, request *RunRequest, e
 	// 1. 添加用户消息到会话
 	_, err := o.sessions.AddMessage(sessionID, provider.RoleUser, userInput, nil, "")
 	if err != nil {
-		events <- runner.NewErrorEvent(err)
+		events <- types.NewErrorEvent(err)
 		return
 	}
 
@@ -79,7 +79,7 @@ func (o *ACPOrchestrator) runACPLoop(ctx context.Context, request *RunRequest, e
 	}
 
 	if err != nil {
-		events <- runner.NewErrorEvent(fmt.Errorf("build messages: %w", err))
+		events <- types.NewErrorEvent(fmt.Errorf("build messages: %w", err))
 		return
 	}
 
@@ -112,7 +112,7 @@ func (o *ACPOrchestrator) runACPLoop(ctx context.Context, request *RunRequest, e
 		if provider.IsContextWindowExceeded(err) && o.compactor != nil {
 			slog.Warn("ACPOrchestrator: context window exceeded, compacting and retrying",
 				"sessionID", sessionID)
-			events <- runner.NewContentEvent("\n\n⚠️ Context window exceeded — compacting history and retrying…\n\n")
+			events <- types.NewContentEvent("\n\n⚠️ Context window exceeded — compacting history and retrying…\n\n")
 			compacted := o.compactor.CompactWithFallback(ctx, messages, prov)
 			if len(compacted) > 0 {
 				req.Messages = compacted
@@ -120,7 +120,7 @@ func (o *ACPOrchestrator) runACPLoop(ctx context.Context, request *RunRequest, e
 			}
 		}
 		if err != nil {
-			events <- runner.NewErrorEvent(err)
+			events <- types.NewErrorEvent(err)
 			return
 		}
 	}
@@ -187,21 +187,21 @@ func (o *ACPOrchestrator) injectSkills(sessionID string, cached *scheduler.Cache
 }
 
 // forwardAndSaveEvents 转发 provider 事件并保存结果
-func (o *ACPOrchestrator) forwardAndSaveEvents(sessionID string, provEvents <-chan provider.ChatEvent, events chan<- runner.Event) {
+func (o *ACPOrchestrator) forwardAndSaveEvents(sessionID string, provEvents <-chan provider.ChatEvent, events chan<- types.Event) {
 	var assistantContent strings.Builder
-	var totalUsage runner.Usage
+	var totalUsage types.Usage
 	var toolCallEvents []provider.ToolCall
 
 	for event := range provEvents {
 		switch event.Type {
 		case provider.EventTypeContent:
 			assistantContent.WriteString(event.Delta)
-			events <- runner.NewContentEvent(event.Delta)
+			events <- types.NewContentEvent(event.Delta)
 
 		case provider.EventTypeThinking:
 			if event.Thinking != "" {
-				events <- runner.Event{
-					Type:     runner.EventTypeThinking,
+				events <- types.Event{
+					Type:     types.EventTypeThinking,
 					Thinking: event.Thinking,
 				}
 			}
@@ -221,14 +221,14 @@ func (o *ACPOrchestrator) forwardAndSaveEvents(sessionID string, provEvents <-ch
 					})
 					tc.Function = funcData
 				}
-				events <- runner.NewToolCallEvent(tc)
+				events <- types.NewToolCallEvent(tc)
 			}
 
 		case provider.EventTypeToolCallUpdate:
 			if event.ToolCallUpdate != nil {
-				events <- runner.Event{
-					Type: runner.EventTypeToolCallUpdate,
-					ToolCallUpdate: &runner.ToolCallUpdateEvent{
+				events <- types.Event{
+					Type: types.EventTypeToolCallUpdate,
+					ToolCallUpdate: &types.ToolCallUpdateEvent{
 						ToolCallID: event.ToolCallUpdate.ID,
 						ToolName:   event.ToolCallUpdate.Name,
 						Status:     event.ToolCallUpdate.Status,
@@ -263,14 +263,14 @@ func (o *ACPOrchestrator) forwardAndSaveEvents(sessionID string, provEvents <-ch
 				"toolCalls", len(toolCallEvents),
 				"finishReason", event.FinishReason)
 
-			events <- runner.NewDoneEvent(&totalUsage)
+			events <- types.NewDoneEvent(&totalUsage)
 			return
 
 		case provider.EventTypeError:
 			slog.Error("ACPOrchestrator: error from provider",
 				"sessionID", sessionID,
 				"error", event.Error)
-			events <- runner.NewErrorEvent(event.Error)
+			events <- types.NewErrorEvent(event.Error)
 			return
 		}
 	}
@@ -278,7 +278,7 @@ func (o *ACPOrchestrator) forwardAndSaveEvents(sessionID string, provEvents <-ch
 	// 如果没有收到 done 事件就结束了，记录警告
 	slog.Warn("ACPOrchestrator: provider events ended without done event",
 		"sessionID", sessionID)
-	events <- runner.NewDoneEvent(&totalUsage)
+	events <- types.NewDoneEvent(&totalUsage)
 }
 
 // buildMessagesLegacy 是临时的回退实现，用于在 MessageBuilder 未设置时使用

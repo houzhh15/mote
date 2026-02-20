@@ -2,6 +2,7 @@ package runner
 
 import (
 	"mote/internal/provider"
+	"mote/internal/runner/types"
 	"mote/internal/storage"
 )
 
@@ -279,3 +280,74 @@ func NewPauseResumedEvent(sessionID string, hasUserInput bool) Event {
 		},
 	}
 }
+
+// FromTypesEvent converts a types.Event to a runner.Event
+func FromTypesEvent(te types.Event) Event {
+	// Convert enums
+	eventType := EventType(te.Type)
+	
+	// Convert nested structures if needed
+	var toolCallUpdate *ToolCallUpdateEvent
+	if te.ToolCallUpdate != nil {
+		toolCallUpdate = &ToolCallUpdateEvent{
+			ToolCallID: te.ToolCallUpdate.ToolCallID,
+			ToolName:   te.ToolCallUpdate.ToolName,
+			Status:     te.ToolCallUpdate.Status,
+			Arguments:  te.ToolCallUpdate.Arguments,
+		}
+	}
+	
+	var toolResult *ToolResultEvent
+	if te.ToolResult != nil {
+		toolResult = &ToolResultEvent{
+			ToolCallID: te.ToolResult.ToolCallID,
+			ToolName:   te.ToolResult.ToolName,
+			Output:     te.ToolResult.Output,
+			IsError:    te.ToolResult.IsError,
+			DurationMs: te.ToolResult.DurationMs,
+		}
+	}
+	
+	var usage *Usage
+	if te.Usage != nil {
+		usage = &Usage{
+			PromptTokens:     te.Usage.PromptTokens,
+			CompletionTokens: te.Usage.CompletionTokens,
+			TotalTokens:      te.Usage.TotalTokens,
+		}
+	}
+	
+	var pauseData *PauseEventData
+	if te.PauseData != nil {
+		var tools []ToolInfo
+		for _, t := range te.PauseData.PendingTools {
+			tools = append(tools, ToolInfo{
+				Name:      t.Name,
+				Arguments: t.Arguments,
+			})
+		}
+		pauseData = &PauseEventData{
+			SessionID:    te.PauseData.SessionID,
+			PendingTools: tools,
+			HasUserInput: te.PauseData.HasUserInput,
+		}
+	}
+	
+	return Event{
+		Type:             eventType,
+		Content:          te.Content,
+		Thinking:         te.Thinking,
+		ToolCall:         te.ToolCall,
+		ToolCallUpdate:   toolCallUpdate,
+		ToolResult:       toolResult,
+		Usage:            usage,
+		Error:            te.Error,
+		ErrorMsg:         te.ErrorMsg,
+		Iteration:        te.Iteration,
+		SessionID:        te.SessionID,
+		TruncatedReason:  te.TruncatedReason,
+		PendingToolCalls: te.PendingToolCalls,
+		PauseData:        pauseData,
+	}
+}
+

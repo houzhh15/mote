@@ -5,14 +5,14 @@ import (
 	"time"
 
 	"mote/internal/provider"
-	"mote/internal/runner"
+	"mote/internal/runner/types"
 	"mote/internal/scheduler"
 )
 
 // Orchestrator 控制 Agent 循环的执行流程
 type Orchestrator interface {
 	// Run 执行完整的 Agent 循环，返回事件通道
-	Run(ctx context.Context, request *RunRequest) (<-chan runner.Event, error)
+	Run(ctx context.Context, request *RunRequest) (<-chan types.Event, error)
 }
 
 // RunRequest 封装运行请求的所有参数
@@ -45,9 +45,5 @@ type LoopState struct {
 	UseChat                bool // After compaction, use Chat mode instead of Stream
 }
 
-// Usage 跟踪 token 使用情况
-type Usage struct {
-	PromptTokens     int
-	CompletionTokens int
-	TotalTokens      int
-}
+// Usage 是 runner/types.Usage 的别名
+type Usage = types.Usage

@@ -8,7 +8,6 @@ import (
 	"mote/internal/mcp/client"
 	"mote/internal/prompt"
 	"mote/internal/provider"
-	"mote/internal/runner"
 	"mote/internal/scheduler"
 	"mote/internal/skills"
 	"mote/internal/tools"
@@ -21,7 +20,6 @@ type BaseOrchestrator struct {
 	registry     *tools.Registry
 	compactor    *compaction.Compactor
 	systemPrompt *prompt.SystemPromptBuilder
-	history      *runner.HistoryManager
 
 	// Optional components
 	skillManager *skills.Manager
@@ -42,7 +40,6 @@ func NewBaseOrchestrator(
 		sessions: sessions,
 		registry: registry,
 		config:   config,
-		history:  runner.NewHistoryManager(config.MaxTokens, config.MaxTokens),
 	}
 }
 
@@ -96,8 +93,6 @@ func (b *BaseOrchestrator) compressIfNeeded(ctx context.Context, messages []prov
 			b.compactor.IncrementCompactionCount(messages[0].Content) // Use first message as session indicator
 			return compacted
 		}
-	} else if compressed, changed := b.history.Compress(messages); changed {
-		return compressed
 	}
 	return messages
 }
