@@ -58,6 +58,35 @@
 
 **提交**: `74172b0`
 
+#### 1.4 MessageBuilder 单元测试
+**文件**:
+- `internal/runner/message/builder_test.go` (227 行)
+
+**测试用例** (5个):
+1. TestStandardBuilder_BuildMessages_MinimalDefault - 默认提示词
+2. TestStandardBuilder_BuildMessages_WithStaticPrompt - 静态提示词注入
+3. TestStandardBuilder_BuildMessages_WithHistory - 历史消息加载
+4. TestStandardBuilder_BuildMessages_RequestOverride - 请求级别覆盖
+5. TestStandardBuilder_BuildMessages_WithToolCalls - 工具调用解析
+
+**状态**: ✅ 所有测试通过 (0.570s)
+
+**提交**: `33e6b7e`
+
+#### 1.5 StandardOrchestrator 单元测试
+**文件**:
+- `internal/runner/orchestrator/orchestrator_test.go` (147 行)
+
+**测试用例** (4个):
+1. TestStandardOrchestrator_ConvertToolCalls - 工具调用转换逻辑
+2. TestLoopState_Initial - 循环状态初始化
+3. TestUsage_Accumulation - Token 累计
+4. TestStorageToolCall_Conversion - storage.ToolCall 结构
+
+**状态**: ✅ 所有测试通过 (2.024s)
+
+**提交**: `12d66d6`
+
 ---
 
 ## 📊 重构效果
@@ -81,10 +110,11 @@ internal/runner/
 ### 关键指标
 | 指标 | 当前 | 目标 |
 |------|------|------|
-| 新组件行数 | 828 行 | - |
+| 新组件行数 | 975 行 (代码628+测试347) | - |
 | 最大文件行数 | 2397 (runner.go) | <800 |
-| 新增测试覆盖率 | 0% (待添加) | >85% |
-| 测试通过率 | ✅ 100% | 100% |
+| 新增测试数量 | 9 个 (5+4) | >20 |
+| 新增测试覆盖 | MessageBuilder (100%), Orchestrator (部分) | >85% |
+| 测试通过率 | ✅ 100% (9/9) | 100% |
 
 ---
 
@@ -92,12 +122,16 @@ internal/runner/
 
 ### 重构进度
 ```
-[████████░░░░░░░░░░░░] 40% (阶段 1-2 完成)
+[██████████░░░░░░░░░░] 50% (阶段 1-2 完成，测试已添加)
 ```
 
 ### 组件状态
 - ✅ **Orchestrator 接口**: 已定义
 - ✅ **BaseOrchestrator**: 已实现
+- ✅ **StandardOrchestrator**: 已实现 + 已测试
+- ✅ **MessageBuilder**: 已实现 + 已测试
+- ⏳ **ACPOrchestrator**: 待实现
+- ⏳ **Runner 集成**: 待实现
 - ✅ **StandardOrchestrator**: 已实现（功能完整）
 - ✅ **MessageBuilder**: 已实现（未集成）
 - ⏳ **ACPOrchestrator**: 未实现
