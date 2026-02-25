@@ -62,17 +62,40 @@ type ChatResponse struct {
 
 // ChatStreamEvent represents a streaming event.
 type ChatStreamEvent struct {
-	Type             string               `json:"type"`                         // "content", "tool_call", "tool_call_update", "tool_result", "thinking", "done", "error", "heartbeat", "truncated"
-	Delta            string               `json:"delta,omitempty"`              // For content type
-	Thinking         string               `json:"thinking,omitempty"`           // For thinking type (temporary display)
-	ToolCall         *ToolCallResult      `json:"tool_call,omitempty"`          // For tool_call type
-	ToolCallUpdate   *ToolCallUpdateEvent `json:"tool_call_update,omitempty"`   // For tool_call_update type
-	ToolResult       *ToolResultEvent     `json:"tool_result,omitempty"`        // For tool_result type
-	SessionID        string               `json:"session_id,omitempty"`         // For done type
-	Error            string               `json:"error,omitempty"`              // For error type (legacy)
-	ErrorDetail      *ErrorDetail         `json:"error_detail,omitempty"`       // For error type (detailed)
-	TruncatedReason  string               `json:"truncated_reason,omitempty"`   // For truncated type (e.g., "length")
-	PendingToolCalls int                  `json:"pending_tool_calls,omitempty"` // For truncated type
+	Type             string                    `json:"type"`                         // "content", "tool_call", "tool_call_update", "tool_result", "thinking", "done", "error", "heartbeat", "truncated", "approval_request", "approval_resolved"
+	Delta            string                    `json:"delta,omitempty"`              // For content type
+	Thinking         string                    `json:"thinking,omitempty"`           // For thinking type (temporary display)
+	ToolCall         *ToolCallResult           `json:"tool_call,omitempty"`          // For tool_call type
+	ToolCallUpdate   *ToolCallUpdateEvent      `json:"tool_call_update,omitempty"`   // For tool_call_update type
+	ToolResult       *ToolResultEvent          `json:"tool_result,omitempty"`        // For tool_result type
+	SessionID        string                    `json:"session_id,omitempty"`         // For done type
+	Error            string                    `json:"error,omitempty"`              // For error type (legacy)
+	ErrorDetail      *ErrorDetail              `json:"error_detail,omitempty"`       // For error type (detailed)
+	TruncatedReason  string                    `json:"truncated_reason,omitempty"`   // For truncated type (e.g., "length")
+	PendingToolCalls int                       `json:"pending_tool_calls,omitempty"` // For truncated type
+	ApprovalRequest  *ApprovalRequestSSEEvent  `json:"approval_request,omitempty"`   // For approval_request type
+	ApprovalResolved *ApprovalResolvedSSEEvent `json:"approval_resolved,omitempty"`  // For approval_resolved type
+
+	// Multi-agent delegate identity (set when event comes from a sub-agent)
+	AgentName  string `json:"agent_name,omitempty"`
+	AgentDepth int    `json:"agent_depth,omitempty"`
+}
+
+// ApprovalRequestSSEEvent represents an approval request sent via SSE.
+type ApprovalRequestSSEEvent struct {
+	ID        string `json:"id"`
+	ToolName  string `json:"tool_name"`
+	Arguments string `json:"arguments"`
+	Reason    string `json:"reason"`
+	SessionID string `json:"session_id"`
+	ExpiresAt string `json:"expires_at"`
+}
+
+// ApprovalResolvedSSEEvent represents an approval resolution sent via SSE.
+type ApprovalResolvedSSEEvent struct {
+	ID        string `json:"id"`
+	Approved  bool   `json:"approved"`
+	DecidedAt string `json:"decided_at"`
 }
 
 // ToolCallUpdateEvent represents a tool call progress update in streaming.
@@ -182,10 +205,11 @@ type MemoryResult struct {
 
 // AddMemoryRequest represents a request to add memory.
 type AddMemoryRequest struct {
-	Content    string  `json:"content"`              // Required
-	Source     string  `json:"source,omitempty"`     // Default "api"
-	Category   string  `json:"category,omitempty"`   // P2: Auto-detected if empty
-	Importance float64 `json:"importance,omitempty"` // P2: Default 0.7 if empty
+	Content       string  `json:"content"`                  // Required
+	Source        string  `json:"source,omitempty"`         // Default "api"
+	Category      string  `json:"category,omitempty"`       // P2: Auto-detected if empty
+	Importance    float64 `json:"importance,omitempty"`     // P2: Default 0.7 if empty
+	CaptureMethod string  `json:"capture_method,omitempty"` // manual|auto|import; default "manual"
 }
 
 // AddMemoryResponse represents a response after adding memory.
@@ -229,7 +253,18 @@ type SessionSummary struct {
 	Preview        string    `json:"preview,omitempty"`         // Message preview
 	Model          string    `json:"model,omitempty"`           // Model used for this session
 	Scenario       string    `json:"scenario,omitempty"`        // Scenario: chat/cron/channel
+	Source         string    `json:"source,omitempty"`          // Source: chat/cron/delegate (derived from ID prefix)
 	SelectedSkills []string  `json:"selected_skills,omitempty"` // Selected skill IDs (nil=all)
+}
+
+// BatchDeleteSessionsRequest is the request body for batch session deletion.
+type BatchDeleteSessionsRequest struct {
+	IDs []string `json:"ids"`
+}
+
+// BatchDeleteDelegationsRequest is the request body for batch delegation deletion.
+type BatchDeleteDelegationsRequest struct {
+	IDs []string `json:"ids"`
 }
 
 // SessionDetail represents detailed session info.
@@ -325,7 +360,8 @@ type Message struct {
 
 // MessagesListResponse represents the response for listing messages.
 type MessagesListResponse struct {
-	Messages []Message `json:"messages"`
+	Messages        []Message `json:"messages"`
+	EstimatedTokens int       `json:"estimated_tokens"` // Backend-computed token estimate (same heuristic as compaction)
 }
 
 // =============================================================================
@@ -338,6 +374,7 @@ type ConfigResponse struct {
 	Provider ProviderConfigView `json:"provider"`
 	Ollama   OllamaConfigView   `json:"ollama"`
 	Minimax  MinimaxConfigView  `json:"minimax"`
+	GLM      GLMConfigView      `json:"glm"`
 	Memory   MemoryConfigView   `json:"memory"`
 	Cron     CronConfigView     `json:"cron"`
 	MCP      MCPConfigView      `json:"mcp"`
@@ -378,6 +415,14 @@ type MinimaxConfigView struct {
 	MaxTokens int    `json:"max_tokens,omitempty"`
 }
 
+// GLMConfigView represents GLM (智谱AI) provider configuration for API.
+type GLMConfigView struct {
+	APIKey    string `json:"api_key,omitempty"`
+	Endpoint  string `json:"endpoint,omitempty"`
+	Model     string `json:"model,omitempty"`
+	MaxTokens int    `json:"max_tokens,omitempty"`
+}
+
 // MemoryConfigView represents memory configuration for API.
 type MemoryConfigView struct {
 	Enabled bool `json:"enabled"`
@@ -400,6 +445,7 @@ type UpdateConfigRequest struct {
 	Provider *ProviderConfigView `json:"provider,omitempty"`
 	Ollama   *OllamaConfigView   `json:"ollama,omitempty"`
 	Minimax  *MinimaxConfigView  `json:"minimax,omitempty"`
+	GLM      *GLMConfigView      `json:"glm,omitempty"`
 	Memory   *MemoryConfigView   `json:"memory,omitempty"`
 	Cron     *CronConfigView     `json:"cron,omitempty"`
 }

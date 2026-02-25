@@ -8,11 +8,13 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
 	"mote/internal/config"
+	"mote/internal/policy"
 	"mote/internal/provider/copilot"
 )
 
@@ -66,6 +68,11 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 
 	// 6. Check server connectivity
 	results = append(results, checkServerConnectivity())
+
+	// 7. Security checks (M08B)
+	fmt.Println("=== Security Checks ===")
+	secResults := runSecurityChecks()
+	results = append(results, secResults...)
 
 	// Print results
 	fmt.Println()
@@ -385,4 +392,143 @@ func checkMCPServers(serverURL string) checkResult {
 			len(response.Servers),
 		),
 	}
+}
+
+// ============== M08B: Security Checks ==============
+
+// SecurityCheck defines a single security diagnostic item.
+type SecurityCheck struct {
+	Name  string
+	Level string // "info", "warn", "critical"
+	Check func() (bool, string)
+}
+
+// runSecurityChecks executes all security checks and returns results.
+func runSecurityChecks() []checkResult {
+	checks := []SecurityCheck{
+		{
+			Name:  "config.permissions",
+			Level: "warn",
+			Check: checkConfigPermissions,
+		},
+		{
+			Name:  "gateway.bind_public",
+			Level: "critical",
+			Check: checkGatewayBind,
+		},
+		{
+			Name:  "tools.sandbox_off",
+			Level: "warn",
+			Check: checkSandboxOff,
+		},
+		{
+			Name:  "policy.default_allow_no_blocklist",
+			Level: "warn",
+			Check: checkPolicyAudit,
+		},
+		{
+			Name:  "secrets.plaintext",
+			Level: "info",
+			Check: checkPlaintextSecrets,
+		},
+	}
+
+	var results []checkResult
+	for _, sc := range checks {
+		passed, msg := sc.Check()
+		status := "ok"
+		if !passed {
+			switch sc.Level {
+			case "critical":
+				status = "error"
+				msg = "[CRITICAL] " + msg
+			case "warn":
+				status = "warning"
+				msg = "[WARN] " + msg
+			case "info":
+				status = "ok" // info-level items don't count as warnings
+				msg = "[INFO] " + msg
+			}
+		}
+		results = append(results, checkResult{
+			name:    sc.Name,
+			status:  status,
+			message: msg,
+		})
+	}
+	return results
+}
+
+// checkConfigPermissions verifies the config file has restrictive permissions (≤0600).
+func checkConfigPermissions() (bool, string) {
+	configPath, err := config.DefaultConfigPath()
+	if err != nil {
+		return true, "配置路径未知，跳过权限检查"
+	}
+	info, err := os.Stat(configPath)
+	if err != nil {
+		return true, "配置文件不存在，跳过权限检查"
+	}
+	perm := info.Mode().Perm()
+	if perm > 0o600 {
+		return false, fmt.Sprintf("配置文件权限 %04o > 0600，可能泄露 API Key", perm)
+	}
+	return true, "配置文件权限正确"
+}
+
+// checkGatewayBind checks if the gateway is bound to a public address without auth.
+func checkGatewayBind() (bool, string) {
+	configPath, _ := config.DefaultConfigPath()
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		return true, "无法加载配置，跳过网关绑定检查"
+	}
+	host := cfg.Gateway.Host
+	if host == "" {
+		host = "127.0.0.1"
+	}
+	// Check for public binding
+	if host == "0.0.0.0" || host == "::" {
+		return false, fmt.Sprintf("服务绑定到 %s 且无认证，建议绑定到 127.0.0.1", host)
+	}
+	return true, fmt.Sprintf("网关绑定到 %s", host)
+}
+
+// checkSandboxOff checks if shell sandbox is enabled.
+func checkSandboxOff() (bool, string) {
+	// Currently, Mote does not have a sandbox implementation (Phase 3).
+	// This check reports the status as a warning for awareness.
+	return false, "Shell 工具沙箱未启用（Phase 3 功能）"
+}
+
+// checkPolicyAudit checks if the policy has sensible defaults.
+func checkPolicyAudit() (bool, string) {
+	p := policy.DefaultPolicy()
+
+	issues := []string{}
+	if p.DefaultAllow && len(p.Blocklist) == 0 {
+		issues = append(issues, "默认允许但无黑名单")
+	}
+	if len(p.DangerousOps) == 0 {
+		issues = append(issues, "无危险操作规则")
+	}
+
+	if len(issues) > 0 {
+		return false, "策略配置需注意: " + strings.Join(issues, "; ")
+	}
+	return true, "策略配置正常"
+}
+
+// checkPlaintextSecrets reports if API keys are stored in plaintext.
+func checkPlaintextSecrets() (bool, string) {
+	configPath, err := config.DefaultConfigPath()
+	if err != nil {
+		return true, "无法确认密钥存储方式"
+	}
+	if _, err := os.Stat(configPath); err != nil {
+		return true, "配置文件不存在"
+	}
+	// Currently, all secrets are stored in plaintext config files.
+	// This is an informational notice for Phase 3 encrypted storage.
+	return false, fmt.Sprintf("API Key 以明文存储在 %s（Phase 3 将支持加密存储）", configPath)
 }

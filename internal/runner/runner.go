@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -22,28 +23,17 @@ import (
 	"mote/internal/policy"
 	"mote/internal/policy/approval"
 	"mote/internal/prompt"
+
 	"mote/internal/provider"
-	"mote/internal/provider/minimax"
+	"mote/internal/runner/delegate"
 	"mote/internal/runner/orchestrator"
 	"mote/internal/scheduler"
 	"mote/internal/skills"
-	"mote/internal/storage"
 	"mote/internal/tools"
 	"mote/pkg/channel"
+
+	"github.com/google/uuid"
 )
-
-// SessionTokens tracks token usage for a session.
-type SessionTokens struct {
-	RequestTokens  int64     `json:"request_tokens"`
-	ResponseTokens int64     `json:"response_tokens"`
-	TotalTokens    int64     `json:"total_tokens"`
-	LastUpdated    time.Time `json:"last_updated"`
-}
-
-// memoryFlushState tracks memory flush state per session.
-type memoryFlushState struct {
-	lastCompactionCount int
-}
 
 // Runner executes agent runs with tool calling capabilities.
 type Runner struct {
@@ -55,12 +45,10 @@ type Runner struct {
 	sessions     *scheduler.SessionManager
 	config       Config
 	systemPrompt *prompt.SystemPromptBuilder // Primary system prompt builder
-	history      *HistoryManager
 	mu           sync.RWMutex
 
 	// M04: Optional advanced components
 	compactor      *compaction.Compactor
-	memoryIndex    *memory.MemoryIndex
 	contextManager *internalContext.Manager // M04-Enhanced: Context compression with persistence
 
 	// M07: Skills and Hooks integration
@@ -71,19 +59,20 @@ type Runner struct {
 	policyExecutor  policy.PolicyChecker
 	approvalManager approval.ApprovalHandler
 
+	// M08B+: Compiled custom scrub rules (from policy config)
+	compiledScrubRules []CompiledScrubRule
+
+	// M08B+: Block message template and circuit breaker
+	blockMessageTemplate    string
+	circuitBreakerThreshold int
+	blockCounts             map[string]map[string]int // sessionID → toolName → count
+	blockCountsMu           sync.Mutex
+
+	// M08B+: Workspace resolver for PathPrefix $WORKSPACE expansion
+	workspaceResolver func(sessionID string) string
+
 	// MCP integration
 	mcpManager *client.Manager
-
-	// Token counting for memory flush
-	sessionTokens map[string]*SessionTokens
-	tokenMu       sync.RWMutex
-
-	// Memory flush state tracking
-	flushStates map[string]*memoryFlushState
-	flushMu     sync.RWMutex
-
-	// Compaction config for memory flush settings
-	compactionConfig *compaction.CompactionConfig
 
 	// Channel system integration
 	channelRegistry *internalChannel.Registry
@@ -106,14 +95,11 @@ func NewRunner(
 	config Config,
 ) *Runner {
 	return &Runner{
-		provider:      prov,
-		registry:      registry,
-		sessions:      sessions,
-		config:        config,
-		history:       NewHistoryManager(config.MaxMessages, config.MaxTokens*10),
-		sessionTokens: make(map[string]*SessionTokens),
-		flushStates:   make(map[string]*memoryFlushState),
-		runQueue:      scheduler.NewRunQueue(10, 5*time.Minute),
+		provider: prov,
+		registry: registry,
+		sessions: sessions,
+		config:   config,
+		runQueue: scheduler.NewRunQueue(10, 5*time.Minute),
 	}
 }
 
@@ -127,15 +113,12 @@ func NewRunnerWithPool(
 	config Config,
 ) *Runner {
 	return &Runner{
-		providerPool:  pool,
-		defaultModel:  defaultModel,
-		registry:      registry,
-		sessions:      sessions,
-		config:        config,
-		history:       NewHistoryManager(config.MaxMessages, config.MaxTokens*10),
-		sessionTokens: make(map[string]*SessionTokens),
-		flushStates:   make(map[string]*memoryFlushState),
-		runQueue:      scheduler.NewRunQueue(10, 5*time.Minute),
+		providerPool: pool,
+		defaultModel: defaultModel,
+		registry:     registry,
+		sessions:     sessions,
+		config:       config,
+		runQueue:     scheduler.NewRunQueue(10, 5*time.Minute),
 	}
 }
 
@@ -186,16 +169,6 @@ func (r *Runner) ResetSession(sessionID string) {
 		slog.Info("Runner.ResetSession: provider sessions reset",
 			"sessionID", sessionID)
 	}
-
-	// 3. Clear token tracking for this session
-	r.tokenMu.Lock()
-	delete(r.sessionTokens, sessionID)
-	r.tokenMu.Unlock()
-
-	// 4. Clear memory flush state
-	r.flushMu.Lock()
-	delete(r.flushStates, sessionID)
-	r.flushMu.Unlock()
 
 	slog.Info("Runner.ResetSession: session resource cleanup completed",
 		"sessionID", sessionID)
@@ -273,12 +246,10 @@ func (r *Runner) SetContextManager(cm *internalContext.Manager) {
 	r.contextManager = cm
 }
 
-// SetMemory sets the optional M04 memory index.
-func (r *Runner) SetMemory(m *memory.MemoryIndex) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.memoryIndex = m
-}
+// SetMemory is a no-op retained for API compatibility.
+// Memory is now configured directly on SystemPromptBuilder and message.StandardBuilder.
+// Deprecated: configure memory on the prompt builder instead.
+func (r *Runner) SetMemory(_ *memory.MemoryIndex) {}
 
 // SetSkillManager sets the optional M07 skill manager.
 func (r *Runner) SetSkillManager(sm *skills.Manager) {
@@ -328,6 +299,69 @@ func (r *Runner) SetApprovalManager(am approval.ApprovalHandler) {
 	r.approvalManager = am
 }
 
+// SetScrubRules compiles and sets custom scrub rules from policy config.
+func (r *Runner) SetScrubRules(rules []policy.ScrubRule) error {
+	compiled, err := CompileScrubRules(rules)
+	if err != nil {
+		return err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.compiledScrubRules = compiled
+	return nil
+}
+
+// SetBlockMessageTemplate sets the custom block message template.
+func (r *Runner) SetBlockMessageTemplate(template string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.blockMessageTemplate = template
+}
+
+// SetCircuitBreakerThreshold sets circuit breaker threshold. 0 disables.
+func (r *Runner) SetCircuitBreakerThreshold(threshold int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.circuitBreakerThreshold = threshold
+}
+
+// formatBlockMessage formats a blocked tool message using the template or default.
+func formatBlockMessage(template, toolName, reason string) string {
+	if template == "" {
+		return "Tool call blocked by policy: " + reason
+	}
+	replacer := strings.NewReplacer("{tool}", toolName, "{reason}", reason)
+	return replacer.Replace(template)
+}
+
+// incrementBlockCount increments and returns the block count for a tool in a session.
+func (r *Runner) incrementBlockCount(sessionID, toolName string) int {
+	r.blockCountsMu.Lock()
+	defer r.blockCountsMu.Unlock()
+	if r.blockCounts == nil {
+		r.blockCounts = make(map[string]map[string]int)
+	}
+	if r.blockCounts[sessionID] == nil {
+		r.blockCounts[sessionID] = make(map[string]int)
+	}
+	r.blockCounts[sessionID][toolName]++
+	return r.blockCounts[sessionID][toolName]
+}
+
+// clearBlockCounts clears block counts for a session.
+func (r *Runner) clearBlockCounts(sessionID string) {
+	r.blockCountsMu.Lock()
+	defer r.blockCountsMu.Unlock()
+	delete(r.blockCounts, sessionID)
+}
+
+// SetWorkspaceResolver sets the function used to resolve workspace paths for sessions.
+func (r *Runner) SetWorkspaceResolver(resolver func(sessionID string) string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.workspaceResolver = resolver
+}
+
 // SetMCPManager sets the MCP client manager for dynamic tool injection in prompts.
 func (r *Runner) SetMCPManager(m *client.Manager) {
 	r.mu.Lock()
@@ -338,22 +372,76 @@ func (r *Runner) SetMCPManager(m *client.Manager) {
 	}
 }
 
-// injectMemoryContext adds relevant memory context to a prompt string.
-func (r *Runner) injectMemoryContext(ctx context.Context, prompt, userInput string) string {
-	if r.memoryIndex == nil || userInput == "" {
-		return prompt
+// InitDelegateSupport initializes multi-agent delegation if agents are configured.
+// It creates the SubRunnerFactory and registers the delegate tool.
+// The manage_agents tool is always registered so the LLM can create agents even when none exist.
+// Returns the tracker (for API queries) and the factory (for post-init wiring like workspace binder).
+func (r *Runner) InitDelegateSupport(appCfg *config.Config, db *sql.DB) (*delegate.DelegationTracker, *delegate.SubRunnerFactory) {
+	r.mu.RLock()
+	registry := r.registry
+	r.mu.RUnlock()
+
+	// Always register manage_agents tool so the LLM can create the first agent
+	manageAgentsTool := delegate.NewManageAgentsTool()
+	registry.Register(manageAgentsTool)
+
+	r.mu.RLock()
+	multiPool := r.multiPool
+	sessions := r.sessions
+	hookMgr := r.hookManager
+	mcpMgr := r.mcpManager
+	compactorRef := r.compactor
+	sysPr := r.systemPrompt
+	ctxMgr := r.contextManager
+	skillMgr := r.skillManager
+	defModel := r.defaultModel
+	cfg := r.config
+	r.mu.RUnlock()
+
+	if multiPool == nil {
+		slog.Warn("delegate: MultiProviderPool not set, skipping delegate init")
+		return nil, nil
 	}
-	results, err := r.memoryIndex.Search(ctx, userInput, 5)
-	if err != nil || len(results) == 0 {
-		return prompt
+
+	factory := delegate.NewSubRunnerFactory(delegate.SubRunnerFactoryOptions{
+		MultiPool:      multiPool,
+		Sessions:       sessions,
+		ParentRegistry: registry,
+		HookManager:    hookMgr,
+		MCPManager:     mcpMgr,
+		Compactor:      compactorRef,
+		SystemPrompt:   sysPr,
+		ContextManager: ctxMgr,
+		SkillManager:   skillMgr,
+		DefaultModel:   defModel,
+		MaxIterations:  cfg.MaxIterations,
+		MaxTokens:      cfg.MaxTokens,
+		Temperature:    cfg.Temperature,
+		Timeout:        cfg.Timeout,
+	})
+
+	// Always create and wire tracker if DB is available, even when no agents exist yet.
+	// Agents may be created dynamically via manage_agents tool at runtime.
+	var tracker *delegate.DelegationTracker
+	if db != nil {
+		tracker = delegate.NewTracker(db)
+		factory.SetTracker(tracker)
+		slog.Info("delegate: tracker initialized for audit logging")
 	}
-	var memorySection strings.Builder
-	memorySection.WriteString("\n\n## Relevant Context From Memory\n\n")
-	for _, mem := range results {
-		memorySection.WriteString(fmt.Sprintf("- %s\n", mem.Content))
-	}
-	memorySection.WriteString("\n**Use this context to answer. Only use tools if memory doesn't have the needed information.**\n")
-	return prompt + memorySection.String()
+
+	globalMaxDepth := appCfg.Delegate.GetMaxDepth()
+
+	// Always register delegate tool — it reads agents dynamically from config
+	// so agents created at runtime via manage_agents are immediately available.
+	delegateTool := delegate.NewDelegateTool(factory, globalMaxDepth)
+	registry.Register(delegateTool)
+
+	numAgents := len(appCfg.Agents)
+	slog.Info("delegate: initialized multi-agent support",
+		"agents", numAgents,
+		"maxDepth", globalMaxDepth)
+
+	return tracker, factory
 }
 
 // InitChannels 根据配置初始化渠道系统
@@ -536,6 +624,24 @@ func (r *Runner) StopChannel(ctx context.Context, channelType channel.ChannelTyp
 	return plugin.Stop(ctx)
 }
 
+// getChannelModel 获取渠道专属模型配置，返回空字符串则使用默认模型
+func (r *Runner) getChannelModel(channelType channel.ChannelType) string {
+	cfg := config.GetConfig()
+	if cfg == nil {
+		return ""
+	}
+	switch channelType {
+	case channel.ChannelTypeIMessage:
+		return cfg.Channels.IMessage.Model
+	case channel.ChannelTypeNotes:
+		return cfg.Channels.AppleNotes.Model
+	case channel.ChannelTypeReminders:
+		return cfg.Channels.AppleReminders.Model
+	default:
+		return ""
+	}
+}
+
 // handleChannelMessage 处理来自渠道的消息
 func (r *Runner) handleChannelMessage(ctx context.Context, msg channel.InboundMessage) error {
 	// 使用 ChatID 作为 sessionID
@@ -548,8 +654,17 @@ func (r *Runner) handleChannelMessage(ctx context.Context, msg channel.InboundMe
 		"contentLen", len(msg.Content),
 	)
 
-	// 运行 agent
-	events, err := r.Run(ctx, sessionID, msg.Content)
+	// 解析 per-channel 模型配置
+	channelModel := r.getChannelModel(msg.ChannelType)
+
+	// 运行 agent（使用渠道专属模型或默认模型）
+	var events <-chan Event
+	var err error
+	if channelModel != "" {
+		events, err = r.RunWithModel(ctx, sessionID, msg.Content, channelModel, "channel")
+	} else {
+		events, err = r.Run(ctx, sessionID, msg.Content)
+	}
 	if err != nil {
 		slog.Error("failed to run agent for channel message", "error", err)
 		return fmt.Errorf("run agent: %w", err)
@@ -815,20 +930,22 @@ func (r *Runner) runLoopCoreWithOrchestrator(ctx context.Context, cached *schedu
 
 	// 创建 Orchestrator builder
 	orchBuilder := orchestrator.NewBuilder(orchestrator.BuilderOptions{
-		Sessions:     r.sessions,
-		Registry:     r.registry,
+		Sessions: r.sessions,
+		Registry: r.registry,
 		Config: orchestrator.Config{
 			MaxIterations: r.config.MaxIterations,
 			MaxTokens:     r.config.MaxTokens,
 			Temperature:   r.config.Temperature,
 			StreamOutput:  true,
 			Timeout:       r.config.Timeout,
+			SystemPrompt:  r.config.SystemPrompt, // Static fallback for when SystemPromptBuilder is nil
 		},
-		Compactor:    r.compactor,
-		SystemPrompt: r.systemPrompt,
-		SkillManager: r.skillManager,
-		HookManager:  r.hookManager,
-		MCPManager:   r.mcpManager,
+		Compactor:      r.compactor,
+		SystemPrompt:   r.systemPrompt,
+		SkillManager:   r.skillManager,
+		HookManager:    r.hookManager,
+		MCPManager:     r.mcpManager,
+		ContextManager: r.contextManager,
 		// Inject full tool executor from Runner (includes policy, hooks, heartbeat, truncation)
 		ToolExecutor: func(ctx context.Context, toolCalls []provider.ToolCall, sessionID string) ([]provider.Message, int) {
 			return r.executeToolsWithSession(ctx, toolCalls, events, sessionID, "")
@@ -860,406 +977,27 @@ func (r *Runner) runLoopCoreWithOrchestrator(ctx context.Context, cached *schedu
 	}
 
 	// 转发所有事件，转换为 runner.Event
+	// Use context-aware send to prevent goroutine deadlock when
+	// the downstream consumer (HTTP handler) disconnects.
 	for event := range orchEvents {
-		events <- FromTypesEvent(event)
-	}
-}
-
-// buildMessages constructs the message list for the provider.
-func (r *Runner) buildMessages(ctx context.Context, cached *scheduler.CachedSession, userInput string) ([]provider.Message, error) {
-	// Build system prompt using SystemPromptBuilder (primary) or static config (fallback)
-	var sysPromptContent string
-	var err error
-
-	if r.systemPrompt != nil {
-		// SystemPromptBuilder handles: memory search, MCP injection, tool listing, slots
-		sysPromptContent, err = r.systemPrompt.Build(ctx, userInput)
-		if err != nil {
-			return nil, fmt.Errorf("build system prompt: %w", err)
+		re := FromTypesEvent(event)
+		if re.Type == EventTypeThinking {
+			slog.Debug("runner: forwarding thinking event to chat handler",
+				"sessionID", sessionID,
+				"thinkingLen", len(re.Thinking))
 		}
-	} else if r.config.SystemPrompt != "" {
-		// Static config fallback - manually inject memory if available
-		sysPromptContent = r.config.SystemPrompt
-		sysPromptContent = r.injectMemoryContext(ctx, sysPromptContent, userInput)
-	} else {
-		// No prompt configured - use minimal default
-		sysPromptContent = "You are a helpful AI assistant."
-		sysPromptContent = r.injectMemoryContext(ctx, sysPromptContent, userInput)
-	}
-
-	// Inject skills section if skillManager is available
-	if r.skillManager != nil {
-		skillsSection := skills.NewPromptSection(r.skillManager)
-		// Apply session-level skill selection filter
-		if cached.Session != nil && len(cached.Session.SelectedSkills) > 0 {
-			skillsSection.WithSelectedSkills(cached.Session.SelectedSkills)
-		}
-		if section := skillsSection.Build(); section != "" {
-			sysPromptContent += "\n\n" + section
-		}
-		if activePrompts := skillsSection.BuildActivePrompts(); activePrompts != "" {
-			sysPromptContent += "\n" + activePrompts
-		}
-	}
-
-	// Use Context Manager if available (preferred for advanced compression)
-	if r.contextManager != nil {
-		messages, err := r.contextManager.BuildContext(ctx, cached.Session.ID, sysPromptContent, userInput)
-		if err != nil {
-			slog.Warn("context manager failed, falling back to legacy method",
-				"sessionID", cached.Session.ID,
-				"error", err)
-			// Fall through to legacy method
-		} else {
-			return messages, nil
-		}
-	}
-
-	// Legacy method: manual message loading
-	var messages []provider.Message
-
-	// Add history messages
-	for _, msg := range cached.Messages {
-		provMsg := provider.Message{
-			Role:       msg.Role,
-			Content:    msg.Content,
-			ToolCallID: msg.ToolCallID,
-		}
-		if len(msg.ToolCalls) > 0 {
-			for _, tc := range msg.ToolCalls {
-				provTc := provider.ToolCall{
-					ID:   tc.ID,
-					Type: tc.Type,
-				}
-				// Parse function from json.RawMessage
-				if len(tc.Function) > 0 {
-					var fn struct {
-						Name      string `json:"name"`
-						Arguments string `json:"arguments"`
-					}
-					if err := json.Unmarshal(tc.Function, &fn); err == nil {
-						provTc.Name = fn.Name
-						provTc.Arguments = fn.Arguments
-						provTc.Function = &struct {
-							Name      string `json:"name"`
-							Arguments string `json:"arguments"`
-						}{
-							Name:      fn.Name,
-							Arguments: fn.Arguments,
-						}
-					}
-				}
-				provMsg.ToolCalls = append(provMsg.ToolCalls, provTc)
-			}
-		}
-		messages = append(messages, provMsg)
-	}
-
-	// Add current user input
-	messages = append(messages, provider.Message{
-		Role:    provider.RoleUser,
-		Content: userInput,
-	})
-
-	return messages, nil
-}
-
-// buildChatRequest creates a ChatRequest from messages.
-// sessionID is used as the conversation ID to help providers track multi-turn tool call conversations.
-func (r *Runner) buildChatRequest(messages []provider.Message, model string, sessionID string, attachments []provider.Attachment) provider.ChatRequest {
-	tools, _ := r.registry.ToProviderTools()
-
-	// For Ollama provider, strip the "ollama:" prefix from model name
-	model = strings.TrimPrefix(model, "ollama:")
-
-	// Sanitize messages to remove corrupted tool call data (e.g., truncated arguments)
-	messages = provider.SanitizeMessages(messages)
-
-	req := provider.ChatRequest{
-		Model:          model,
-		Messages:       messages,
-		Attachments:    attachments,
-		Tools:          tools,
-		Temperature:    r.config.Temperature,
-		MaxTokens:      r.config.MaxTokens,
-		Stream:         r.config.StreamOutput,
-		ConversationID: sessionID, // Pass session ID as conversation ID for quota tracking
-	}
-	return req
-}
-
-// callProvider calls the LLM provider and processes the response.
-// Deprecated: Use callProviderWith for multi-model support.
-//
-//nolint:unused // Reserved for backward compatibility
-func (r *Runner) callProvider(ctx context.Context, req provider.ChatRequest, events chan<- Event, iteration int) (*provider.ChatResponse, error) {
-	if r.config.StreamOutput {
-		return r.callProviderStream(ctx, req, events, iteration)
-	}
-	return r.callProviderChat(ctx, req, events)
-}
-
-// callProviderWith calls the specified provider and processes the response.
-func (r *Runner) callProviderWith(ctx context.Context, prov provider.Provider, req provider.ChatRequest, events chan<- Event, iteration int) (*provider.ChatResponse, error) {
-	if r.config.StreamOutput {
-		return r.callProviderStreamWith(ctx, prov, req, events, iteration)
-	}
-	return r.callProviderChatWith(ctx, prov, req, events)
-}
-
-// callProviderChat calls the provider without streaming.
-// Deprecated: Use callProviderChatWith for multi-model support.
-//
-//nolint:unused // Reserved for backward compatibility
-func (r *Runner) callProviderChat(ctx context.Context, req provider.ChatRequest, events chan<- Event) (*provider.ChatResponse, error) {
-	resp, err := r.provider.Chat(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-
-	// Emit content event
-	if resp.Content != "" {
-		events <- NewContentEvent(resp.Content)
-	}
-
-	// Emit tool call events
-	for _, tc := range resp.ToolCalls {
-		storageTc := providerToStorageToolCall(tc)
-		events <- NewToolCallEvent(storageTc)
-	}
-
-	return resp, nil
-}
-
-// callProviderChatWith calls the specified provider without streaming.
-func (r *Runner) callProviderChatWith(ctx context.Context, prov provider.Provider, req provider.ChatRequest, events chan<- Event) (*provider.ChatResponse, error) {
-	resp, err := prov.Chat(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-
-	// Emit content event
-	if resp.Content != "" {
-		events <- NewContentEvent(resp.Content)
-	}
-
-	// Emit tool call events
-	for _, tc := range resp.ToolCalls {
-		storageTc := providerToStorageToolCall(tc)
-		events <- NewToolCallEvent(storageTc)
-	}
-
-	return resp, nil
-}
-
-// callProviderStream calls the provider with streaming.
-// Deprecated: Use callProviderStreamWith for multi-model support.
-//
-//nolint:unused // Reserved for backward compatibility
-func (r *Runner) callProviderStream(ctx context.Context, req provider.ChatRequest, events chan<- Event, iteration int) (*provider.ChatResponse, error) {
-	streamCh, err := r.provider.Stream(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-
-	return r.processStreamResponse(ctx, streamCh, events, iteration)
-}
-
-// callProviderStreamWith calls the specified provider with streaming.
-func (r *Runner) callProviderStreamWith(ctx context.Context, prov provider.Provider, req provider.ChatRequest, events chan<- Event, iteration int) (*provider.ChatResponse, error) {
-	streamCh, err := prov.Stream(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-
-	return r.processStreamResponse(ctx, streamCh, events, iteration)
-}
-
-// processStreamResponse processes the streaming response from a provider.
-// It sends heartbeat events periodically to keep the connection alive during long model responses.
-func (r *Runner) processStreamResponse(ctx context.Context, streamCh <-chan provider.ChatEvent, events chan<- Event, iteration int) (*provider.ChatResponse, error) {
-	resp := &provider.ChatResponse{
-		FinishReason: provider.FinishReasonStop, // Default to stop
-	}
-	var contentBuilder string
-	var thinkingBuilder string // Track thinking content for fallback when content is empty
-	pendingToolCalls := make(map[int]*provider.ToolCall)
-
-	// Start heartbeat for streaming - model may take a long time to generate tool call arguments
-	heartbeatCtx, cancelHeartbeat := context.WithCancel(ctx)
-	defer cancelHeartbeat()
-	go func() {
-		ticker := time.NewTicker(15 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-heartbeatCtx.Done():
-				return
-			case <-ticker.C:
-				select {
-				case events <- NewHeartbeatEvent():
-					slog.Info("sent heartbeat during stream processing", "iteration", iteration)
-				default:
-					slog.Warn("heartbeat channel full during stream", "iteration", iteration)
-				}
-			}
-		}
-	}()
-
-	for streamEvent := range streamCh {
 		select {
+		case events <- re:
 		case <-ctx.Done():
-			return nil, ctx.Err()
-		default:
-		}
-
-		switch streamEvent.Type {
-		case provider.EventTypeContent:
-			contentBuilder += streamEvent.Delta
-			events <- Event{
-				Type:      EventTypeContent,
-				Content:   streamEvent.Delta,
-				Iteration: iteration,
-			}
-
-		case provider.EventTypeThinking:
-			// Forward thinking events for temporary display and accumulate for fallback
-			if streamEvent.Thinking != "" {
-				thinkingBuilder += streamEvent.Thinking
-				events <- Event{
-					Type:      EventTypeThinking,
-					Thinking:  streamEvent.Thinking,
-					Iteration: iteration,
+			// Context cancelled — drain remaining orchEvents so the
+			// orchestrator goroutine doesn't block on its channel sends.
+			go func() {
+				for range orchEvents {
 				}
-			}
-
-		case provider.EventTypeToolCall:
-			if streamEvent.ToolCall != nil {
-				tc := streamEvent.ToolCall
-				if existing, ok := pendingToolCalls[tc.Index]; ok {
-					// Accumulate arguments
-					existing.Arguments += tc.Arguments
-					if tc.Function != nil {
-						if existing.Function == nil {
-							existing.Function = tc.Function
-						} else {
-							existing.Function.Arguments += tc.Function.Arguments
-						}
-					}
-				} else {
-					// New tool call
-					newTc := &provider.ToolCall{
-						ID:        tc.ID,
-						Index:     tc.Index,
-						Type:      tc.Type,
-						Name:      tc.Name,
-						Arguments: tc.Arguments,
-						Function:  tc.Function,
-					}
-					pendingToolCalls[tc.Index] = newTc
-				}
-			}
-
-		case provider.EventTypeToolCallUpdate:
-			// Forward tool call update events
-			if streamEvent.ToolCallUpdate != nil {
-				events <- Event{
-					Type: EventTypeToolCallUpdate,
-					ToolCallUpdate: &ToolCallUpdateEvent{
-						ToolCallID: streamEvent.ToolCallUpdate.ID,
-						ToolName:   streamEvent.ToolCallUpdate.Name,
-						Status:     streamEvent.ToolCallUpdate.Status,
-						Arguments:  streamEvent.ToolCallUpdate.Arguments,
-					},
-					Iteration: iteration,
-				}
-			}
-
-		case provider.EventTypeDone:
-			if streamEvent.Usage != nil {
-				resp.Usage = streamEvent.Usage
-			}
-			// Capture finish reason from LLM - this is the authoritative signal
-			if streamEvent.FinishReason != "" {
-				resp.FinishReason = streamEvent.FinishReason
-			}
-
-		case provider.EventTypeError:
-			if streamEvent.Error != nil {
-				return nil, streamEvent.Error
-			}
+			}()
+			return
 		}
 	}
-
-	resp.Content = contentBuilder
-
-	// MiniMax-M2.5 sometimes outputs tool calls as raw XML in content
-	// (e.g. <invoke name="read_file">...</invoke>) instead of structured
-	// tool_calls. After accumulating all content, check for this pattern
-	// and extract them as proper tool calls.
-	if len(pendingToolCalls) == 0 && resp.Content != "" && strings.Contains(resp.Content, "<invoke ") {
-		if xmlCalls, cleanContent := minimax.ExtractXMLToolCalls(resp.Content); len(xmlCalls) > 0 {
-			slog.Warn("processStreamResponse: extracted XML tool calls from content",
-				"count", len(xmlCalls),
-				"originalLen", len(resp.Content),
-				"cleanLen", len(cleanContent))
-			for i := range xmlCalls {
-				tc := xmlCalls[i]
-				resp.ToolCalls = append(resp.ToolCalls, tc)
-				storageTc := providerToStorageToolCall(tc)
-				events <- NewToolCallEvent(storageTc)
-			}
-			resp.Content = cleanContent
-			resp.FinishReason = provider.FinishReasonToolCalls
-		}
-	}
-
-	// Fallback: if content is empty but thinking content was received,
-	// use thinking as the response content. This handles the case where
-	// models with reasoning_split put all output into reasoning_content
-	// but return empty content (observed with MiniMax after compaction).
-	if resp.Content == "" && thinkingBuilder != "" && len(pendingToolCalls) == 0 {
-		slog.Warn("processStreamResponse: content empty but thinking received, using thinking as fallback",
-			"thinkingLen", len(thinkingBuilder),
-			"finishReason", resp.FinishReason)
-		resp.Content = thinkingBuilder
-		// Also emit the thinking content as regular content so frontend displays it
-		events <- Event{
-			Type:      EventTypeContent,
-			Content:   thinkingBuilder,
-			Iteration: iteration,
-		}
-	}
-
-	slog.Info("processStreamResponse: stream ended",
-		"contentLen", len(resp.Content),
-		"thinkingLen", len(thinkingBuilder),
-		"pendingToolCallsCount", len(pendingToolCalls),
-		"finishReason", resp.FinishReason)
-
-	// Convert pending tool calls to slice
-	for _, tc := range pendingToolCalls {
-		resp.ToolCalls = append(resp.ToolCalls, *tc)
-		// Emit tool call event
-		storageTc := providerToStorageToolCall(*tc)
-		events <- NewToolCallEvent(storageTc)
-	}
-
-	// Adjust FinishReason based on actual tool calls if needed
-	// (Some providers may not set FinishReason correctly in stream mode)
-	if len(resp.ToolCalls) > 0 && resp.FinishReason == provider.FinishReasonStop {
-		resp.FinishReason = provider.FinishReasonToolCalls
-	}
-
-	return resp, nil
-}
-
-// executeTools executes the tool calls and returns tool result messages.
-// Deprecated: Use executeToolsWithSession for session-aware execution.
-//
-//nolint:unused // Reserved for backward compatibility
-func (r *Runner) executeTools(ctx context.Context, toolCalls []provider.ToolCall, events chan<- Event) ([]provider.Message, int) {
-	return r.executeToolsWithSession(ctx, toolCalls, events, "", "")
 }
 
 // executeToolsWithSession executes tool calls with session context for policy checks.
@@ -1339,11 +1077,18 @@ func (r *Runner) executeToolsWithSession(ctx context.Context, toolCalls []provid
 
 		// M08: Policy check before tool execution
 		if r.policyExecutor != nil {
+			// Resolve workspace path for $WORKSPACE expansion in PathPrefix rules
+			var wsPath string
+			if r.workspaceResolver != nil && sessionID != "" {
+				wsPath = r.workspaceResolver(sessionID)
+			}
+
 			policyResult, err := r.policyExecutor.Check(ctx, &policy.ToolCall{
-				Name:      toolName,
-				Arguments: args,
-				SessionID: sessionID,
-				AgentID:   agentID,
+				Name:          toolName,
+				Arguments:     args,
+				SessionID:     sessionID,
+				AgentID:       agentID,
+				WorkspacePath: wsPath,
 			})
 			if err != nil {
 				results = append(results, provider.Message{
@@ -1356,10 +1101,15 @@ func (r *Runner) executeToolsWithSession(ctx context.Context, toolCalls []provid
 			}
 
 			if !policyResult.Allowed {
-				// Tool call blocked by policy
+				// Tool call blocked by policy — use template and circuit breaker
+				blockMsg := formatBlockMessage(r.blockMessageTemplate, toolName, policyResult.Reason)
+				count := r.incrementBlockCount(sessionID, toolName)
+				if r.circuitBreakerThreshold > 0 && count >= r.circuitBreakerThreshold {
+					blockMsg += fmt.Sprintf("\n[CIRCUIT BREAKER] Tool '%s' has been blocked %d times in this session. Stop attempting to use this tool and find an alternative approach.", toolName, count)
+				}
 				results = append(results, provider.Message{
 					Role:       provider.RoleTool,
-					Content:    "Tool call blocked by policy: " + policyResult.Reason,
+					Content:    blockMsg,
 					ToolCallID: tc.ID,
 				})
 				events <- NewToolResultEvent(tc.ID, toolName, "Blocked: "+policyResult.Reason, true, 0)
@@ -1378,14 +1128,35 @@ func (r *Runner) executeToolsWithSession(ctx context.Context, toolCalls []provid
 					continue
 				}
 
-				// Request approval
-				approvalResult, err := r.approvalManager.RequestApproval(ctx, &policy.ToolCall{
+				// Pre-generate approval ID so we can push it in the SSE event
+				// before blocking on RequestApproval. The manager will reuse it.
+				approvalID := uuid.New().String()
+				approvalExpiresAt := time.Now().Add(5 * time.Minute).Format(time.RFC3339)
+
+				// Request approval — push SSE event so chat page can show approval UI
+				approvalCall := &policy.ToolCall{
 					Name:      toolName,
 					Arguments: args,
 					SessionID: sessionID,
 					AgentID:   agentID,
-				}, policyResult.ApprovalReason)
+					RequestID: approvalID,
+				}
+
+				// Push approval_request event to SSE stream before blocking
+				// The frontend will show an approval modal. The approval manager
+				// also broadcasts via WebSocket for other listeners.
+				events <- NewApprovalRequestEvent(
+					approvalID,
+					toolName,
+					args,
+					policyResult.ApprovalReason,
+					sessionID,
+					approvalExpiresAt,
+				)
+
+				approvalResult, err := r.approvalManager.RequestApproval(ctx, approvalCall, policyResult.ApprovalReason)
 				if err != nil {
+					events <- NewApprovalResolvedEvent(approvalID, false, time.Now().Format(time.RFC3339))
 					results = append(results, provider.Message{
 						Role:       provider.RoleTool,
 						Content:    "Approval request failed: " + err.Error(),
@@ -1394,6 +1165,13 @@ func (r *Runner) executeToolsWithSession(ctx context.Context, toolCalls []provid
 					events <- NewToolResultEvent(tc.ID, toolName, "Approval failed: "+err.Error(), true, 0)
 					continue
 				}
+
+				// Push approval resolved event to SSE stream
+				events <- NewApprovalResolvedEvent(
+					approvalID,
+					approvalResult.Approved,
+					approvalResult.DecidedAt.Format(time.RFC3339),
+				)
 
 				if !approvalResult.Approved {
 					results = append(results, provider.Message{
@@ -1404,7 +1182,19 @@ func (r *Runner) executeToolsWithSession(ctx context.Context, toolCalls []provid
 					events <- NewToolResultEvent(tc.ID, toolName, "Rejected: "+approvalResult.Message, true, 0)
 					continue
 				}
-				// Approval granted, proceed with execution
+
+				// Approval granted — use modified arguments if user edited them
+				if approvalResult.ModifiedArguments != "" {
+					args = approvalResult.ModifiedArguments
+					var newArgsMap map[string]any
+					if err := json.Unmarshal([]byte(args), &newArgsMap); err == nil {
+						argsMap = newArgsMap
+					}
+					slog.Info("approval: using modified arguments",
+						"tool", toolName,
+						"modifiedArgs", args)
+				}
+				// Proceed with execution
 			}
 		}
 
@@ -1445,15 +1235,15 @@ func (r *Runner) executeToolsWithSession(ctx context.Context, toolCalls []provid
 
 		// Pre-truncate oversized tool results before storing in message history
 		maxBytes := DefaultMaxToolResultBytes
-		if r.compactionConfig != nil && r.compactionConfig.ToolResultMaxBytes > 0 {
-			maxBytes = r.compactionConfig.ToolResultMaxBytes
-		}
 		if len(output) > maxBytes {
 			before := len(output)
 			output = TruncateToolResult(output, maxBytes)
 			slog.Info("executeToolsWithSession: truncated oversized tool result",
 				"tool", toolName, "beforeBytes", before, "afterBytes", len(output), "maxBytes", maxBytes)
 		}
+
+		// M08B: Scrub credentials from tool output before entering LLM context
+		output = ScrubCredentials(output, r.compiledScrubRules...)
 
 		// M07: Trigger after_tool_call hook
 		afterHookCtx := hooks.NewContext(hooks.HookAfterToolCall)
@@ -1483,267 +1273,6 @@ func (r *Runner) executeToolsWithSession(ctx context.Context, toolCalls []provid
 	}
 
 	return results, errorCount
-}
-
-// providerToStorageToolCall converts a provider ToolCall to a storage ToolCall.
-func providerToStorageToolCall(tc provider.ToolCall) *storage.ToolCall {
-	name := tc.Name
-	args := tc.Arguments
-	if tc.Function != nil {
-		name = tc.Function.Name
-		args = tc.Function.Arguments
-	}
-
-	fnData, _ := json.Marshal(map[string]string{
-		"name":      name,
-		"arguments": args,
-	})
-
-	return &storage.ToolCall{
-		ID:       tc.ID,
-		Type:     "function",
-		Function: json.RawMessage(fnData),
-	}
-}
-
-// convertToolCalls converts provider tool calls to storage tool calls.
-func convertToolCalls(tcs []provider.ToolCall) []storage.ToolCall {
-	var result []storage.ToolCall
-	for _, tc := range tcs {
-		stc := providerToStorageToolCall(tc)
-		result = append(result, *stc)
-	}
-	return result
-}
-
-// SetCompactionConfig sets the compaction configuration for memory flush settings.
-func (r *Runner) SetCompactionConfig(cfg *compaction.CompactionConfig) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.compactionConfig = cfg
-}
-
-// UpdateTokens updates the token count for a session.
-func (r *Runner) UpdateTokens(sessionID string, reqTokens, respTokens int64) {
-	r.tokenMu.Lock()
-	defer r.tokenMu.Unlock()
-
-	if r.sessionTokens == nil {
-		r.sessionTokens = make(map[string]*SessionTokens)
-	}
-
-	st, ok := r.sessionTokens[sessionID]
-	if !ok {
-		st = &SessionTokens{}
-		r.sessionTokens[sessionID] = st
-	}
-
-	st.RequestTokens += reqTokens
-	st.ResponseTokens += respTokens
-	st.TotalTokens = st.RequestTokens + st.ResponseTokens
-	st.LastUpdated = time.Now()
-}
-
-// GetSessionTokens returns the token statistics for a session.
-func (r *Runner) GetSessionTokens(sessionID string) *SessionTokens {
-	r.tokenMu.RLock()
-	defer r.tokenMu.RUnlock()
-	if r.sessionTokens == nil {
-		return nil
-	}
-	return r.sessionTokens[sessionID]
-}
-
-// EstimateTokens estimates token count from text (fallback when Usage is unavailable).
-// Rough estimate: 1 token ≈ 3 characters for mixed Chinese/English text.
-func EstimateTokens(text string) int64 {
-	if len(text) == 0 {
-		return 0
-	}
-	return int64((len(text) + 2) / 3)
-}
-
-// getMemoryFlushState returns the memory flush state for a session.
-func (r *Runner) getMemoryFlushState(sessionID string) *memoryFlushState {
-	r.flushMu.Lock()
-	defer r.flushMu.Unlock()
-
-	if r.flushStates == nil {
-		r.flushStates = make(map[string]*memoryFlushState)
-	}
-
-	state, ok := r.flushStates[sessionID]
-	if !ok {
-		state = &memoryFlushState{}
-		r.flushStates[sessionID] = state
-	}
-	return state
-}
-
-// shouldRunMemoryFlush checks if memory flush should run before processing.
-func (r *Runner) shouldRunMemoryFlush(sessionID string) bool {
-	// Check if compaction config is available
-	if r.compactionConfig == nil {
-		return false
-	}
-
-	cfg := r.compactionConfig.MemoryFlush
-	if !cfg.Enabled {
-		return false
-	}
-
-	// Check token threshold
-	tokens := r.GetSessionTokens(sessionID)
-	if tokens == nil {
-		return false
-	}
-
-	// Calculate threshold: contextWindow - reserveTokens - softThreshold
-	contextWindow := int64(r.compactionConfig.MaxContextTokens)
-	threshold := contextWindow - cfg.ReserveTokens - cfg.SoftThresholdTokens
-	if tokens.TotalTokens < threshold {
-		return false
-	}
-
-	// Check if we already flushed in this compaction cycle
-	state := r.getMemoryFlushState(sessionID)
-	compactionCount := 0
-	if r.compactor != nil {
-		compactionCount = r.compactor.GetCompactionCount(sessionID)
-	}
-	if state.lastCompactionCount >= compactionCount && compactionCount > 0 {
-		return false // Already flushed in this cycle
-	}
-
-	return true
-}
-
-// executeMemoryFlush executes the pre-compaction memory flush.
-func (r *Runner) executeMemoryFlush(ctx context.Context, sessionID string, events chan<- Event) error {
-	if r.compactionConfig == nil {
-		return nil
-	}
-
-	// Get provider for memory flush (use default model)
-	prov, err := r.GetProvider("")
-	if err != nil {
-		return nil
-	}
-
-	cfg := r.compactionConfig.MemoryFlush
-	slog.Info("executing memory flush",
-		"sessionID", sessionID,
-		"tokens", r.GetSessionTokens(sessionID).TotalTokens)
-
-	// Build flush request with memory flush prompts
-	messages := []provider.Message{
-		{Role: provider.RoleSystem, Content: cfg.SystemPrompt},
-	}
-
-	// Inject recent conversation history so the LLM has context for what to save
-	if histSnippet := r.buildFlushHistory(sessionID, 16000, 2000); histSnippet != "" {
-		messages = append(messages, provider.Message{
-			Role:    provider.RoleUser,
-			Content: "Here is the recent conversation for context:\n\n" + histSnippet,
-		})
-		messages = append(messages, provider.Message{
-			Role:    provider.RoleAssistant,
-			Content: "Understood. I will review the conversation and save important information to memory.",
-		})
-	}
-
-	messages = append(messages, provider.Message{
-		Role:    provider.RoleUser,
-		Content: cfg.Prompt,
-	})
-
-	// Build tools for memory flush (only memory-related tools)
-	var tools []provider.Tool
-	if r.registry != nil {
-		for _, t := range r.registry.List() {
-			// Only include memory-related tools for flush
-			name := t.Name()
-			if name == "mote_memory_add" || name == "mote_memory_search" {
-				params, _ := json.Marshal(t.Parameters())
-				tools = append(tools, provider.Tool{
-					Type: "function",
-					Function: provider.ToolFunction{
-						Name:        name,
-						Description: t.Description(),
-						Parameters:  params,
-					},
-				})
-			}
-		}
-	}
-
-	// Call provider
-	req := provider.ChatRequest{
-		Messages:  messages,
-		MaxTokens: r.config.MaxTokens,
-		Tools:     tools,
-	}
-
-	resp, err := prov.Chat(ctx, req)
-	if err != nil {
-		slog.Warn("memory flush LLM call failed", "error", err)
-		return err
-	}
-
-	// Process any tool calls (e.g., mote_memory_add) with session context
-	if len(resp.ToolCalls) > 0 {
-		r.executeToolsWithSession(ctx, resp.ToolCalls, events, sessionID, "") //nolint:errcheck // memory flush doesn't need error tracking
-	}
-
-	// Update flush state
-	state := r.getMemoryFlushState(sessionID)
-	if r.compactor != nil {
-		state.lastCompactionCount = r.compactor.GetCompactionCount(sessionID)
-	}
-
-	slog.Info("memory flush completed",
-		"sessionID", sessionID,
-		"toolCalls", len(resp.ToolCalls))
-
-	return nil
-}
-
-// buildFlushHistory returns a compact text snippet of recent session messages
-// for injection into the memory flush prompt. maxTotalChars limits the overall
-// output, maxPerMsg caps individual message content.
-func (r *Runner) buildFlushHistory(sessionID string, maxTotalChars, maxPerMsg int) string {
-	msgs, err := r.sessions.GetMessages(sessionID)
-	if err != nil || len(msgs) == 0 {
-		return ""
-	}
-
-	// Walk backwards, collecting messages until budget is exhausted
-	var lines []string
-	total := 0
-	for i := len(msgs) - 1; i >= 0; i-- {
-		m := msgs[i]
-		if m.Role == "system" {
-			continue
-		}
-		content := m.Content
-		if len(content) > maxPerMsg {
-			content = content[:maxPerMsg] + "…[truncated]"
-		}
-		line := fmt.Sprintf("[%s]: %s", m.Role, content)
-		if total+len(line) > maxTotalChars {
-			break
-		}
-		lines = append(lines, line)
-		total += len(line)
-	}
-	if len(lines) == 0 {
-		return ""
-	}
-	// Reverse to chronological order
-	for i, j := 0, len(lines)-1; i < j; i, j = i+1, j-1 {
-		lines[i], lines[j] = lines[j], lines[i]
-	}
-	return strings.Join(lines, "\n")
 }
 
 // PauseSession 暂停指定会话的执行

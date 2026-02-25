@@ -35,6 +35,14 @@ func ProcessStream(reader io.ReadCloser) <-chan provider.ChatEvent {
 		// State machine for <think>...</think> tag parsing
 		var thinkState thinkTagParser
 
+		// Track tool call argument chunks for debugging truncation issues.
+		// Key: tool call index, Value: total chunks and accumulated arg bytes.
+		type tcStats struct {
+			chunks   int
+			argBytes int
+		}
+		toolCallStats := make(map[int]*tcStats)
+
 		for scanner.Scan() {
 			line := scanner.Text()
 
@@ -111,6 +119,22 @@ func ProcessStream(reader io.ReadCloser) <-chan provider.ChatEvent {
 
 			// Emit tool calls
 			for _, tc := range delta.ToolCalls {
+				stats, ok := toolCallStats[tc.Index]
+				if !ok {
+					stats = &tcStats{}
+					toolCallStats[tc.Index] = stats
+				}
+				stats.chunks++
+				stats.argBytes += len(tc.Function.Arguments)
+
+				logger.Info().
+					Int("index", tc.Index).
+					Str("id", tc.ID).
+					Str("funcName", tc.Function.Name).
+					Int("chunkArgLen", len(tc.Function.Arguments)).
+					Int("totalChunks", stats.chunks).
+					Int("totalArgBytes", stats.argBytes).
+					Msg("MiniMax stream: tool call chunk")
 				events <- provider.ChatEvent{
 					Type: provider.EventTypeToolCall,
 					ToolCall: &provider.ToolCall{
@@ -126,6 +150,15 @@ func ProcessStream(reader io.ReadCloser) <-chan provider.ChatEvent {
 			// Handle finish reason — always emit Done event when finish_reason is present.
 			// Usage may or may not be included in the final chunk.
 			if choice.FinishReason == "stop" || choice.FinishReason == "tool_calls" {
+				// Log tool call accumulation summary for truncation diagnosis
+				for idx, stats := range toolCallStats {
+					logger.Info().
+						Int("index", idx).
+						Int("totalChunks", stats.chunks).
+						Int("totalArgBytes", stats.argBytes).
+						Str("finishReason", choice.FinishReason).
+						Msg("MiniMax stream: tool call summary at finish")
+				}
 				doneEvent := provider.ChatEvent{
 					Type:         provider.EventTypeDone,
 					FinishReason: choice.FinishReason,

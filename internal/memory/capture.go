@@ -24,7 +24,7 @@ func DefaultCaptureConfig() CaptureConfig {
 		MinLength:     10,
 		MaxLength:     500,
 		DupThreshold:  0.95,
-		MaxPerSession: 3,
+		MaxPerSession: 5,
 	}
 }
 

@@ -13,7 +13,7 @@ import type { APIAdapter, MemorySyncResult, MemoryStats, MemoryExportResult } fr
 import type {
   ServiceStatus,
   Session,
-  Message,
+  MessagesResponse,
   Memory,
   Tool,
   CronJob,
@@ -87,6 +87,9 @@ interface WailsApp {
   // Events are emitted as "chat:stream" with JSON event data
   // Accepts full ChatRequest JSON string (message, session_id, images, etc.)
   ChatStream(requestJSON: string): Promise<void>;
+  
+  // Cancel a running chat stream for a session
+  CancelChat(sessionID: string): Promise<void>;
   
   // GUI-specific: Service status (includes local process/IPC info)
   GetServiceStatus(): Promise<Record<string, unknown>>;
@@ -230,18 +233,24 @@ export function createWailsAdapter(app: WailsApp): APIAdapter {
       }
     },
 
+    cancelChat: async (sessionId: string): Promise<void> => {
+      // Call the Wails Go binding which cancels the HTTP stream
+      // and also calls the backend cancel API.
+      await app.CancelChat(sessionId);
+    },
+
     // ============== Session Service ==============
     getSessions: async (): Promise<Session[]> => {
       const data = await callAPI<{ sessions: Session[] }>('GET', '/api/v1/sessions');
       return data.sessions || [];
     },
 
-    getSessionMessages: async (sessionId: string): Promise<Message[]> => {
-      const data = await callAPI<{ messages: Message[] }>(
+    getSessionMessages: async (sessionId: string): Promise<MessagesResponse> => {
+      const data = await callAPI<MessagesResponse>(
         'GET', 
         `/api/v1/sessions/${sessionId}/messages`
       );
-      return data.messages || [];
+      return { messages: data.messages || [], estimated_tokens: data.estimated_tokens || 0 };
     },
 
     createSession: async (title?: string, scenario?: string): Promise<Session> => {
@@ -256,15 +265,20 @@ export function createWailsAdapter(app: WailsApp): APIAdapter {
       await callAPI('DELETE', `/api/v1/sessions/${sessionId}`);
     },
 
+    batchDeleteSessions: async (ids: string[]): Promise<{ deleted: number; total: number }> => {
+      return callAPI<{ deleted: number; total: number }>('POST', '/api/v1/sessions/batch-delete', { ids });
+    },
+
     updateSession: async (sessionId: string, updates: { title?: string }): Promise<Session> => {
       return callAPI<Session>('PUT', `/api/v1/sessions/${sessionId}`, updates);
     },
 
     // ============== Memory Service ==============
-    getMemories: async (options?: { limit?: number; offset?: number }): Promise<{ memories: Memory[]; total: number; limit: number; offset: number }> => {
+    getMemories: async (options?: { limit?: number; offset?: number; category?: string }): Promise<{ memories: Memory[]; total: number; limit: number; offset: number }> => {
       const params = new URLSearchParams();
       if (options?.limit) params.set('limit', String(options.limit));
       if (options?.offset) params.set('offset', String(options.offset));
+      if (options?.category) params.set('category', options.category);
       const queryString = params.toString();
       const path = `/api/v1/memory${queryString ? '?' + queryString : ''}`;
       const data = await callAPI<{ memories: Memory[]; total: number; limit: number; offset: number }>('GET', path);
@@ -680,6 +694,70 @@ export function createWailsAdapter(app: WailsApp): APIAdapter {
 
     resumeSession: async (sessionId: string, userInput?: string): Promise<void> => {
       await callAPI('POST', '/api/v1/resume', { session_id: sessionId, user_input: userInput });
+    },
+
+    // ============== Agents Service (Multi-Agent Delegate) ==============
+    getAgents: async () => {
+      const data = await callAPI<{ agents: Record<string, import('../types').AgentConfig> }>('GET', '/api/v1/agents');
+      return data.agents || {};
+    },
+
+    getAgent: async (name: string) => {
+      return callAPI<{ name: string; config: import('../types').AgentConfig }>('GET', `/api/v1/agents/${encodeURIComponent(name)}`);
+    },
+
+    addAgent: async (name: string, agent: import('../types').AgentConfig) => {
+      return callAPI<{ name: string; agent: import('../types').AgentConfig }>('POST', '/api/v1/agents', { name, agent });
+    },
+
+    updateAgent: async (name: string, agent: import('../types').AgentConfig) => {
+      return callAPI<{ name: string; agent: import('../types').AgentConfig }>('PUT', `/api/v1/agents/${encodeURIComponent(name)}`, agent);
+    },
+
+    deleteAgent: async (name: string) => {
+      await callAPI('DELETE', `/api/v1/agents/${encodeURIComponent(name)}`);
+    },
+
+    getSessionDelegations: async (sessionId: string) => {
+      return callAPI<import('../types').DelegationRecord[]>('GET', `/api/v1/sessions/${encodeURIComponent(sessionId)}/delegations`);
+    },
+
+    getDelegations: async (limit?: number) => {
+      const params = limit ? `?limit=${limit}` : '';
+      return callAPI<import('../types').DelegationRecord[]>('GET', `/api/v1/delegations${params}`);
+    },
+
+    getDelegation: async (id: string) => {
+      return callAPI<import('../types').DelegationRecord>('GET', `/api/v1/delegations/${encodeURIComponent(id)}`);
+    },
+
+    batchDeleteDelegations: async (ids: string[]) => {
+      return callAPI<{ deleted: number; total: number }>('POST', '/api/v1/delegations/batch-delete', { ids });
+    },
+
+    // ============== Policy API ==============
+    getPolicyConfig: async () => {
+      return callAPI<import('../types/policy').PolicyConfig>('GET', '/api/v1/policy/config');
+    },
+
+    updatePolicyConfig: async (config: import('../types/policy').PolicyConfig) => {
+      return callAPI<{ success: boolean }>('PUT', '/api/v1/policy/config', config);
+    },
+
+    getPolicyStatus: async () => {
+      return callAPI<import('../types/policy').PolicyStatus>('GET', '/api/v1/policy/status');
+    },
+
+    checkPolicy: async (req: import('../types/policy').PolicyCheckRequest) => {
+      return callAPI<import('../types/policy').PolicyCheckResponse>('POST', '/api/v1/policy/check', req);
+    },
+
+    getApprovals: async () => {
+      return callAPI<import('../types/policy').ApprovalListResponse>('GET', '/api/v1/approvals');
+    },
+
+    respondApproval: async (id: string, approved: boolean, reason?: string, modifiedArguments?: string) => {
+      return callAPI<{ success: boolean }>('POST', `/api/v1/approvals/${encodeURIComponent(id)}/respond`, { approved, reason, modified_arguments: modifiedArguments });
     },
 
     // ============== Mode Detection ==============

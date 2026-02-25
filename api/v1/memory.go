@@ -145,6 +145,12 @@ func (r *Router) HandleAddMemory(w http.ResponseWriter, req *http.Request) {
 		importance = memory.DefaultImportance
 	}
 
+	// P2: Determine capture method - allow callers (e.g., AI tool) to specify "auto"
+	captureMethod := addReq.CaptureMethod
+	if captureMethod != memory.CaptureMethodAuto && captureMethod != memory.CaptureMethodImport {
+		captureMethod = memory.CaptureMethodManual
+	}
+
 	ctx := req.Context()
 	id := uuid.New().String() // Pre-generate ID so we can return it
 	entry := memory.MemoryEntry{
@@ -153,7 +159,7 @@ func (r *Router) HandleAddMemory(w http.ResponseWriter, req *http.Request) {
 		Source:        source,
 		Category:      category,
 		Importance:    importance,
-		CaptureMethod: memory.CaptureMethodManual,
+		CaptureMethod: captureMethod,
 	}
 
 	// Use MemoryManager if available, else fall back to legacy MemoryIndex
@@ -357,15 +363,34 @@ func (r *Router) HandleListMemory(w http.ResponseWriter, req *http.Request) {
 		}
 	}
 
+	// Parse optional filter parameters
+	categoryFilter := req.URL.Query().Get("category")
+	sourceFilter := req.URL.Query().Get("source")
+	captureMethodFilter := req.URL.Query().Get("capture_method")
+	filter := memory.ListFilter{
+		Category:      categoryFilter,
+		CaptureMethod: captureMethodFilter,
+		Source:        sourceFilter,
+	}
+
 	ctx := req.Context()
 
-	// Get total count
+	// Get total count (filtered if applicable)
 	var total int
 	var totalErr error
-	if r.memoryManager != nil {
-		total, totalErr = r.memoryManager.Count(ctx)
+	hasFilter := categoryFilter != "" || sourceFilter != "" || captureMethodFilter != ""
+	if hasFilter {
+		if r.memoryManager != nil {
+			total, totalErr = r.memoryManager.CountFiltered(ctx, filter)
+		} else {
+			total, totalErr = r.memory.CountFiltered(ctx, filter)
+		}
 	} else {
-		total, totalErr = r.memory.Count(ctx)
+		if r.memoryManager != nil {
+			total, totalErr = r.memoryManager.Count(ctx)
+		} else {
+			total, totalErr = r.memory.Count(ctx)
+		}
 	}
 	if totalErr != nil {
 		handlers.SendError(w, http.StatusInternalServerError, ErrCodeInternalError, totalErr.Error())
@@ -375,9 +400,9 @@ func (r *Router) HandleListMemory(w http.ResponseWriter, req *http.Request) {
 	var results []memory.SearchResult
 	var err error
 	if r.memoryManager != nil {
-		results, err = r.memoryManager.List(ctx, limit, offset)
+		results, err = r.memoryManager.ListFiltered(ctx, limit, offset, filter)
 	} else {
-		results, err = r.memory.List(ctx, limit, offset)
+		results, err = r.memory.ListFiltered(ctx, limit, offset, filter)
 	}
 	if err != nil {
 		handlers.SendError(w, http.StatusInternalServerError, ErrCodeInternalError, err.Error())
@@ -789,9 +814,11 @@ func (r *Router) HandleMemoryStats(w http.ResponseWriter, req *http.Request) {
 		}
 	}
 
-	// Note: auto_recall_today would require tracking in a separate stats store
-	// For now, return 0 as placeholder
+	// Get auto recall count from recall engine
 	autoRecallToday := 0
+	if r.recallEngine != nil {
+		autoRecallToday = int(r.recallEngine.TodayRecallCount())
+	}
 
 	handlers.SendJSON(w, http.StatusOK, MemoryStatsResponse{
 		Total:            total,

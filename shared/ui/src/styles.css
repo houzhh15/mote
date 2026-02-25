@@ -205,3 +205,9 @@ html.dark .new-chat-page {
 .markdown-content li {
   margin: 4px 0;
 }
+
+/* Agent delegation pulse animation */
+@keyframes agentPulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(0.85); }
+}

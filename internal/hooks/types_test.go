@@ -6,7 +6,7 @@ import (
 
 func TestAllHookTypes_Count(t *testing.T) {
 	types := AllHookTypes()
-	expectedCount := 14 // 10 original + 4 new types
+	expectedCount := 15 // 10 original + 4 new types + 1 Phase 3 (before_llm_call)
 
 	if len(types) != expectedCount {
 		t.Errorf("expected %d hook types, got %d", expectedCount, len(types))

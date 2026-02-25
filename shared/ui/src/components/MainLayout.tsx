@@ -137,6 +137,7 @@ function getPageTitle(page: PageKey): string {
     case 'skill': return '技能中心';
     case 'cron': return '定时任务';
     case 'mcp': return 'MCP 服务';
+    case 'agents': return '代理';
     case 'settings': return '设置';
     case 'workspace': return '工作区';
     default: return 'Mote';

@@ -520,18 +520,68 @@ func (m *MemoryIndex) Count(ctx context.Context) (int, error) {
 	return count, nil
 }
 
+// ListFilter holds optional filter criteria for listing memories.
+type ListFilter struct {
+	Category      string // Filter by category (empty = all)
+	CaptureMethod string // Filter by capture_method (empty = all)
+	Source        string // Filter by source (empty = all)
+}
+
+// CountFiltered returns the number of memory entries matching the filter.
+func (m *MemoryIndex) CountFiltered(ctx context.Context, filter ListFilter) (int, error) {
+	query := `SELECT COUNT(*) FROM memories WHERE 1=1`
+	args := []any{}
+	if filter.Category != "" {
+		query += ` AND category = ?`
+		args = append(args, filter.Category)
+	}
+	if filter.CaptureMethod != "" {
+		query += ` AND capture_method = ?`
+		args = append(args, filter.CaptureMethod)
+	}
+	if filter.Source != "" {
+		query += ` AND source = ?`
+		args = append(args, filter.Source)
+	}
+	var count int
+	err := m.db.QueryRowContext(ctx, query, args...).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("count filtered: %w", err)
+	}
+	return count, nil
+}
+
 // List returns all memory entries with pagination.
 func (m *MemoryIndex) List(ctx context.Context, limit, offset int) ([]SearchResult, error) {
+	return m.ListFiltered(ctx, limit, offset, ListFilter{})
+}
+
+// ListFiltered returns memory entries with pagination and optional filtering.
+func (m *MemoryIndex) ListFiltered(ctx context.Context, limit, offset int, filter ListFilter) ([]SearchResult, error) {
 	if limit <= 0 {
 		limit = 100
 	}
-	rows, err := m.db.QueryContext(ctx, `
-		SELECT id, content, source, created_at, category, importance, capture_method,
+
+	query := `SELECT id, content, source, created_at, category, importance, capture_method,
 		       chunk_index, chunk_total, source_file
-		FROM memories
-		ORDER BY created_at DESC
-		LIMIT ? OFFSET ?
-	`, limit, offset)
+		FROM memories WHERE 1=1`
+	args := []any{}
+	if filter.Category != "" {
+		query += ` AND category = ?`
+		args = append(args, filter.Category)
+	}
+	if filter.CaptureMethod != "" {
+		query += ` AND capture_method = ?`
+		args = append(args, filter.CaptureMethod)
+	}
+	if filter.Source != "" {
+		query += ` AND source = ?`
+		args = append(args, filter.Source)
+	}
+	query += ` ORDER BY created_at DESC LIMIT ? OFFSET ?`
+	args = append(args, limit, offset)
+
+	rows, err := m.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list memories: %w", err)
 	}

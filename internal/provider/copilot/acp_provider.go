@@ -780,10 +780,14 @@ func (p *ACPProvider) handleSessionUpdate(convID string, params SessionUpdatePar
 				Str("thought", update.Content.Text).
 				Msg("Agent thinking chunk")
 
-			p.safeSendEvent(convID, provider.ChatEvent{
+			sent := p.safeSendEvent(convID, provider.ChatEvent{
 				Type:     provider.EventTypeThinking,
 				Thinking: update.Content.Text,
 			})
+			logger.Debug().
+				Str("convID", convID).
+				Bool("sent", sent).
+				Msg("Agent thinking chunk safeSendEvent result")
 		}
 
 	case UpdateTypeToolCallStart:

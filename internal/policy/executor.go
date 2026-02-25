@@ -2,8 +2,12 @@ package policy
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
 )
 
 // PolicyExecutor implements the PolicyChecker interface.
@@ -170,6 +174,11 @@ func (e *PolicyExecutor) checkDangerousOps(call *ToolCall, result *PolicyResult)
 	for i := range e.policy.DangerousOps {
 		rule := &e.policy.DangerousOps[i]
 
+		// Skip disabled rules
+		if !rule.IsEnabled() {
+			continue
+		}
+
 		// Check if rule applies to this tool
 		if rule.Tool != "" && !e.matcher.MatchTool(call.Name, []string{rule.Tool}) {
 			continue
@@ -239,6 +248,11 @@ func (e *PolicyExecutor) checkParamRules(call *ToolCall, result *PolicyResult) b
 		return false
 	}
 
+	// Skip disabled rules
+	if !rule.IsEnabled() {
+		return false
+	}
+
 	// Check max length
 	if rule.MaxLength > 0 && len(call.Arguments) > rule.MaxLength {
 		result.Allowed = false
@@ -275,6 +289,23 @@ func (e *PolicyExecutor) checkParamRules(call *ToolCall, result *PolicyResult) b
 			result.Reason = "arguments contain forbidden value"
 			result.MatchedRules = append(result.MatchedRules, "param_rule:forbidden")
 			return true
+		}
+	}
+
+	// Check path prefix
+	if len(rule.PathPrefix) > 0 {
+		paths := extractPaths(call.Arguments)
+		if len(paths) > 0 {
+			expandedPrefixes := expandPrefixes(rule.PathPrefix, call.WorkspacePath)
+			for _, p := range paths {
+				cleanPath := filepath.Clean(p)
+				if !matchesAnyPrefix(cleanPath, expandedPrefixes) {
+					result.Allowed = false
+					result.Reason = fmt.Sprintf("path '%s' is not within allowed prefixes %v", p, rule.PathPrefix)
+					result.MatchedRules = append(result.MatchedRules, "param_rule:path_prefix")
+					return true
+				}
+			}
 		}
 	}
 
@@ -317,4 +348,59 @@ func (e *PolicyExecutor) GetPolicy() *ToolPolicy {
 // SetPolicy updates the policy.
 func (e *PolicyExecutor) SetPolicy(policy *ToolPolicy) {
 	e.policy = policy
+}
+
+// pathKeys is the list of common JSON keys used for file paths in tool arguments.
+var pathKeys = []string{"path", "file_path", "filepath", "filename", "file", "directory", "dir", "target"}
+
+// extractPaths extracts file path values from JSON tool arguments.
+// Returns nil if arguments cannot be parsed as JSON.
+func extractPaths(arguments string) []string {
+	var args map[string]interface{}
+	if err := json.Unmarshal([]byte(arguments), &args); err != nil {
+		return nil
+	}
+	var paths []string
+	for _, key := range pathKeys {
+		if v, ok := args[key]; ok {
+			if s, ok := v.(string); ok && s != "" {
+				paths = append(paths, s)
+			}
+		}
+	}
+	return paths
+}
+
+// expandPrefixes expands ~ and $WORKSPACE placeholders in path prefixes.
+func expandPrefixes(prefixes []string, workspacePath string) []string {
+	home, _ := os.UserHomeDir()
+	result := make([]string, 0, len(prefixes))
+	for _, p := range prefixes {
+		expanded := p
+		if strings.HasPrefix(expanded, "~") {
+			if home != "" {
+				expanded = filepath.Join(home, expanded[1:])
+			}
+		}
+		if strings.Contains(expanded, "$WORKSPACE") {
+			if workspacePath != "" {
+				expanded = strings.ReplaceAll(expanded, "$WORKSPACE", workspacePath)
+			} else {
+				// Skip prefixes with unresolvable $WORKSPACE
+				continue
+			}
+		}
+		result = append(result, filepath.Clean(expanded))
+	}
+	return result
+}
+
+// matchesAnyPrefix checks if the given path starts with any of the prefixes.
+func matchesAnyPrefix(path string, prefixes []string) bool {
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(path, prefix) {
+			return true
+		}
+	}
+	return false
 }

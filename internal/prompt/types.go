@@ -15,11 +15,12 @@ type MemoryResult struct {
 
 // PromptConfig holds configuration for the system prompt builder.
 type PromptConfig struct {
-	AgentName    string   `json:"agent_name"`
-	Timezone     string   `json:"timezone"`
-	WorkspaceDir string   `json:"workspace_dir"`
-	ExtraPrompt  string   `json:"extra_prompt"`
-	Constraints  []string `json:"constraints"`
+	AgentName           string   `json:"agent_name"`
+	Timezone            string   `json:"timezone"`
+	WorkspaceDir        string   `json:"workspace_dir"`
+	ExtraPrompt         string   `json:"extra_prompt"`
+	Constraints         []string `json:"constraints"`
+	DisableSafetyPrompt bool     `json:"disable_safety_prompt"`
 }
 
 // DefaultPromptConfig returns a PromptConfig with default values.
@@ -32,14 +33,16 @@ func DefaultPromptConfig() PromptConfig {
 
 // PromptData holds all data for template rendering.
 type PromptData struct {
-	AgentName    string
-	Tools        []ToolInfo
-	Memories     []MemoryResult
-	Timezone     string
-	CurrentTime  string
-	WorkspaceDir string
-	Constraints  []string
-	ExtraPrompt  string
+	AgentName       string
+	Tools           []ToolInfo
+	Agents          []AgentInfo
+	Memories        []MemoryResult
+	Timezone        string
+	CurrentTime     string
+	WorkspaceDir    string
+	Constraints     []string
+	ExtraPrompt     string
+	MaxOutputTokens int // Maximum output tokens the model can generate (0 = unknown)
 }
 
 // ToolInfo holds information about a tool for prompt rendering.
@@ -47,4 +50,12 @@ type ToolInfo struct {
 	Name        string
 	Description string
 	Parameters  map[string]any
+}
+
+// AgentInfo holds information about a sub-agent for prompt rendering.
+type AgentInfo struct {
+	Name        string
+	Description string
+	Model       string
+	Tools       []string
 }

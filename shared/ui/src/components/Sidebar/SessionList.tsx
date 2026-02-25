@@ -5,21 +5,23 @@
  */
 import React, { useMemo, useState } from 'react';
 import { Typography, Dropdown, Modal, Input, message, Button, Tooltip } from 'antd';
-import { MessageOutlined, MoreOutlined, EditOutlined, DeleteOutlined, GithubOutlined, HistoryOutlined } from '@ant-design/icons';
+import { MessageOutlined, MoreOutlined, EditOutlined, DeleteOutlined, GithubOutlined, HistoryOutlined, ClockCircleOutlined } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import type { Session } from '../../types';
 import { useSessionGroups } from '../../hooks';
 import { useAPI } from '../../context/APIContext';
 import { OllamaIcon } from '../OllamaIcon';
 import { MinimaxIcon } from '../MinimaxIcon';
+import { GlmIcon } from '../GlmIcon';
 
 const { Text } = Typography;
 
 // Helper function to get provider from model
-const getProviderFromModel = (model?: string): 'copilot' | 'ollama' | 'minimax' | null => {
+const getProviderFromModel = (model?: string): 'copilot' | 'ollama' | 'minimax' | 'glm' | null => {
   if (!model) return null;
   if (model.startsWith('ollama:')) return 'ollama';
   if (model.startsWith('minimax:')) return 'minimax';
+  if (model.startsWith('glm:')) return 'glm';
   return 'copilot';
 };
 
@@ -92,9 +94,9 @@ export const SessionList: React.FC<SessionListProps> = ({
   const [renameSession, setRenameSession] = useState<Session | null>(null);
   const [newTitle, setNewTitle] = useState('');
 
-  // 过滤会话
+  // 过滤会话：先排除子代理(delegate)创建的session，再按关键词搜索
   const filteredSessions = useMemo(
-    () => filterSessions(sessions, searchKeyword),
+    () => filterSessions(sessions.filter(s => s.source !== 'delegate'), searchKeyword),
     [sessions, searchKeyword]
   );
 
@@ -232,7 +234,7 @@ export const SessionList: React.FC<SessionListProps> = ({
                 }}
               >
                 <div className="session-item-icon">
-                  <MessageOutlined />
+                  {session.source === 'cron' ? <ClockCircleOutlined style={{ color: '#13c2c2' }} /> : <MessageOutlined />}
                 </div>
                 <div className="session-item-content">
                   <div className="session-item-title">
@@ -245,6 +247,8 @@ export const SessionList: React.FC<SessionListProps> = ({
                           ? <OllamaIcon size={12} /> 
                           : getProviderFromModel(session.model) === 'minimax'
                           ? <MinimaxIcon size={12} />
+                          : getProviderFromModel(session.model) === 'glm'
+                          ? <GlmIcon size={12} />
                           : <GithubOutlined style={{ fontSize: 12 }} />}
                         {' '}{session.model.split('/').pop()?.replace('ollama:', '')}
                       </span>

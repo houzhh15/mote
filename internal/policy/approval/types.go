@@ -65,6 +65,10 @@ type ApprovalResult struct {
 
 	// Decision is the type of decision: approved, rejected, timeout.
 	Decision ApprovalDecision `json:"decision"`
+
+	// ModifiedArguments contains user-edited tool call arguments.
+	// If non-empty, the runner should use these instead of the original arguments.
+	ModifiedArguments string `json:"modified_arguments,omitempty"`
 }
 
 // ApprovalHandler manages approval requests.
@@ -74,7 +78,8 @@ type ApprovalHandler interface {
 	RequestApproval(ctx context.Context, call *policy.ToolCall, reason string) (*ApprovalResult, error)
 
 	// HandleResponse processes an approval response from UI.
-	HandleResponse(requestID string, approved bool, message string) error
+	// Optional modifiedArguments allows the user to edit tool arguments before execution.
+	HandleResponse(requestID string, approved bool, message string, modifiedArguments ...string) error
 
 	// GetPending returns a pending approval request by ID.
 	GetPending(requestID string) (*ApprovalRequest, bool)
@@ -95,10 +100,10 @@ type ApprovalNotifier interface {
 // ApprovalLogger records approval events for audit.
 type ApprovalLogger interface {
 	// LogRequest logs the creation of an approval request.
-	LogRequest(req *ApprovalRequest)
+	LogRequest(req *ApprovalRequest) error
 
 	// LogDecision logs the decision made on an approval request.
-	LogDecision(req *ApprovalRequest, result *ApprovalResult)
+	LogDecision(req *ApprovalRequest, result *ApprovalResult) error
 }
 
 // ApprovalRequestMessage is the WebSocket message for approval requests.

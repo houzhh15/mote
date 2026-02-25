@@ -6,6 +6,7 @@ import React, { useState, useRef, useEffect, useCallback, useMemo, memo } from '
 import { Input, Button, Typography, Space, Spin, message, Select, Tooltip, Collapse, Modal, Tag, theme, Dropdown } from 'antd';
 import { SendOutlined, ClearOutlined, PlusOutlined, ToolOutlined, FolderOutlined, FolderOpenOutlined, LinkOutlined, DisconnectOutlined, GithubOutlined, StopOutlined, CopyOutlined, EditOutlined, DeleteOutlined, ThunderboltOutlined, PauseOutlined, PlayCircleOutlined, CloseCircleFilled, ClockCircleOutlined, LoadingOutlined } from '@ant-design/icons';
 import { MinimaxIcon } from '../components/MinimaxIcon';
+import { GlmIcon } from '../components/GlmIcon';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useAPI } from '../context/APIContext';
@@ -18,10 +19,11 @@ import { FileSelector } from '../components/FileSelector';
 import type { FileSelectorMode } from '../components/FileSelector';
 import { OllamaIcon } from '../components/OllamaIcon';
 import { StatusIndicator, ErrorBanner } from '../components';
+import { ContextUsagePopover } from '../components/ContextUsagePopover';
 import { useConnectionStatusSafe, useHasConnectionIssuesSafe } from '../context/ConnectionStatusContext';
 import moteLogo from '../assets/mote_logo.png';
 import userAvatar from '../assets/user.png';
-import type { Message, Model, Workspace, ErrorDetail, Skill, ReconfigureSessionResponse, ImageAttachment } from '../types';
+import type { Message, Model, Workspace, ErrorDetail, Skill, ReconfigureSessionResponse, ImageAttachment, ApprovalRequestSSEEvent } from '../types';
 
 const { TextArea } = Input;
 const { Text } = Typography;
@@ -74,7 +76,7 @@ const MessageItem = memo<MessageItemProps>(({
             style={{
               width: 36,
               height: 36,
-              backgroundColor: '#8B5CF6',
+              backgroundColor: effectiveTheme === 'dark' ? '#1f1f1f' : '#F5F5F5',
               borderRadius: '50%',
               display: 'flex',
               alignItems: 'center',
@@ -413,10 +415,12 @@ const StreamingContent: React.FC<StreamingContentProps> = ({ sessionId, tokenCol
   const contentWrapperRef = useRef<HTMLDivElement>(null);
   const toolCallsRef = useRef<HTMLDivElement>(null);
   const toolCallsContentRef = useRef<HTMLDivElement>(null);
+  const agentBadgeRef = useRef<HTMLDivElement>(null);
   
   // 状态存储在 ref 中
   const lastContentLengthRef = useRef(0);
   const lastToolCallsJsonRef = useRef('');
+  const lastAgentNameRef = useRef<string | undefined>(undefined);
 
   // 使用 useLayoutEffect 确保 DOM 已准备好
   useEffect(() => {
@@ -443,7 +447,29 @@ const StreamingContent: React.FC<StreamingContentProps> = ({ sessionId, tokenCol
         contentWrapperRef.current.style.display = hasContent ? 'block' : 'none';
       }
       
-      // === 2. 更新 Tool Calls（只有结构变化时才更新 DOM）===
+      // === 2. 更新 Agent 委托状态面板 ===
+      if (state.activeAgentName !== lastAgentNameRef.current) {
+        lastAgentNameRef.current = state.activeAgentName;
+        if (agentBadgeRef.current) {
+          if (state.activeAgentName) {
+            const depth = state.activeAgentDepth || 0;
+            const chainDots = Array.from({ length: depth }, (_, i) => `<span style="color: ${['#1890ff','#52c41a','#faad14','#eb2f96','#722ed1'][i % 5]}">●</span>`).join(' ');
+            agentBadgeRef.current.innerHTML = `
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #52c41a; animation: agentPulse 1.5s ease-in-out infinite;"></span>
+                <span style="font-weight: 600;">🤖 ${escapeHtml(state.activeAgentName)}</span>
+                <span style="opacity: 0.7; font-size: 10px;">深度 ${depth}</span>
+                ${chainDots ? `<span style="font-size: 10px;">${chainDots}</span>` : ''}
+              </div>
+            `;
+            agentBadgeRef.current.style.display = 'flex';
+          } else {
+            agentBadgeRef.current.style.display = 'none';
+          }
+        }
+      }
+
+      // === 3. 更新 Tool Calls（只有结构变化时才更新 DOM）===
       const newToolCalls = state.currentToolCalls || {};
       const newToolCallsJson = JSON.stringify(newToolCalls);
       
@@ -534,6 +560,25 @@ const StreamingContent: React.FC<StreamingContentProps> = ({ sessionId, tokenCol
           <img src={moteLogo} alt="AI" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
+          {/* Agent Delegation Status Panel - 初始隐藏，由 JS 控制显示和内容 */}
+          <div
+            ref={agentBadgeRef}
+            style={{
+              display: 'none',
+              alignItems: 'center',
+              gap: 6,
+              marginBottom: 8,
+              padding: '6px 14px',
+              fontSize: 12,
+              fontWeight: 500,
+              color: tokenColors.colorTextSecondary,
+              background: `linear-gradient(135deg, ${tokenColors.colorBgLayout}, ${tokenColors.colorBgContainer})`,
+              border: `1px solid ${tokenColors.colorBorderSecondary}`,
+              borderRadius: 8,
+              width: 'fit-content',
+              boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
+            }}
+          />
           {/* Tool Calls - 初始隐藏，由 JS 控制显示和内容 */}
           <div 
             ref={toolCallsRef}
@@ -800,6 +845,7 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
   const hasConnectionIssues = useHasConnectionIssuesSafe();
   
   const [messages, setMessages] = useState<Message[]>([]);
+  const [backendEstimatedTokens, setBackendEstimatedTokens] = useState<number>(0);
   const [inputValue, setInputValue] = useState('');
   const [loading, setLoading] = useState(false);
   const [streaming, setStreaming] = useState(false);
@@ -835,6 +881,7 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
   const inputRef = useRef<any>(null);
   // 用于保存当前累积的响应内容（停止时使用）
   const currentResponseRef = useRef('');
+  const streamEndReloadedRef = useRef(false);  // Prevent duplicate API reloads when streaming ends
   // Stream error state
   const [streamError, setStreamError] = useState<ErrorDetail | null>(null);
   // Pause control state
@@ -843,6 +890,10 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
   // Pause state from ChatManager
   const [paused, setPaused] = useState(false);
   const [pausePendingTools, setPausePendingTools] = useState<string[]>([]);
+  // Approval request state - tool call waiting for user approval
+  const [approvalRequest, setApprovalRequest] = useState<ApprovalRequestSSEEvent | null>(null);
+  const [approvalEditArgs, setApprovalEditArgs] = useState<string>('');
+  const approvalArgsModifiedRef = useRef(false);
   // Pasted images state
   const [pastedImages, setPastedImages] = useState<ImageAttachment[]>([]);
   const lastScrollHeightRef = useRef(0);
@@ -853,6 +904,10 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
   // Truncation state - when response is cut off due to max_tokens
   const [truncated, setTruncated] = useState(false);
   const [truncatedInfo, setTruncatedInfo] = useState<{ reason: string; pendingToolCalls: number } | null>(null);
+
+  // Streaming token count for context usage indicator (throttled)
+  const [streamingTokens, setStreamingTokens] = useState(0);
+  const lastStreamTokenUpdateRef = useRef(0);
 
   // Cron session state
   const isCronSession = sessionId?.startsWith('cron-') ?? false;
@@ -986,8 +1041,9 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
         // Load existing session
         setSessionId(initialSessionId);
         try {
-          const history = await api.getSessionMessages(initialSessionId);
-          setMessages(history || []);
+          const resp = await api.getSessionMessages(initialSessionId);
+          setMessages(resp.messages || []);
+          setBackendEstimatedTokens(resp.estimated_tokens || 0);
         } catch (e) {
           console.error('Failed to load session messages:', e);
           setMessages([]);
@@ -1017,8 +1073,9 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
             setSessionId(chatSession.id);
             onSessionCreated?.(chatSession.id);
             try {
-              const history = await api.getSessionMessages(chatSession.id);
-              setMessages(history || []);
+              const resp = await api.getSessionMessages(chatSession.id);
+              setMessages(resp.messages || []);
+              setBackendEstimatedTokens(resp.estimated_tokens || 0);
             } catch (e) {
               console.error('Failed to load session messages:', e);
               setMessages([]);
@@ -1091,6 +1148,7 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
       setStreaming(true);
       shouldAutoScrollRef.current = true;
       currentResponseRef.current = '';
+      streamEndReloadedRef.current = false;  // Reset for new chat
 
       // 使用 ChatManager 发起请求
       chatManager.startChat(
@@ -1147,8 +1205,9 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
           if (cronPollRef.current) { clearInterval(cronPollRef.current); cronPollRef.current = null; }
           stopped = true;
           try {
-            const msgs = await api.getSessionMessages(sessionId);
-            setMessages(msgs);
+            const resp = await api.getSessionMessages(sessionId);
+            setMessages(resp.messages);
+            setBackendEstimatedTokens(resp.estimated_tokens || 0);
           } catch { /* ignore */ }
         }
       } catch { /* ignore polling errors */ }
@@ -1202,6 +1261,29 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
       // 保存到 ref（用于停止时），不触发重渲染
       currentResponseRef.current = state.currentContent || '';
       
+      // Throttled streaming token count for context usage indicator
+      if (state.streaming) {
+        const now = Date.now();
+        if (now - lastStreamTokenUpdateRef.current > 500) {
+          lastStreamTokenUpdateRef.current = now;
+          let tokens = 0;
+          if (state.currentContent) {
+            tokens += Math.ceil((state.currentContent.length + 2) / 3);
+          }
+          if (state.currentToolCalls) {
+            for (const tc of Object.values(state.currentToolCalls)) {
+              if (tc.result) {
+                const r = typeof tc.result === 'string' ? tc.result : JSON.stringify(tc.result);
+                tokens += Math.ceil((r.length + 2) / 3);
+              }
+            }
+          }
+          setStreamingTokens(tokens);
+        }
+      } else {
+        setStreamingTokens(0);
+      }
+
       // Handle truncation state
       if (state.truncated) {
         setTruncated(true);
@@ -1214,6 +1296,20 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
       // Handle pause state
       setPaused(state.paused || false);
       setPausePendingTools(state.pausePendingTools || []);
+      
+      // Handle approval request state
+      if (state.approvalRequest) {
+        setApprovalRequest(state.approvalRequest);
+        // Initialize editable arguments
+        try {
+          setApprovalEditArgs(JSON.stringify(JSON.parse(state.approvalRequest.arguments), null, 2));
+        } catch {
+          setApprovalEditArgs(state.approvalRequest.arguments || '');
+        }
+        approvalArgsModifiedRef.current = false;
+      } else {
+        setApprovalRequest(null);
+      }
       
       // Handle initialization state - check for specific error messages
       if (state.error) {
@@ -1248,25 +1344,38 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
         // Clear truncation state when streaming ends normally
         setTruncated(false);
         setTruncatedInfo(null);
-        // When streaming ends, add the final message to the list
-        // Use finalMessage from ChatManager if available (set on 'done' event)
-        const finalContent = state.finalMessage?.content || state.currentContent;
-        const finalToolCalls = state.finalMessage?.tool_calls || 
-          (state.currentToolCalls ? Object.values(state.currentToolCalls) : undefined);
-        
-        if (finalContent && finalContent.trim()) {
-          setMessages((prev: Message[]) => {
-            // Avoid duplicating if already added
-            const lastMsg = prev[prev.length - 1];
-            if (lastMsg && lastMsg.role === 'assistant' && lastMsg.content === finalContent) {
-              return prev;
+        // When streaming ends, reload messages from the API to get the proper
+        // per-iteration structure (each assistant message with its own tool_calls).
+        // This replaces the old approach of adding one merged message, which:
+        // 1. Lost per-iteration tool call boundaries (all merged into one)
+        // 2. Skipped messages when content was empty (guard: finalContent.trim())
+        // 3. Used tool NAME as key, collapsing repeated calls to the same tool
+        if (state.finalMessage && sessionId && !streamEndReloadedRef.current) {
+          streamEndReloadedRef.current = true;
+          api.getSessionMessages(sessionId).then((resp) => {
+            if (resp.messages && resp.messages.length > 0) {
+              setMessages(resp.messages);
+              setBackendEstimatedTokens(resp.estimated_tokens || 0);
             }
-            return [...prev, {
-              role: 'assistant' as const,
-              content: finalContent,
-              tool_calls: finalToolCalls,
-              timestamp: new Date().toISOString(),
-            }];
+          }).catch(() => {
+            // Fallback: add merged message if API reload fails
+            const finalContent = state.finalMessage?.content || state.currentContent;
+            const finalToolCalls = state.finalMessage?.tool_calls || 
+              (state.currentToolCalls ? Object.values(state.currentToolCalls) : undefined);
+            if (finalContent && finalContent.trim()) {
+              setMessages((prev: Message[]) => {
+                const lastMsg = prev[prev.length - 1];
+                if (lastMsg && lastMsg.role === 'assistant' && lastMsg.content === finalContent) {
+                  return prev;
+                }
+                return [...prev, {
+                  role: 'assistant' as const,
+                  content: finalContent,
+                  tool_calls: finalToolCalls,
+                  timestamp: new Date().toISOString(),
+                }];
+              });
+            }
           });
         }
       }
@@ -1517,6 +1626,7 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
     setStreaming(true);
     shouldAutoScrollRef.current = true;
     currentResponseRef.current = '';
+    streamEndReloadedRef.current = false;  // Reset for new chat
 
     // 使用 ChatManager 发起请求，它会在后台持续运行
     chatManager.startChat(
@@ -1580,6 +1690,14 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
     if (streaming && sessionId) {
       chatManager.abortChat(sessionId);
       
+      // Cancel the backend execution — this is essential because
+      // abortChat only disconnects the frontend stream.
+      // Without this, the runner keeps executing in the background,
+      // blocking new prompts for the same session.
+      api.cancelChat?.(sessionId).catch(() => {
+        // Non-fatal: abortChat already cut the frontend stream
+      });
+      
       // Clear truncation state when stopping
       setTruncated(false);
       setTruncatedInfo(null);
@@ -1626,6 +1744,25 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
       setPauseInputValue('');
     } catch (err: any) {
       message.error(`恢复失败: ${err.message}`);
+    }
+  };
+
+  // Approval handlers
+  const handleApprovalRespond = async (approved: boolean) => {
+    if (!approvalRequest?.id || !api.respondApproval) {
+      message.warning('审批功能不可用');
+      return;
+    }
+    try {
+      // If approved and arguments were modified, pass the edited version
+      const modifiedArgs = (approved && approvalArgsModifiedRef.current) ? approvalEditArgs : undefined;
+      await api.respondApproval(approvalRequest.id, approved, undefined, modifiedArgs);
+      message.success(approved ? '已批准工具调用' : '已拒绝工具调用');
+      setApprovalRequest(null);
+      setApprovalEditArgs('');
+      approvalArgsModifiedRef.current = false;
+    } catch (err: any) {
+      message.error(`审批响应失败: ${err.message}`);
     }
   };
 
@@ -2086,8 +2223,8 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
                       key={provider}
                       label={
                         <Space>
-                          {(provider === 'copilot' || provider === 'copilot-acp') ? <GithubOutlined /> : provider === 'minimax' ? <MinimaxIcon size={14} /> : <OllamaIcon />}
-                          {provider === 'copilot' ? 'Copilot API' : provider === 'copilot-acp' ? 'Copilot ACP' : provider === 'minimax' ? 'MiniMax' : 'Ollama'}
+                          {(provider === 'copilot' || provider === 'copilot-acp') ? <GithubOutlined /> : provider === 'minimax' ? <MinimaxIcon size={14} /> : provider === 'glm' ? <GlmIcon size={14} /> : <OllamaIcon />}
+                          {provider === 'copilot' ? 'Copilot API' : provider === 'copilot-acp' ? 'Copilot ACP' : provider === 'minimax' ? 'MiniMax' : provider === 'glm' ? 'GLM 智谱AI' : 'Ollama'}
                         </Space>
                       }
                     >
@@ -2462,6 +2599,18 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
         </Space.Compact>
         </Space.Compact>
 
+        {/* Context usage indicator */}
+        {(messages.length > 0 || streamingTokens > 0) && (
+          <ContextUsagePopover
+            messages={messages}
+            currentModel={currentModel}
+            models={models}
+            streamingTokens={streamingTokens}
+            backendEstimatedTokens={backendEstimatedTokens}
+            style={{ marginTop: 2 }}
+          />
+        )}
+
         {/* Pause Input Modal */}
         <Modal
           title="注入用户输入"
@@ -2488,6 +2637,58 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
             placeholder="输入要注入的内容..."
             autoSize={{ minRows: 3, maxRows: 10 }}
           />
+        </Modal>
+
+        {/* Approval Request Modal */}
+        <Modal
+          title="🔐 工具调用需要审批"
+          open={!!approvalRequest}
+          onOk={() => handleApprovalRespond(true)}
+          onCancel={() => handleApprovalRespond(false)}
+          okText="✅ 批准"
+          cancelText="❌ 拒绝"
+          okButtonProps={{ type: 'primary' }}
+          cancelButtonProps={{ danger: true }}
+          closable={false}
+          maskClosable={false}
+          width={600}
+        >
+          {approvalRequest && (
+            <div>
+              <p style={{ marginBottom: 8 }}>
+                <strong>工具名称：</strong>
+                <Tag color="blue">{approvalRequest.tool_name}</Tag>
+              </p>
+              {approvalRequest.reason && (
+                <p style={{ marginBottom: 8, color: tokenColors.colorWarning }}>
+                  <strong>原因：</strong>{approvalRequest.reason}
+                </p>
+              )}
+              <div style={{ marginBottom: 8 }}>
+                <strong>参数</strong>
+                <Text type="secondary" style={{ fontSize: 12, marginLeft: 8 }}>（可编辑，修改后点批准将按新参数执行）</Text>
+                <TextArea
+                  value={approvalEditArgs}
+                  onChange={(e) => {
+                    setApprovalEditArgs(e.target.value);
+                    approvalArgsModifiedRef.current = true;
+                  }}
+                  autoSize={{ minRows: 3, maxRows: 12 }}
+                  style={{
+                    marginTop: 4,
+                    fontFamily: 'monospace',
+                    fontSize: 12,
+                  }}
+                />
+              </div>
+              {approvalRequest.expires_at && (
+                <p style={{ fontSize: 12, color: tokenColors.colorTextSecondary }}>
+                  <ClockCircleOutlined style={{ marginRight: 4 }} />
+                  过期时间：{new Date(approvalRequest.expires_at).toLocaleString()}
+                </p>
+              )}
+            </div>
+          )}
         </Modal>
       </div>
     </div>

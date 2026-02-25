@@ -319,6 +319,7 @@ func TestListDirTool(t *testing.T) {
 
 func TestHTTPTool(t *testing.T) {
 	tool := NewHTTPTool()
+	tool.BlockPrivate = false // Disable SSRF for local httptest servers
 
 	t.Run("Name", func(t *testing.T) {
 		if tool.Name() != "http" {

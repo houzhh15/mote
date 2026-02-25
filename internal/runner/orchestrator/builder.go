@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"mote/internal/compaction"
+	internalContext "mote/internal/context"
 	"mote/internal/hooks"
 	"mote/internal/mcp/client"
 	"mote/internal/prompt"
@@ -13,15 +14,16 @@ import (
 
 // BuilderOptions 用于构建 Orchestrator 的选项
 type BuilderOptions struct {
-	Sessions     *scheduler.SessionManager
-	Registry     *tools.Registry
-	Config       Config
-	Compactor    *compaction.Compactor
-	SystemPrompt *prompt.SystemPromptBuilder
-	SkillManager *skills.Manager
-	HookManager  *hooks.Manager
-	MCPManager   *client.Manager
-	ToolExecutor ToolExecutorFunc
+	Sessions       *scheduler.SessionManager
+	Registry       *tools.Registry
+	Config         Config
+	Compactor      *compaction.Compactor
+	SystemPrompt   *prompt.SystemPromptBuilder
+	SkillManager   *skills.Manager
+	HookManager    *hooks.Manager
+	MCPManager     *client.Manager
+	ContextManager *internalContext.Manager
+	ToolExecutor   ToolExecutorFunc
 }
 
 // OrchestratorBuilder 构建器用于创建 Orchestrator
@@ -38,7 +40,7 @@ func NewBuilder(opts BuilderOptions) *OrchestratorBuilder {
 func (b *OrchestratorBuilder) Build(prov provider.Provider) Orchestrator {
 	// 创建基础 orchestrator
 	base := NewBaseOrchestrator(b.opts.Sessions, b.opts.Registry, b.opts.Config)
-	
+
 	// 设置可选组件
 	if b.opts.Compactor != nil {
 		base.SetCompactor(b.opts.Compactor)
@@ -54,6 +56,9 @@ func (b *OrchestratorBuilder) Build(prov provider.Provider) Orchestrator {
 	}
 	if b.opts.MCPManager != nil {
 		base.SetMCPManager(b.opts.MCPManager)
+	}
+	if b.opts.ContextManager != nil {
+		base.SetContextManager(b.opts.ContextManager)
 	}
 	if b.opts.ToolExecutor != nil {
 		base.SetToolExecutor(b.opts.ToolExecutor)

@@ -6,6 +6,10 @@ export function CallAPI(arg1, arg2, arg3) {
   return window['go']['main']['App']['CallAPI'](arg1, arg2, arg3);
 }
 
+export function CancelChat(arg1) {
+  return window['go']['main']['App']['CancelChat'](arg1);
+}
+
 export function ChatStream(arg1) {
   return window['go']['main']['App']['ChatStream'](arg1);
 }

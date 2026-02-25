@@ -26,6 +26,7 @@ type ChannelStatus struct {
 // IMessageChannelConfigResponse iMessage 配置响应
 type IMessageChannelConfigResponse struct {
 	Enabled   bool              `json:"enabled"`
+	Model     string            `json:"model,omitempty"`
 	SelfID    string            `json:"selfId,omitempty"`
 	Trigger   TriggerConfigResp `json:"trigger"`
 	Reply     ReplyConfigResp   `json:"reply"`
@@ -46,6 +47,7 @@ type ReplyConfigResp struct {
 // IMessageChannelConfigRequest iMessage 配置请求
 type IMessageChannelConfigRequest struct {
 	Enabled   bool             `json:"enabled"`
+	Model     string           `json:"model,omitempty"`
 	SelfID    string           `json:"selfId,omitempty"`
 	Trigger   TriggerConfigReq `json:"trigger"`
 	Reply     ReplyConfigReq   `json:"reply"`
@@ -66,6 +68,7 @@ type ReplyConfigReq struct {
 // AppleNotesChannelConfigResponse Apple Notes 配置响应
 type AppleNotesChannelConfigResponse struct {
 	Enabled       bool              `json:"enabled"`
+	Model         string            `json:"model,omitempty"`
 	Trigger       TriggerConfigResp `json:"trigger"`
 	Reply         ReplyConfigResp   `json:"reply"`
 	WatchFolder   string            `json:"watchFolder"`
@@ -76,6 +79,7 @@ type AppleNotesChannelConfigResponse struct {
 // AppleNotesChannelConfigRequest Apple Notes 配置请求
 type AppleNotesChannelConfigRequest struct {
 	Enabled       bool             `json:"enabled"`
+	Model         string           `json:"model,omitempty"`
 	Trigger       TriggerConfigReq `json:"trigger"`
 	Reply         ReplyConfigReq   `json:"reply"`
 	WatchFolder   string           `json:"watchFolder"`
@@ -86,6 +90,7 @@ type AppleNotesChannelConfigRequest struct {
 // AppleRemindersChannelConfigResponse Apple Reminders 配置响应
 type AppleRemindersChannelConfigResponse struct {
 	Enabled      bool              `json:"enabled"`
+	Model        string            `json:"model,omitempty"`
 	Trigger      TriggerConfigResp `json:"trigger"`
 	Reply        ReplyConfigResp   `json:"reply"`
 	WatchList    string            `json:"watchList"`
@@ -95,6 +100,7 @@ type AppleRemindersChannelConfigResponse struct {
 // AppleRemindersChannelConfigRequest Apple Reminders 配置请求
 type AppleRemindersChannelConfigRequest struct {
 	Enabled      bool             `json:"enabled"`
+	Model        string           `json:"model,omitempty"`
 	Trigger      TriggerConfigReq `json:"trigger"`
 	Reply        ReplyConfigReq   `json:"reply"`
 	WatchList    string           `json:"watchList"`
@@ -176,6 +182,7 @@ func (r *Router) HandleGetChannelConfig(w http.ResponseWriter, req *http.Request
 func (r *Router) getIMessageConfig(w http.ResponseWriter) {
 	config := IMessageChannelConfigResponse{
 		Enabled: viper.GetBool("channels.imessage.enabled"),
+		Model:   viper.GetString("channels.imessage.model"),
 		SelfID:  viper.GetString("channels.imessage.self_id"),
 		Trigger: TriggerConfigResp{
 			Prefix:        viper.GetString("channels.imessage.trigger.prefix"),
@@ -209,6 +216,7 @@ func (r *Router) getIMessageConfig(w http.ResponseWriter) {
 func (r *Router) getAppleNotesConfig(w http.ResponseWriter) {
 	config := AppleNotesChannelConfigResponse{
 		Enabled: viper.GetBool("channels.apple_notes.enabled"),
+		Model:   viper.GetString("channels.apple_notes.model"),
 		Trigger: TriggerConfigResp{
 			Prefix:        viper.GetString("channels.apple_notes.trigger.prefix"),
 			CaseSensitive: viper.GetBool("channels.apple_notes.trigger.case_sensitive"),
@@ -245,6 +253,7 @@ func (r *Router) getAppleNotesConfig(w http.ResponseWriter) {
 func (r *Router) getAppleRemindersConfig(w http.ResponseWriter) {
 	config := AppleRemindersChannelConfigResponse{
 		Enabled: viper.GetBool("channels.apple_reminders.enabled"),
+		Model:   viper.GetString("channels.apple_reminders.model"),
 		Trigger: TriggerConfigResp{
 			Prefix:        viper.GetString("channels.apple_reminders.trigger.prefix"),
 			CaseSensitive: viper.GetBool("channels.apple_reminders.trigger.case_sensitive"),
@@ -299,6 +308,7 @@ func (r *Router) updateIMessageConfig(w http.ResponseWriter, req *http.Request) 
 	}
 
 	viper.Set("channels.imessage.enabled", body.Enabled)
+	viper.Set("channels.imessage.model", body.Model)
 	viper.Set("channels.imessage.self_id", body.SelfID)
 	viper.Set("channels.imessage.trigger.prefix", body.Trigger.Prefix)
 	viper.Set("channels.imessage.trigger.case_sensitive", body.Trigger.CaseSensitive)
@@ -323,6 +333,7 @@ func (r *Router) updateAppleNotesConfig(w http.ResponseWriter, req *http.Request
 	}
 
 	viper.Set("channels.apple_notes.enabled", body.Enabled)
+	viper.Set("channels.apple_notes.model", body.Model)
 	viper.Set("channels.apple_notes.trigger.prefix", body.Trigger.Prefix)
 	viper.Set("channels.apple_notes.trigger.case_sensitive", body.Trigger.CaseSensitive)
 	viper.Set("channels.apple_notes.reply.prefix", body.Reply.Prefix)
@@ -347,6 +358,7 @@ func (r *Router) updateAppleRemindersConfig(w http.ResponseWriter, req *http.Req
 	}
 
 	viper.Set("channels.apple_reminders.enabled", body.Enabled)
+	viper.Set("channels.apple_reminders.model", body.Model)
 	viper.Set("channels.apple_reminders.trigger.prefix", body.Trigger.Prefix)
 	viper.Set("channels.apple_reminders.trigger.case_sensitive", body.Trigger.CaseSensitive)
 	viper.Set("channels.apple_reminders.reply.prefix", body.Reply.Prefix)

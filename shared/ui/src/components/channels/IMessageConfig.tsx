@@ -5,10 +5,12 @@
 import React, { useState, useEffect } from 'react';
 import { Modal, Form, Input, Switch, Select, Divider, message } from 'antd';
 import type { IMessageChannelConfig } from '../../types';
+import type { Model } from '../../types';
 
 export interface IMessageConfigProps {
   visible: boolean;
   config: IMessageChannelConfig | null;
+  models?: Model[];
   onSave: (config: IMessageChannelConfig) => Promise<void>;
   onCancel: () => void;
 }
@@ -16,6 +18,7 @@ export interface IMessageConfigProps {
 export const IMessageConfig: React.FC<IMessageConfigProps> = ({
   visible,
   config,
+  models,
   onSave,
   onCancel,
 }) => {
@@ -70,6 +73,20 @@ export const IMessageConfig: React.FC<IMessageConfigProps> = ({
           allowFrom: [],
         }}
       >
+        {/* 模型设置 */}
+        <Form.Item
+          name="model"
+          label="专属模型"
+          tooltip="为此渠道指定专属模型，留空则使用全局默认模型"
+        >
+          <Select
+            placeholder="使用默认模型"
+            allowClear
+            showSearch
+            options={(models || []).map(m => ({ label: `${m.display_name || m.id} (${m.provider || ''})`, value: m.id }))}
+          />
+        </Form.Item>
+
         {/* 触发设置 */}
         <Divider orientation="left">触发设置</Divider>
         <Form.Item

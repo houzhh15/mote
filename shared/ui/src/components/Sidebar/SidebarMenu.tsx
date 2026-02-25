@@ -11,6 +11,7 @@ import {
   AppstoreOutlined,
   ApiOutlined,
   BulbOutlined,
+  TeamOutlined,
 } from '@ant-design/icons';
 
 export type PageKey =
@@ -21,6 +22,7 @@ export type PageKey =
   | 'skill'
   | 'mcp'
   | 'memory'
+  | 'agents'
   | 'settings'
   | 'workspace';
 
@@ -66,6 +68,11 @@ const menuItems: MenuItem[] = [
     key: 'memory',
     icon: <BulbOutlined />,
     label: 'Memory',
+  },
+  {
+    key: 'agents',
+    icon: <TeamOutlined />,
+    label: 'Agents',
     dividerAfter: true,
   },
 ];

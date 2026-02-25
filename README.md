@@ -15,6 +15,7 @@ Mote 是一个轻量级、基于 Go 语言构建的本地 AI Agent 运行时。�
 - **Skill 技能包**: 通过 manifest.json 或 SKILL.md 扩展 Agent 能力
 - **定时任务**: 标准 Cron 表达式调度，支持 prompt、tool、script 类型
 - **安全策略**: 工具调用黑白名单、危险操作审批机制
+- **多代理委托**: 主代理可将任务分发给专用子代理，支持深度控制、循环检测和审计追踪
 
 ### 交互方式
 - **CLI**: 完整命令行工具 (`mote chat`, `mote serve` 等)
@@ -216,6 +217,68 @@ make build
 ```
 
 配置文件位于 `~/.mote/config.yaml`，数据存储于 `~/.mote/data.db`。
+
+---
+
+## Multi-Agent Delegate (多代理委托)
+
+Mote 支持将任务委托给专用子代理执行。每个子代理可以有独立的模型、工具集和系统提示词。
+
+### 配置
+
+在 `~/.mote/config.yaml` 中添加代理定义：
+
+```yaml
+delegate:
+  enabled: true
+  max_depth: 3
+
+agents:
+  researcher:
+    description: "Research specialist"
+    model: "gpt-4o"
+    tools: ["read_file", "grep", "http", "!write_file"]
+    max_depth: 2
+    timeout: "3m"
+
+  coder:
+    description: "Code implementation specialist"
+    model: "claude-sonnet-4-20250514"
+    tools: ["read_file", "write_file", "grep", "patch"]
+    timeout: "5m"
+```
+
+详细配置示例参见 `examples/multi-agent.yaml`。
+
+### CLI 管理
+
+```bash
+# 列出所有代理
+mote delegate list
+
+# 查看代理详情
+mote delegate show researcher
+```
+
+### 工具过滤
+
+支持灵活的工具过滤语法：
+- `tool_name` — 包含指定工具
+- `!tool_name` — 排除指定工具
+- `prefix_*` — glob 通配符匹配（如 `mcp_*` 包含所有 MCP 工具）
+- `*` — 包含所有工具
+
+### API
+
+```
+GET  /api/v1/agents                          # 列出所有代理
+POST /api/v1/agents                          # 添加代理
+GET  /api/v1/agents/{name}                   # 获取代理详情
+PUT  /api/v1/agents/{name}                   # 更新代理
+DELETE /api/v1/agents/{name}                 # 删除代理
+GET  /api/v1/sessions/{id}/delegations       # 查询会话的委托记录
+GET  /api/v1/delegations/{id}                # 查询单个委托记录
+```
 
 ---
 

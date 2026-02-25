@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	goruntime "runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"mote/gui/internal/backend"
@@ -55,7 +56,8 @@ type App struct {
 	ipcBridge      *ipcbridge.Bridge
 	logger         zerolog.Logger
 	deviceCode     string
-	serverPort     int // Configured server port
+	serverPort     int      // Configured server port
+	chatCancels    sync.Map // map[string]context.CancelFunc — per-session cancel for ChatStream
 }
 
 // NewApp creates a new App application struct.
@@ -489,14 +491,29 @@ func (a *App) ChatStream(requestJSON string) error {
 		return fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	req, err := http.NewRequest("POST", apiURL, strings.NewReader(string(jsonData)))
+	// Create cancellable context so CancelChat can abort this stream.
+	streamCtx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
+
+	// Extract session ID and store the cancel function.
+	sessionID, _ := reqBody["session_id"].(string)
+	if sessionID != "" {
+		// Cancel any previous ChatStream for this session.
+		if prev, loaded := a.chatCancels.LoadAndDelete(sessionID); loaded {
+			prev.(context.CancelFunc)()
+		}
+		a.chatCancels.Store(sessionID, cancel)
+		defer a.chatCancels.Delete(sessionID)
+	}
+
+	req, err := http.NewRequestWithContext(streamCtx, "POST", apiURL, strings.NewReader(string(jsonData)))
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
 
-	client := &http.Client{Timeout: 30 * time.Minute} // 30 minute timeout for complex tasks
+	client := &http.Client{} // Timeout controlled by streamCtx
 	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to send request: %w", err)
@@ -509,7 +526,6 @@ func (a *App) ChatStream(requestJSON string) error {
 	}
 
 	// Use session-specific event name for isolation between concurrent chats
-	sessionID, _ := reqBody["session_id"].(string)
 	eventName := fmt.Sprintf("chat:stream:%s", sessionID)
 
 	// Read SSE events and emit them via Wails events
@@ -553,6 +569,33 @@ func (a *App) ChatStream(requestJSON string) error {
 		}
 	}
 
+	return nil
+}
+
+// CancelChat cancels a running chat stream for the given session.
+// It aborts the HTTP request to the embedded server and also calls
+// the cancel API endpoint to stop the runner execution.
+func (a *App) CancelChat(sessionID string) error {
+	// 1. Cancel the ChatStream HTTP request (if still running)
+	if cancel, loaded := a.chatCancels.LoadAndDelete(sessionID); loaded {
+		cancel.(context.CancelFunc)()
+	}
+
+	// 2. Call the backend cancel API to stop the runner task
+	apiURL := fmt.Sprintf("http://localhost:%d/api/v1/sessions/%s/cancel", a.serverPort, url.PathEscape(sessionID))
+	ctx, cancelReq := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelReq()
+	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create cancel request: %w", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		a.logger.Warn().Err(err).Str("sessionID", sessionID).Msg("cancel API call failed")
+		return nil // Non-fatal: ChatStream cancel already done above
+	}
+	defer resp.Body.Close()
+	a.logger.Info().Str("sessionID", sessionID).Msg("CancelChat completed")
 	return nil
 }
 

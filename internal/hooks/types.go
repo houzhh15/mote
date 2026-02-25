@@ -41,6 +41,9 @@ const (
 
 	// Error handling
 	HookOnError HookType = "on_error"
+
+	// Phase 3: LLM call lifecycle (reserved)
+	HookBeforeLLMCall HookType = "before_llm_call"
 )
 
 // AllHookTypes returns all supported hook types.
@@ -60,6 +63,7 @@ func AllHookTypes() []HookType {
 		HookAfterMemoryWrite,
 		HookPromptBuild,
 		HookOnError,
+		HookBeforeLLMCall,
 	}
 }
 

@@ -6,7 +6,7 @@ import type { APIAdapter, MemorySyncResult, MemoryStats, MemoryExportResult } fr
 import type {
   ServiceStatus,
   Session,
-  Message,
+  MessagesResponse,
   Memory,
   Tool,
   CronJob,
@@ -132,6 +132,10 @@ export const createHttpAdapter = (options: HttpAdapterOptions = {}): APIAdapter 
       }
     },
 
+    cancelChat: async (sessionId: string): Promise<void> => {
+      await fetchJSON(`/api/v1/sessions/${sessionId}/cancel`, { method: 'POST' });
+    },
+
     // ============== Session Service ==============
     getSessions: async (): Promise<Session[]> => {
       const data = await fetchJSON<{ sessions: Session[] }>('/api/v1/sessions');
@@ -142,9 +146,9 @@ export const createHttpAdapter = (options: HttpAdapterOptions = {}): APIAdapter 
       return fetchJSON<Session>(`/api/v1/sessions/${sessionId}`);
     },
 
-    getSessionMessages: async (sessionId: string): Promise<Message[]> => {
-      const data = await fetchJSON<{ messages: Message[] }>(`/api/v1/sessions/${sessionId}/messages`);
-      return data.messages || [];
+    getSessionMessages: async (sessionId: string): Promise<MessagesResponse> => {
+      const data = await fetchJSON<MessagesResponse>(`/api/v1/sessions/${sessionId}/messages`);
+      return { messages: data.messages || [], estimated_tokens: data.estimated_tokens || 0 };
     },
 
     createSession: async (title?: string, scenario?: string): Promise<Session> => {
@@ -156,6 +160,13 @@ export const createHttpAdapter = (options: HttpAdapterOptions = {}): APIAdapter 
 
     deleteSession: async (sessionId: string): Promise<void> => {
       await fetchJSON(`/api/v1/sessions/${sessionId}`, { method: 'DELETE' });
+    },
+
+    batchDeleteSessions: async (ids: string[]): Promise<{ deleted: number; total: number }> => {
+      return fetchJSON<{ deleted: number; total: number }>('/api/v1/sessions/batch-delete', {
+        method: 'POST',
+        body: JSON.stringify({ ids }),
+      });
     },
 
     updateSession: async (sessionId: string, updates: { title?: string }): Promise<Session> => {
@@ -187,10 +198,11 @@ export const createHttpAdapter = (options: HttpAdapterOptions = {}): APIAdapter 
     },
 
     // ============== Memory Service ==============
-    getMemories: async (options?: { limit?: number; offset?: number }): Promise<{ memories: Memory[]; total: number; limit: number; offset: number }> => {
+    getMemories: async (options?: { limit?: number; offset?: number; category?: string }): Promise<{ memories: Memory[]; total: number; limit: number; offset: number }> => {
       const params = new URLSearchParams();
       if (options?.limit) params.set('limit', String(options.limit));
       if (options?.offset) params.set('offset', String(options.offset));
+      if (options?.category) params.set('category', options.category);
       const queryString = params.toString();
       const data = await fetchJSON<{ memories: Memory[]; total: number; limit: number; offset: number }>(`/api/v1/memory${queryString ? '?' + queryString : ''}`);
       return {
@@ -645,6 +657,91 @@ export const createHttpAdapter = (options: HttpAdapterOptions = {}): APIAdapter 
       return fetchJSON<{ content: string }>(`/api/v1/prompts/${id}/render`, {
         method: 'POST',
         body: JSON.stringify({ variables }),
+      });
+    },
+
+    // ============== Agents Service (Multi-Agent Delegate) ==============
+    getAgents: async () => {
+      const data = await fetchJSON<{ agents: Record<string, import('../types').AgentConfig> }>('/api/v1/agents');
+      return data.agents || {};
+    },
+
+    getAgent: async (name: string) => {
+      return fetchJSON<{ name: string; config: import('../types').AgentConfig }>(`/api/v1/agents/${encodeURIComponent(name)}`);
+    },
+
+    addAgent: async (name: string, agent: import('../types').AgentConfig) => {
+      return fetchJSON<{ name: string; agent: import('../types').AgentConfig }>('/api/v1/agents', {
+        method: 'POST',
+        body: JSON.stringify({ name, agent }),
+      });
+    },
+
+    updateAgent: async (name: string, agent: import('../types').AgentConfig) => {
+      return fetchJSON<{ name: string; agent: import('../types').AgentConfig }>(`/api/v1/agents/${encodeURIComponent(name)}`, {
+        method: 'PUT',
+        body: JSON.stringify(agent),
+      });
+    },
+
+    deleteAgent: async (name: string) => {
+      await fetchJSON(`/api/v1/agents/${encodeURIComponent(name)}`, { method: 'DELETE' });
+    },
+
+    getSessionDelegations: async (sessionId: string) => {
+      return fetchJSON<import('../types').DelegationRecord[]>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/delegations`);
+    },
+
+    getDelegations: async (limit?: number) => {
+      const params = limit ? `?limit=${limit}` : '';
+      return fetchJSON<import('../types').DelegationRecord[]>(`/api/v1/delegations${params}`);
+    },
+
+    getDelegation: async (id: string) => {
+      return fetchJSON<import('../types').DelegationRecord>(`/api/v1/delegations/${encodeURIComponent(id)}`);
+    },
+
+    batchDeleteDelegations: async (ids: string[]) => {
+      return fetchJSON<{ deleted: number; total: number }>('/api/v1/delegations/batch-delete', {
+        method: 'POST',
+        body: JSON.stringify({ ids }),
+      });
+    },
+
+    // ============== Security Policy (M08B) ==============
+    getPolicyConfig: async () => {
+      return fetchJSON<import('../types/policy').PolicyConfig>('/api/v1/policy/config');
+    },
+
+    updatePolicyConfig: async (config: import('../types/policy').PolicyConfig) => {
+      return fetchJSON<{ success: boolean }>('/api/v1/policy/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(config),
+      });
+    },
+
+    getPolicyStatus: async () => {
+      return fetchJSON<import('../types/policy').PolicyStatus>('/api/v1/policy/status');
+    },
+
+    checkPolicy: async (request: import('../types/policy').PolicyCheckRequest) => {
+      return fetchJSON<import('../types/policy').PolicyCheckResponse>('/api/v1/policy/check', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(request),
+      });
+    },
+
+    getApprovals: async () => {
+      return fetchJSON<import('../types/policy').ApprovalListResponse>('/api/v1/approvals');
+    },
+
+    respondApproval: async (id: string, approved: boolean, reason?: string, modifiedArguments?: string) => {
+      return fetchJSON<{ success: boolean }>(`/api/v1/approvals/${encodeURIComponent(id)}/respond`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ approved, reason, modified_arguments: modifiedArguments }),
       });
     },
 

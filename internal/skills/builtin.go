@@ -79,5 +79,6 @@ func ListBuiltinSkills() []string {
 		"mote-self",
 		"mote-memory",
 		"mote-cron",
+		"mote-agents",
 	}
 }

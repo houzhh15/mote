@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"sync"
 
 	"mote/internal/provider"
@@ -11,8 +12,9 @@ import (
 // Registry manages a collection of tools.
 // It is safe for concurrent use.
 type Registry struct {
-	mu    sync.RWMutex
-	tools map[string]Tool
+	mu      sync.RWMutex
+	tools   map[string]Tool
+	agentID string
 }
 
 // NewRegistry creates a new empty tool registry.
@@ -167,5 +169,84 @@ func (r *Registry) Clone() *Registry {
 	for name, tool := range r.tools {
 		clone.tools[name] = tool
 	}
+	clone.agentID = r.agentID
 	return clone
+}
+
+// Filter keeps only the tools whose names appear in allowList.
+// Supports special syntax:
+//   - "*" — keep all tools (no filtering)
+//   - "!tool_name" — exclude a specific tool (applied after inclusion)
+//   - "prefix_*" — glob pattern matching tools with the given prefix
+func (r *Registry) Filter(allowList []string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	// Separate inclusions (positive) and exclusions (negative)
+	var includes []string
+	var excludes []string
+	for _, name := range allowList {
+		if name == "*" {
+			// Wildcard: only process exclusions
+			includes = nil
+			for _, n := range allowList {
+				if strings.HasPrefix(n, "!") {
+					excludes = append(excludes, n[1:])
+				}
+			}
+			for _, ex := range excludes {
+				delete(r.tools, ex)
+			}
+			return
+		}
+		if strings.HasPrefix(name, "!") {
+			excludes = append(excludes, name[1:])
+		} else {
+			includes = append(includes, name)
+		}
+	}
+
+	// Build allowed set from includes (may contain glob patterns)
+	allowed := make(map[string]struct{})
+	for _, pattern := range includes {
+		if strings.HasSuffix(pattern, "*") {
+			// Glob: match all tools with this prefix
+			prefix := pattern[:len(pattern)-1]
+			for name := range r.tools {
+				if strings.HasPrefix(name, prefix) {
+					allowed[name] = struct{}{}
+				}
+			}
+		} else {
+			allowed[pattern] = struct{}{}
+		}
+	}
+	for name := range r.tools {
+		if _, ok := allowed[name]; !ok {
+			delete(r.tools, name)
+		}
+	}
+
+	// Apply exclusions
+	for _, ex := range excludes {
+		delete(r.tools, ex)
+	}
+}
+
+// Remove deletes a tool from the registry by name.
+// Unlike Unregister, it does not return an error if the tool does not exist.
+func (r *Registry) Remove(name string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.tools, name)
+}
+
+// SetAgentID sets the agent identifier for this registry.
+func (r *Registry) SetAgentID(id string) {
+	r.agentID = id
+}
+
+// GetAgentID returns the agent identifier for this registry.
+func (r *Registry) GetAgentID() string {
+	return r.agentID
 }

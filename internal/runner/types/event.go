@@ -89,6 +89,10 @@ type Event struct {
 	TruncatedReason  string               `json:"truncated_reason,omitempty"`
 	PendingToolCalls int                  `json:"pending_tool_calls,omitempty"`
 	PauseData        *PauseEventData      `json:"pause_data,omitempty"`
+
+	// Multi-agent delegate identity
+	AgentName  string `json:"agent_name,omitempty"`
+	AgentDepth int    `json:"agent_depth,omitempty"`
 }
 
 // NewContentEvent creates a content event.

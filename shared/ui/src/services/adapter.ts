@@ -5,7 +5,7 @@
 import type {
   ServiceStatus,
   Session,
-  Message,
+  MessagesResponse,
   Memory,
   Tool,
   CronJob,
@@ -32,7 +32,26 @@ import type {
   VersionCheckResult,
   UpdateOptions,
   UpdateResult,
+  AgentConfig,
+  DelegationRecord,
 } from '../types';
+
+import type {
+  PolicyConfig,
+  PolicyStatus,
+  PolicyCheckRequest,
+  PolicyCheckResponse,
+  ApprovalListResponse,
+} from '../types/policy';
+
+// Re-export policy types for convenience
+export type {
+  PolicyConfig,
+  PolicyStatus,
+  PolicyCheckRequest,
+  PolicyCheckResponse,
+  ApprovalListResponse,
+} from '../types/policy';
 
 /**
  * Memory sync result
@@ -93,14 +112,21 @@ export interface APIAdapter {
     onEvent: (event: StreamEvent) => void,
     signal?: AbortSignal
   ): Promise<void>;
+
+  /**
+   * Cancel a running chat session on the backend.
+   * This stops the runner execution for the given session.
+   */
+  cancelChat?(sessionId: string): Promise<void>;
   
   // ============== Session Service ==============
   getSessions(): Promise<Session[]>;
   getSession?(sessionId: string): Promise<Session>;
-  getSessionMessages(sessionId: string): Promise<Message[]>;
+  getSessionMessages(sessionId: string): Promise<MessagesResponse>;
   createSession(title?: string, scenario?: string): Promise<Session>;
   updateSession?(sessionId: string, updates: { title?: string }): Promise<Session>;
   deleteSession(sessionId: string): Promise<void>;
+  batchDeleteSessions?(ids: string[]): Promise<{ deleted: number; total: number }>;
   
   // ============== Pause Control Service ==============
   /**
@@ -117,7 +143,7 @@ export interface APIAdapter {
   getPauseStatus?(sessionId: string): Promise<{ paused: boolean; paused_at?: string; timeout_remaining?: number; pending_tools?: string[] }>;
   
   // ============== Memory Service ==============
-  getMemories(options?: { limit?: number; offset?: number }): Promise<{ memories: Memory[]; total: number; limit: number; offset: number }>;
+  getMemories(options?: { limit?: number; offset?: number; category?: string }): Promise<{ memories: Memory[]; total: number; limit: number; offset: number }>;
   searchMemories(query: string, limit?: number): Promise<Memory[]>;
   createMemory?(content: string, category?: string): Promise<Memory>;
   updateMemory?(id: string, content: string, category?: string): Promise<Memory>;
@@ -398,6 +424,83 @@ export interface APIAdapter {
    */
   renderPrompt?(id: string, variables: Record<string, string>): Promise<{ content: string }>;
   
+  // ============== Agents Service (Multi-Agent Delegate) ==============
+  /**
+   * Get all configured delegate agents
+   */
+  getAgents?(): Promise<Record<string, AgentConfig>>;
+  
+  /**
+   * Get a single agent configuration by name
+   */
+  getAgent?(name: string): Promise<{ name: string; config: AgentConfig }>;
+  
+  /**
+   * Add a new delegate agent
+   */
+  addAgent?(name: string, agent: AgentConfig): Promise<{ name: string; agent: AgentConfig }>;
+  
+  /**
+   * Update an existing delegate agent
+   */
+  updateAgent?(name: string, agent: AgentConfig): Promise<{ name: string; agent: AgentConfig }>;
+  
+  /**
+   * Delete a delegate agent
+   */
+  deleteAgent?(name: string): Promise<void>;
+  
+  /**
+   * Get delegation records for a session
+   */
+  getSessionDelegations?(sessionId: string): Promise<DelegationRecord[]>;
+
+  /**
+   * Get recent delegation records across all sessions
+   */
+  getDelegations?(limit?: number): Promise<DelegationRecord[]>;
+  
+  /**
+   * Get a single delegation record by ID
+   */
+  getDelegation?(id: string): Promise<DelegationRecord>;
+
+  /**
+   * Batch delete delegation records
+   */
+  batchDeleteDelegations?(ids: string[]): Promise<{ deleted: number; total: number }>;
+  
+  // ============== Security Policy Service (M08B) ==============
+  /**
+   * Get the full policy configuration
+   */
+  getPolicyConfig?(): Promise<PolicyConfig>;
+  
+  /**
+   * Update the policy configuration
+   */
+  updatePolicyConfig?(config: PolicyConfig): Promise<{ success: boolean }>;
+  
+  /**
+   * Get policy status summary
+   */
+  getPolicyStatus?(): Promise<PolicyStatus>;
+  
+  /**
+   * Check if a tool call would be allowed
+   */
+  checkPolicy?(request: PolicyCheckRequest): Promise<PolicyCheckResponse>;
+  
+  /**
+   * Get pending approval requests
+   */
+  getApprovals?(): Promise<ApprovalListResponse>;
+  
+  /**
+   * Respond to a pending approval request
+   */
+  respondApproval?(id: string, approved: boolean, reason?: string, modifiedArguments?: string): Promise<{ success: boolean }>;
+  
   /**
    * Check if running in GUI mode (Wails)
    */
@@ -411,7 +514,7 @@ export const createNoopAdapter = (): APIAdapter => ({
   getStatus: async () => ({ running: false, port: 0, version: 'unknown', uptime: 0 }),
   chat: async () => {},
   getSessions: async () => [],
-  getSessionMessages: async () => [],
+  getSessionMessages: async () => ({ messages: [], estimated_tokens: 0 }),
   createSession: async () => ({ id: '', title: '', created_at: '', updated_at: '' }),
   deleteSession: async () => {},
   getMemories: async () => ({ memories: [], total: 0, limit: 100, offset: 0 }),
@@ -475,5 +578,23 @@ export const createNoopAdapter = (): APIAdapter => ({
   openPromptsDir: async () => {},
   reloadPrompts: async () => {},
   renderPrompt: async () => ({ content: '' }),
+  // Agents
+  getAgents: async () => ({}),
+  getAgent: async () => ({ name: '', config: {} }),
+  addAgent: async () => ({ name: '', agent: {} }),
+  updateAgent: async () => ({ name: '', agent: {} }),
+  deleteAgent: async () => {},
+  getSessionDelegations: async () => [],
+  getDelegations: async () => [],
+  getDelegation: async () => ({ id: '', parent_session_id: '', child_session_id: '', agent_name: '', depth: 0, chain: '[]', prompt: '', status: 'completed' as const, started_at: '', result_length: 0, tokens_used: 0 }),
+  batchDeleteDelegations: async () => ({ deleted: 0, total: 0 }),
+  // Security Policy (M08B)
+  getPolicyConfig: async () => ({ default_allow: true, require_approval: false, allowlist: [], blocklist: [], dangerous_ops: [], param_rules: {}, scrub_rules: [], block_message_template: '', circuit_breaker_threshold: 3 }),
+  updatePolicyConfig: async () => ({ success: true }),
+  getPolicyStatus: async () => ({ default_allow: true, require_approval: false, blocklist_count: 0, allowlist_count: 0, dangerous_rules_count: 0, param_rules_count: 0 }),
+  checkPolicy: async () => ({ tool: '', allowed: true, require_approval: false, blocked: false }),
+  getApprovals: async () => ({ pending: [], count: 0 }),
+  respondApproval: async () => ({ success: true }),
+  cancelChat: async () => {},
   isGUIMode: () => false,
 });

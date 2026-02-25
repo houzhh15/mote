@@ -20,6 +20,8 @@ const (
 	FilterActionBlock FilterAction = "block"
 	// FilterActionAllow allows the message to continue (whitelist mode).
 	FilterActionAllow FilterAction = "allow"
+	// FilterActionWarn logs a warning but allows the message to continue.
+	FilterActionWarn FilterAction = "warn"
 )
 
 // FilterRule defines a single filter rule.
@@ -138,6 +140,12 @@ func (h *FilterHook) handle(_ context.Context, hookCtx *hooks.Context) (*hooks.R
 
 		case FilterActionBlock:
 			blocked = true
+
+		case FilterActionWarn:
+			log.Warn().
+				Str("rule_name", rule.Name).
+				Str("pattern", rule.Pattern).
+				Msg("filter warn: suspicious content detected")
 
 		case FilterActionAllow:
 			// Explicitly allow, skip remaining rules
@@ -268,4 +276,44 @@ func MaskString(s string, visibleStart, visibleEnd int) string {
 		}
 	}
 	return string(masked)
+}
+
+// PromptInjectionPatterns contains patterns detecting common prompt injection attempts.
+var PromptInjectionPatterns = map[string]string{
+	"IgnorePrevious":  `(?i)ignore\s+(all\s+)?(previous|prior|above)\s+instructions?`,
+	"SystemOverride":  `(?i)system\s*:\s*you\s+are`,
+	"RoleSwitch":      `(?i)\](system|assistant)\]?:`,
+	"NewInstructions": `(?i)new\s+instructions?\s*:`,
+	"JailbreakDAN":    `(?i)(DAN|do\s+anything\s+now)`,
+}
+
+// NewPromptInjectionDetector creates a FilterHook that detects injection patterns.
+// Default action is "warn" — logs but does not block, to avoid false positives.
+func NewPromptInjectionDetector() (*FilterHook, error) {
+	rules := make([]FilterRule, 0, len(PromptInjectionPatterns))
+	for name, pattern := range PromptInjectionPatterns {
+		rules = append(rules, FilterRule{
+			Name:    "injection_" + name,
+			Pattern: pattern,
+			Action:  FilterActionWarn,
+		})
+	}
+	return NewFilterHook(FilterConfig{
+		Rules:         rules,
+		DefaultAction: FilterActionAllow,
+	})
+}
+
+// RegisterPromptInjectionDetector registers the injection detection hook.
+func RegisterPromptInjectionDetector(manager *hooks.Manager) error {
+	hook, err := NewPromptInjectionDetector()
+	if err != nil {
+		return err
+	}
+
+	handler := hook.Handler("builtin:injection-detect")
+	handler.Priority = 100 // High priority, before rate limit (200)
+	handler.Description = "Detects common prompt injection patterns"
+
+	return manager.Register(hooks.HookBeforeMessage, handler)
 }

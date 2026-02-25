@@ -3,6 +3,7 @@ package policy
 import (
 	"fmt"
 	"os"
+	"regexp"
 
 	"gopkg.in/yaml.v3"
 )
@@ -66,15 +67,61 @@ func DefaultPolicy() ToolPolicy {
 				Action:   "block",
 				Message:  "writing to system directories is prohibited",
 			},
+			// M08B: High-risk command patterns
+			{
+				Tool:     "shell",
+				Pattern:  `curl\s+.*\|\s*(ba)?sh`,
+				Severity: "critical",
+				Action:   "block",
+				Message:  "pipe to shell execution is prohibited",
+			},
+			{
+				Tool:     "shell",
+				Pattern:  `wget\s+.*\|\s*(ba)?sh`,
+				Severity: "critical",
+				Action:   "block",
+				Message:  "pipe to shell execution is prohibited",
+			},
+			{
+				Tool:     "shell",
+				Pattern:  `python[23]?\s+-c\s+`,
+				Severity: "medium",
+				Action:   "approve",
+				Message:  "inline Python code requires approval",
+			},
+			{
+				Tool:     "shell",
+				Pattern:  `node\s+-e\s+`,
+				Severity: "medium",
+				Action:   "approve",
+				Message:  "inline Node.js code requires approval",
+			},
+			{
+				Tool:     "shell",
+				Pattern:  `base64\s+(-d|--decode)`,
+				Severity: "medium",
+				Action:   "approve",
+				Message:  "base64 decode requires approval",
+			},
+			{
+				Tool:     "shell",
+				Pattern:  `chmod\s+(777|[+]s)`,
+				Severity: "high",
+				Action:   "approve",
+				Message:  "dangerous permission change requires approval",
+			},
 		},
 		ParamRules: map[string]ParamRule{
 			"read_file": {
-				PathPrefix: []string{"~", "/tmp"},
+				PathPrefix: []string{"$WORKSPACE", "~", "/tmp"},
 			},
 			"write_file": {
-				PathPrefix: []string{"~/.mote", "/tmp"},
+				PathPrefix: []string{"$WORKSPACE", "~/.mote", "/tmp"},
 			},
 		},
+		ScrubRules:              []ScrubRule{},
+		BlockMessageTemplate:    "",
+		CircuitBreakerThreshold: 3,
 	}
 }
 
@@ -144,7 +191,31 @@ func ValidateConfig(config *Config) error {
 		return fmt.Errorf("policy: approval.max_pending must be non-negative")
 	}
 
+	// Validate scrub rules
+	for i, rule := range config.ToolPolicy.ScrubRules {
+		if rule.Pattern == "" {
+			return fmt.Errorf("policy: scrub_rules[%d]: pattern must not be empty", i)
+		}
+		if _, err := regexp.Compile(rule.Pattern); err != nil {
+			return fmt.Errorf("policy: scrub_rules[%d]: invalid pattern '%s': %w", i, rule.Pattern, err)
+		}
+	}
+
+	// Validate circuit breaker threshold
+	if config.ToolPolicy.CircuitBreakerThreshold < 0 {
+		return fmt.Errorf("policy: circuit_breaker_threshold must be non-negative")
+	}
+
 	return nil
+}
+
+// ValidatePolicy validates a ToolPolicy independently.
+func ValidatePolicy(p *ToolPolicy) error {
+	if p == nil {
+		return fmt.Errorf("policy: tool policy is nil")
+	}
+	cfg := &Config{ToolPolicy: *p}
+	return ValidateConfig(cfg)
 }
 
 // SaveConfig saves configuration to a YAML file.
@@ -188,6 +259,15 @@ func MergePolicy(base, override *ToolPolicy) *ToolPolicy {
 	}
 	if len(override.ParamRules) > 0 {
 		merged.ParamRules = override.ParamRules
+	}
+	if len(override.ScrubRules) > 0 {
+		merged.ScrubRules = override.ScrubRules
+	}
+	if override.BlockMessageTemplate != "" {
+		merged.BlockMessageTemplate = override.BlockMessageTemplate
+	}
+	if override.CircuitBreakerThreshold > 0 {
+		merged.CircuitBreakerThreshold = override.CircuitBreakerThreshold
 	}
 
 	return &merged

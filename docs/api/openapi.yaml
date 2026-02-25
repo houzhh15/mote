@@ -38,8 +38,10 @@ tags:
     description: MCP 服务器管理
   - name: cron
     description: 定时任务管理
-  - name: config
-    description: 配置管理
+  - name: agents
+    description: 多代理（Multi-Agent）管理
+  - name: delegations
+    description: 委派记录查询
 
 paths:
   /health:
@@ -533,6 +535,155 @@ paths:
               schema:
                 $ref: "#/components/schemas/ConfigResponse"
 
+  /agents:
+    get:
+      tags: [agents]
+      summary: 列出所有代理
+      description: 返回配置中定义的所有委派代理。
+      operationId: listAgents
+      responses:
+        "200":
+          description: 代理列表
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentListResponse"
+    post:
+      tags: [agents]
+      summary: 添加代理
+      description: 添加一个新的委派代理配置。
+      operationId: addAgent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AddAgentRequest"
+      responses:
+        "201":
+          description: 代理创建成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentResponse"
+        "409":
+          description: 代理名称已存在
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /agents/{name}:
+    get:
+      tags: [agents]
+      summary: 获取代理详情
+      operationId: getAgent
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+          description: 代理名称
+      responses:
+        "200":
+          description: 代理详情
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    put:
+      tags: [agents]
+      summary: 更新代理配置
+      operationId: updateAgent
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+          description: 代理名称
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AgentConfig"
+      responses:
+        "200":
+          description: 更新成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      tags: [agents]
+      summary: 删除代理
+      operationId: deleteAgent
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+          description: 代理名称
+      responses:
+        "200":
+          description: 删除成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deleted:
+                    type: string
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /sessions/{id}/delegations:
+    get:
+      tags: [delegations]
+      summary: 列出会话的委派记录
+      description: 返回指定会话中的所有委派调用记录。
+      operationId: listDelegations
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      responses:
+        "200":
+          description: 委派记录列表
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/DelegationRecord"
+
+  /delegations/{id}:
+    get:
+      tags: [delegations]
+      summary: 获取委派记录详情
+      operationId: getDelegation
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: 委派记录 ID
+      responses:
+        "200":
+          description: 委派记录详情
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DelegationRecord"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
 components:
   parameters:
     SessionId:
@@ -1000,3 +1151,106 @@ components:
               type: array
               items:
                 type: string
+
+    AgentConfig:
+      type: object
+      properties:
+        description:
+          type: string
+          description: 代理描述
+        provider:
+          type: string
+          description: 使用的 provider 名称
+        model:
+          type: string
+          description: 使用的模型名称
+        system_prompt:
+          type: string
+          description: 系统提示词
+        tools:
+          type: array
+          items:
+            type: string
+          description: 允许使用的工具列表
+        max_depth:
+          type: integer
+          description: 最大递归委派深度（默认 3，上限 10）
+        timeout:
+          type: string
+          description: 执行超时（Go duration 格式，如 "5m"）
+        max_iterations:
+          type: integer
+          description: 最大迭代次数
+        temperature:
+          type: number
+          format: float
+          description: 采样温度
+
+    AddAgentRequest:
+      type: object
+      required: [name, agent]
+      properties:
+        name:
+          type: string
+          description: 代理名称（唯一标识）
+        agent:
+          $ref: "#/components/schemas/AgentConfig"
+
+    AgentResponse:
+      type: object
+      properties:
+        name:
+          type: string
+        agent:
+          $ref: "#/components/schemas/AgentConfig"
+        config:
+          $ref: "#/components/schemas/AgentConfig"
+
+    AgentListResponse:
+      type: object
+      properties:
+        agents:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/AgentConfig"
+
+    DelegationRecord:
+      type: object
+      required: [id, parent_session_id, agent_name, status, started_at]
+      properties:
+        id:
+          type: string
+        parent_session_id:
+          type: string
+        child_session_id:
+          type: string
+        agent_name:
+          type: string
+          description: 被委派的代理名称
+        depth:
+          type: integer
+          description: 委派嵌套深度
+        chain:
+          type: string
+          description: 委派链（JSON 数组，如 '["main","researcher"]'）
+        prompt:
+          type: string
+          description: 委派时的用户提示
+        status:
+          type: string
+          enum: [running, completed, failed, timeout]
+        started_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+        result_length:
+          type: integer
+          description: 结果文本长度
+        tokens_used:
+          type: integer
+          description: 消耗的 token 数
+        error_message:
+          type: string
+          description: 错误信息（仅失败时）

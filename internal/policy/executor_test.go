@@ -2,6 +2,8 @@ package policy
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -324,4 +326,188 @@ func TestPolicyExecutor_SetPolicy(t *testing.T) {
 	result2, err := executor.Check(context.Background(), call)
 	require.NoError(t, err)
 	assert.False(t, result2.Allowed)
+}
+
+func TestPolicyExecutor_Check_ParamRules_PathPrefix(t *testing.T) {
+	home, _ := os.UserHomeDir()
+
+	policy := &ToolPolicy{
+		DefaultAllow: true,
+		ParamRules: map[string]ParamRule{
+			"read_file": {
+				PathPrefix: []string{"~", "/tmp"},
+			},
+		},
+	}
+	executor := NewPolicyExecutor(policy)
+
+	tests := []struct {
+		name    string
+		args    string
+		allowed bool
+	}{
+		{"path within home", `{"path": "` + home + `/project/main.go"}`, true},
+		{"path within /tmp", `{"path": "/tmp/test.txt"}`, true},
+		{"path outside allowed", `{"path": "/etc/passwd"}`, false},
+		{"path outside allowed /usr", `{"path": "/usr/bin/ls"}`, false},
+		{"file_path key", `{"file_path": "` + home + `/docs/readme.md"}`, true},
+		{"file_path key outside", `{"file_path": "/etc/shadow"}`, false},
+		{"no path key in args", `{"content": "hello"}`, true},
+		{"invalid JSON args", `not-json`, true},
+		{"empty path", `{"path": ""}`, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			call := &ToolCall{
+				Name:      "read_file",
+				Arguments: tt.args,
+			}
+			result, err := executor.Check(context.Background(), call)
+			require.NoError(t, err)
+			assert.Equal(t, tt.allowed, result.Allowed, "args: %s", tt.args)
+			if !tt.allowed {
+				assert.Contains(t, result.Reason, "not within allowed prefixes")
+				assert.Contains(t, result.MatchedRules, "param_rule:path_prefix")
+			}
+		})
+	}
+}
+
+func TestPolicyExecutor_Check_ParamRules_PathPrefix_Workspace(t *testing.T) {
+	policy := &ToolPolicy{
+		DefaultAllow: true,
+		ParamRules: map[string]ParamRule{
+			"write_file": {
+				PathPrefix: []string{"$WORKSPACE", "/tmp"},
+			},
+		},
+	}
+	executor := NewPolicyExecutor(policy)
+
+	t.Run("path within workspace", func(t *testing.T) {
+		call := &ToolCall{
+			Name:          "write_file",
+			Arguments:     `{"path": "/Users/john/project/src/app.go"}`,
+			WorkspacePath: "/Users/john/project",
+		}
+		result, err := executor.Check(context.Background(), call)
+		require.NoError(t, err)
+		assert.True(t, result.Allowed)
+	})
+
+	t.Run("path outside workspace", func(t *testing.T) {
+		call := &ToolCall{
+			Name:          "write_file",
+			Arguments:     `{"path": "/etc/config"}`,
+			WorkspacePath: "/Users/john/project",
+		}
+		result, err := executor.Check(context.Background(), call)
+		require.NoError(t, err)
+		assert.False(t, result.Allowed)
+	})
+
+	t.Run("workspace not set skips $WORKSPACE prefix", func(t *testing.T) {
+		call := &ToolCall{
+			Name:          "write_file",
+			Arguments:     `{"path": "/tmp/test.txt"}`,
+			WorkspacePath: "",
+		}
+		result, err := executor.Check(context.Background(), call)
+		require.NoError(t, err)
+		assert.True(t, result.Allowed) // /tmp still matches
+	})
+
+	t.Run("workspace not set blocks non-tmp path", func(t *testing.T) {
+		call := &ToolCall{
+			Name:          "write_file",
+			Arguments:     `{"path": "/Users/john/project/app.go"}`,
+			WorkspacePath: "",
+		}
+		result, err := executor.Check(context.Background(), call)
+		require.NoError(t, err)
+		assert.False(t, result.Allowed) // $WORKSPACE skipped, /tmp doesn't match
+	})
+}
+
+func TestPolicyExecutor_Check_ParamRules_PathPrefix_DotDot(t *testing.T) {
+	policy := &ToolPolicy{
+		DefaultAllow: true,
+		ParamRules: map[string]ParamRule{
+			"read_file": {
+				PathPrefix: []string{"/home/user/project"},
+			},
+		},
+	}
+	executor := NewPolicyExecutor(policy)
+
+	t.Run("path with dotdot escape", func(t *testing.T) {
+		call := &ToolCall{
+			Name:      "read_file",
+			Arguments: `{"path": "/home/user/project/../../../etc/passwd"}`,
+		}
+		result, err := executor.Check(context.Background(), call)
+		require.NoError(t, err)
+		assert.False(t, result.Allowed) // filepath.Clean resolves to /etc/passwd
+	})
+
+	t.Run("path with dotdot within prefix", func(t *testing.T) {
+		call := &ToolCall{
+			Name:      "read_file",
+			Arguments: `{"path": "/home/user/project/sub/../main.go"}`,
+		}
+		result, err := executor.Check(context.Background(), call)
+		require.NoError(t, err)
+		assert.True(t, result.Allowed) // resolves to /home/user/project/main.go
+	})
+}
+
+func TestExtractPaths(t *testing.T) {
+	tests := []struct {
+		name     string
+		args     string
+		expected []string
+	}{
+		{"path key", `{"path": "/tmp/test.txt"}`, []string{"/tmp/test.txt"}},
+		{"file_path key", `{"file_path": "/tmp/test.txt"}`, []string{"/tmp/test.txt"}},
+		{"filename key", `{"filename": "/tmp/test.txt"}`, []string{"/tmp/test.txt"}},
+		{"directory key", `{"directory": "/tmp/subdir"}`, []string{"/tmp/subdir"}},
+		{"multiple keys", `{"path": "/a", "file": "/b"}`, []string{"/a", "/b"}},
+		{"no path key", `{"content": "hello"}`, nil},
+		{"empty string path", `{"path": ""}`, nil},
+		{"invalid json", `not-json`, nil},
+		{"non-string path", `{"path": 123}`, nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := extractPaths(tt.args)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestExpandPrefixes(t *testing.T) {
+	home, _ := os.UserHomeDir()
+
+	tests := []struct {
+		name          string
+		prefixes      []string
+		workspacePath string
+		expected      []string
+	}{
+		{"tilde expansion", []string{"~"}, "", []string{home}},
+		{"tilde with subpath", []string{"~/project"}, "", []string{filepath.Join(home, "project")}},
+		{"workspace expansion", []string{"$WORKSPACE"}, "/Users/john/proj", []string{"/Users/john/proj"}},
+		{"workspace not set", []string{"$WORKSPACE"}, "", []string{}},
+		{"mixed", []string{"~", "$WORKSPACE", "/tmp"}, "/w", []string{home, "/w", "/tmp"}},
+		{"no expansion needed", []string{"/tmp", "/var"}, "", []string{"/tmp", "/var"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := expandPrefixes(tt.prefixes, tt.workspacePath)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
 }

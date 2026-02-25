@@ -1,6 +1,9 @@
 package minimax
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // Default configuration values.
 const (
@@ -103,11 +106,68 @@ type chatRequest struct {
 }
 
 // chatMessage represents a message in OpenAI format.
+// Supports both plain string content and multipart content (for vision).
 type chatMessage struct {
-	Role       string         `json:"role"`
-	Content    *string        `json:"content"`
-	ToolCalls  []chatToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string         `json:"tool_call_id,omitempty"`
+	Role         string         `json:"-"`
+	Content      *string        `json:"-"` // Normal string content
+	ContentParts []contentPart  `json:"-"` // Multipart content (vision: text + images)
+	ToolCalls    []chatToolCall `json:"-"`
+	ToolCallID   string         `json:"-"`
+}
+
+// contentPart represents a part of multipart content (for vision/image support).
+type contentPart struct {
+	Type     string          `json:"type"`
+	Text     string          `json:"text,omitempty"`
+	ImageURL *visionImageURL `json:"image_url,omitempty"`
+}
+
+// visionImageURL represents an image URL in multipart content.
+type visionImageURL struct {
+	URL string `json:"url"`
+}
+
+// MarshalJSON implements custom JSON marshaling for chatMessage.
+// When ContentParts is set (vision mode), content is serialized as an array.
+// Otherwise, content is serialized as a string or null.
+func (m chatMessage) MarshalJSON() ([]byte, error) {
+	type alias struct {
+		Role       string         `json:"role"`
+		Content    interface{}    `json:"content"`
+		ToolCalls  []chatToolCall `json:"tool_calls,omitempty"`
+		ToolCallID string         `json:"tool_call_id,omitempty"`
+	}
+	a := alias{
+		Role:       m.Role,
+		ToolCalls:  m.ToolCalls,
+		ToolCallID: m.ToolCallID,
+	}
+	if len(m.ContentParts) > 0 {
+		a.Content = m.ContentParts
+	} else {
+		a.Content = m.Content // *string → null or "string"
+	}
+	return json.Marshal(a)
+}
+
+// UnmarshalJSON implements custom JSON unmarshaling for chatMessage.
+// Content is always parsed as a string (API responses always return string content).
+func (m *chatMessage) UnmarshalJSON(data []byte) error {
+	type alias struct {
+		Role       string         `json:"role"`
+		Content    *string        `json:"content"`
+		ToolCalls  []chatToolCall `json:"tool_calls,omitempty"`
+		ToolCallID string         `json:"tool_call_id,omitempty"`
+	}
+	var a alias
+	if err := json.Unmarshal(data, &a); err != nil {
+		return err
+	}
+	m.Role = a.Role
+	m.Content = a.Content
+	m.ToolCalls = a.ToolCalls
+	m.ToolCallID = a.ToolCallID
+	return nil
 }
 
 // strPtr returns a pointer to a string. Used for chatMessage.Content.

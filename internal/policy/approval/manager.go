@@ -105,8 +105,12 @@ func (m *Manager) RequestApproval(ctx context.Context, call *policy.ToolCall, re
 
 	// Create approval request
 	now := time.Now()
+	approvalID := call.RequestID
+	if approvalID == "" {
+		approvalID = uuid.New().String()
+	}
 	req := &ApprovalRequest{
-		ID:        uuid.New().String(),
+		ID:        approvalID,
 		ToolName:  call.Name,
 		Arguments: call.Arguments,
 		Reason:    reason,
@@ -140,7 +144,9 @@ func (m *Manager) RequestApproval(ctx context.Context, call *policy.ToolCall, re
 	)
 
 	if m.logger != nil {
-		m.logger.LogRequest(req)
+		if err := m.logger.LogRequest(req); err != nil {
+			m.slogger.Warn("failed to log approval request", "request_id", req.ID, "error", err)
+		}
 	}
 
 	// Notify via WebSocket
@@ -170,7 +176,7 @@ func (m *Manager) RequestApproval(ctx context.Context, call *policy.ToolCall, re
 }
 
 // HandleResponse processes an approval response from UI.
-func (m *Manager) HandleResponse(requestID string, approved bool, message string) error {
+func (m *Manager) HandleResponse(requestID string, approved bool, message string, modifiedArguments ...string) error {
 	m.mu.Lock()
 	pr, ok := m.pending[requestID]
 	if !ok {
@@ -200,6 +206,9 @@ func (m *Manager) HandleResponse(requestID string, approved bool, message string
 		DecidedAt:  time.Now(),
 		Decision:   decision,
 	}
+	if len(modifiedArguments) > 0 && modifiedArguments[0] != "" {
+		result.ModifiedArguments = modifiedArguments[0]
+	}
 
 	// Log decision
 	m.slogger.Info("approval decision",
@@ -209,7 +218,9 @@ func (m *Manager) HandleResponse(requestID string, approved bool, message string
 	)
 
 	if m.logger != nil {
-		m.logger.LogDecision(pr.request, result)
+		if err := m.logger.LogDecision(pr.request, result); err != nil {
+			m.slogger.Warn("failed to log approval decision", "request_id", requestID, "error", err)
+		}
 	}
 
 	// Notify resolution
@@ -260,7 +271,9 @@ func (m *Manager) handleTimeout(requestID string) {
 	)
 
 	if m.logger != nil {
-		m.logger.LogDecision(pr.request, result)
+		if err := m.logger.LogDecision(pr.request, result); err != nil {
+			m.slogger.Warn("failed to log timeout decision", "request_id", requestID, "error", err)
+		}
 	}
 
 	// Notify resolution

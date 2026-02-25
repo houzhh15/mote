@@ -32,6 +32,7 @@ import (
 	"mote/internal/prompts"
 	"mote/internal/provider"
 	"mote/internal/provider/copilot"
+	"mote/internal/provider/glm"
 	"mote/internal/provider/minimax"
 	"mote/internal/provider/ollama"
 	"mote/internal/runner"
@@ -293,6 +294,37 @@ func (s *Server) run() {
 					Int("models", len(minimaxModels)).
 					Msg("MiniMax provider initialized")
 			}
+
+		case "glm":
+			// Initialize GLM (智谱AI) provider (cloud API, OpenAI-compatible)
+			apiKey := s.cfg.GLM.APIKey
+			if apiKey == "" {
+				s.logger.Warn().Msg("GLM API key not configured, skipping GLM provider")
+				continue
+			}
+
+			glmMaxTokens := s.cfg.GLM.MaxTokens
+			if glmMaxTokens <= 0 {
+				glmMaxTokens = 4096
+			}
+
+			var glmFactory provider.ProviderFactory
+			if s.cfg.GLM.Endpoint != "" {
+				glmFactory = glm.FactoryWithEndpoint(apiKey, glmMaxTokens, s.cfg.GLM.Endpoint)
+			} else {
+				glmFactory = glm.Factory(apiKey, glmMaxTokens)
+			}
+			glmPool := provider.NewPool(glmFactory)
+			glmModels := glm.ListModels()
+
+			if err := multiPool.AddProvider("glm", glmPool, glmModels); err != nil {
+				s.logger.Warn().Err(err).Msg("Failed to add GLM provider")
+			} else {
+				s.logger.Info().
+					Str("provider", "glm").
+					Int("models", len(glmModels)).
+					Msg("GLM provider initialized")
+			}
 		}
 	}
 
@@ -464,13 +496,35 @@ func (s *Server) run() {
 	agentRunner.SetPolicyExecutor(policyExecutor)
 	agentRunner.SetApprovalManager(approvalManager)
 
+	// Wire custom scrub rules, block message template, and circuit breaker from policy config
+	if err := agentRunner.SetScrubRules(policyConfig.ToolPolicy.ScrubRules); err != nil {
+		s.logger.Warn().Err(err).Msg("Failed to compile initial scrub rules")
+	}
+	agentRunner.SetBlockMessageTemplate(policyConfig.ToolPolicy.BlockMessageTemplate)
+	agentRunner.SetCircuitBreakerThreshold(policyConfig.ToolPolicy.CircuitBreakerThreshold)
+
 	// Initialize system prompt builder with MCP support
 	promptConfig := prompt.PromptConfig{
 		AgentName: "Mote",
 		Timezone:  "Local",
 	}
+	// Convert agent configs to prompt AgentInfo for system prompt rendering
+	// Only include enabled agents in the system prompt
+	var agentInfos []prompt.AgentInfo
+	for name, ac := range s.cfg.Agents {
+		if !ac.IsEnabled() {
+			continue
+		}
+		agentInfos = append(agentInfos, prompt.AgentInfo{
+			Name:        name,
+			Description: ac.Description,
+			Model:       ac.Model,
+			Tools:       ac.Tools,
+		})
+	}
 	systemPromptBuilder := prompt.NewSystemPromptBuilder(promptConfig, toolRegistry).
-		WithMCPManager(mcpManager)
+		WithMCPManager(mcpManager).
+		WithAgents(agentInfos)
 	agentRunner.SetSystemPrompt(systemPromptBuilder)
 
 	// Initialize compactor
@@ -550,6 +604,13 @@ func (s *Server) run() {
 		}
 	}
 
+	// Initialize multi-agent delegate support
+	delegateTracker, delegateFactory := agentRunner.InitDelegateSupport(s.cfg, db.DB)
+	if delegateTracker != nil {
+		s.gatewayServer.SetDelegateTracker(delegateTracker)
+		s.logger.Info().Msg("Delegate tracker set on gateway")
+	}
+
 	// Initialize Memory system
 	s.initializeMemory(db, agentRunner, s.gatewayServer, hookManager, contextManager)
 
@@ -567,6 +628,35 @@ func (s *Server) run() {
 	workspaceManager := workspace.NewWorkspaceManager()
 	s.workspaceManager = workspaceManager
 	s.gatewayServer.SetWorkspaceManager(workspaceManager)
+
+	// Wire workspace binder to delegate factory so sub-agent sessions inherit parent workspace
+	if delegateFactory != nil {
+		delegateFactory.SetWorkspaceBinder(func(parentSessionID, childSessionID string) {
+			if binding, ok := workspaceManager.Get(parentSessionID); ok && binding != nil {
+				if err := workspaceManager.Bind(childSessionID, binding.Path, binding.ReadOnly); err != nil {
+					s.logger.Warn().Err(err).
+						Str("parent", parentSessionID).
+						Str("child", childSessionID).
+						Str("path", binding.Path).
+						Msg("Failed to bind workspace for sub-agent session")
+				} else {
+					s.logger.Info().
+						Str("parent", parentSessionID).
+						Str("child", childSessionID).
+						Str("path", binding.Path).
+						Msg("Workspace binding copied to sub-agent session")
+				}
+			}
+		})
+	}
+
+	// Wire workspace resolver to runner for PathPrefix $WORKSPACE expansion
+	agentRunner.SetWorkspaceResolver(func(sessionID string) string {
+		if binding, ok := workspaceManager.Get(sessionID); ok && binding != nil {
+			return binding.Path
+		}
+		return ""
+	})
 
 	// Initialize Prompt Manager with file loading support
 	promptsDirs := []string{}
@@ -739,6 +829,10 @@ func (s *Server) ReloadProviders() error {
 			if err := s.reloadMinimaxProvider(); err != nil {
 				s.logger.Warn().Err(err).Msg("Failed to reload MiniMax provider")
 			}
+		case "glm":
+			if err := s.reloadGlmProvider(); err != nil {
+				s.logger.Warn().Err(err).Msg("Failed to reload GLM provider")
+			}
 		}
 	}
 
@@ -878,6 +972,42 @@ func (s *Server) reloadMinimaxProvider() error {
 		Str("provider", "minimax").
 		Int("models", len(minimaxModels)).
 		Msg("MiniMax provider reloaded")
+
+	return nil
+}
+
+// reloadGlmProvider reinitializes the GLM (智谱AI) provider.
+func (s *Server) reloadGlmProvider() error {
+	apiKey := s.cfg.GLM.APIKey
+	if apiKey == "" {
+		return fmt.Errorf("GLM API key not configured")
+	}
+
+	glmMaxTokens := s.cfg.GLM.MaxTokens
+	if glmMaxTokens <= 0 {
+		glmMaxTokens = 4096
+	}
+
+	var glmFactory provider.ProviderFactory
+	if s.cfg.GLM.Endpoint != "" {
+		glmFactory = glm.FactoryWithEndpoint(apiKey, glmMaxTokens, s.cfg.GLM.Endpoint)
+	} else {
+		glmFactory = glm.Factory(apiKey, glmMaxTokens)
+	}
+	glmPool := provider.NewPool(glmFactory)
+	glmModels := glm.ListModels()
+
+	if err := s.multiPool.UpdateProvider("glm", glmPool, glmModels); err != nil {
+		// If glm doesn't exist yet, add it
+		if addErr := s.multiPool.AddProvider("glm", glmPool, glmModels); addErr != nil {
+			return fmt.Errorf("failed to add GLM provider: %w", addErr)
+		}
+	}
+
+	s.logger.Info().
+		Str("provider", "glm").
+		Int("models", len(glmModels)).
+		Msg("GLM provider reloaded")
 
 	return nil
 }
@@ -1134,6 +1264,10 @@ func (s *Server) initializeMemory(db *storage.DB, agentRunner *runner.Runner, ga
 		}
 
 		if captureEngine != nil || recallEngine != nil {
+			// Pass recall engine to gateway for stats API
+			if recallEngine != nil {
+				gatewayServer.SetRecallEngine(recallEngine)
+			}
 			memBridge := hooksbuiltin.NewMemoryHookBridge(hooksbuiltin.MemoryHookConfig{
 				CaptureEngine: captureEngine,
 				RecallEngine:  recallEngine,

@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync/atomic"
+	"time"
 
 	"github.com/rs/zerolog"
 )
@@ -28,9 +30,11 @@ func DefaultRecallConfig() RecallConfig {
 
 // RecallEngine handles automatic memory recall for context injection.
 type RecallEngine struct {
-	memory *MemoryIndex
-	config RecallConfig
-	logger zerolog.Logger
+	memory      *MemoryIndex
+	config      RecallConfig
+	logger      zerolog.Logger
+	recallCount atomic.Int64 // Daily recall counter
+	recallDate  string       // Date string for counter reset (YYYY-MM-DD)
 }
 
 // RecallEngineOptions holds options for creating a RecallEngine.
@@ -106,7 +110,30 @@ func (e *RecallEngine) Recall(ctx context.Context, prompt string) (string, error
 		Str("prompt", truncate(prompt, 50)).
 		Msg("recalled memories")
 
+	// Track daily recall count
+	e.incrementRecallCount()
+
 	return context, nil
+}
+
+// incrementRecallCount increments the daily recall counter, resetting on date change.
+func (e *RecallEngine) incrementRecallCount() {
+	today := time.Now().Format("2006-01-02")
+	if e.recallDate != today {
+		e.recallCount.Store(1)
+		e.recallDate = today
+	} else {
+		e.recallCount.Add(1)
+	}
+}
+
+// TodayRecallCount returns the number of recalls that happened today.
+func (e *RecallEngine) TodayRecallCount() int64 {
+	today := time.Now().Format("2006-01-02")
+	if e.recallDate != today {
+		return 0
+	}
+	return e.recallCount.Load()
 }
 
 // formatMemories formats search results as XML context for injection.

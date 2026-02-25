@@ -19,6 +19,14 @@ type ToolCall struct {
 
 	// AgentID is the agent making the call.
 	AgentID string `json:"agent_id"`
+
+	// RequestID is an optional pre-generated ID for the approval request.
+	// If set, the approval manager will use this instead of generating a new UUID.
+	RequestID string `json:"request_id,omitempty"`
+
+	// WorkspacePath is the workspace directory for the current session.
+	// Used to expand $WORKSPACE in PathPrefix rules.
+	WorkspacePath string `json:"workspace_path,omitempty"`
 }
 
 // ToolPolicy defines the security policy for tool execution.
@@ -43,6 +51,19 @@ type ToolPolicy struct {
 
 	// ParamRules defines validation rules for tool parameters.
 	ParamRules map[string]ParamRule `yaml:"param_rules" json:"param_rules"`
+
+	// ScrubRules defines custom credential scrubbing rules.
+	// Applied after built-in patterns.
+	ScrubRules []ScrubRule `yaml:"scrub_rules,omitempty" json:"scrub_rules,omitempty"`
+
+	// BlockMessageTemplate is a customizable template for blocked tool messages.
+	// Supports {tool} and {reason} placeholders.
+	// Empty string uses default format.
+	BlockMessageTemplate string `yaml:"block_message_template,omitempty" json:"block_message_template,omitempty"`
+
+	// CircuitBreakerThreshold is the number of consecutive blocks before
+	// injecting a circuit breaker message. 0 disables circuit breaker.
+	CircuitBreakerThreshold int `yaml:"circuit_breaker_threshold,omitempty" json:"circuit_breaker_threshold,omitempty"`
 }
 
 // DangerousOpRule defines a rule for detecting dangerous operations.
@@ -62,8 +83,17 @@ type DangerousOpRule struct {
 	// Message is the human-readable explanation shown to users.
 	Message string `yaml:"message" json:"message"`
 
+	// Enabled controls whether this rule is active. Default true.
+	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+
 	// compiledPattern is the cached compiled regex (internal use).
 	compiledPattern *regexp.Regexp `yaml:"-" json:"-"`
+}
+
+// IsEnabled returns true if the rule is enabled.
+// A nil Enabled pointer defaults to true (backward compatible).
+func (r *DangerousOpRule) IsEnabled() bool {
+	return r.Enabled == nil || *r.Enabled
 }
 
 // CompiledPattern returns the compiled regex, compiling it if needed.
@@ -94,8 +124,33 @@ type ParamRule struct {
 	Forbidden []string `yaml:"forbidden" json:"forbidden"`
 
 	// PathPrefix limits file paths to specific prefixes.
-	// Supports ~ for home directory expansion.
+	// Supports ~ for home directory expansion and $WORKSPACE for session workspace.
 	PathPrefix []string `yaml:"path_prefix" json:"path_prefix"`
+
+	// Enabled controls whether this rule is active. Default true.
+	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+}
+
+// IsEnabled returns true if the rule is enabled.
+// A nil Enabled pointer defaults to true (backward compatible).
+func (r *ParamRule) IsEnabled() bool {
+	return r.Enabled == nil || *r.Enabled
+}
+
+// ScrubRule defines a custom credential scrubbing rule.
+type ScrubRule struct {
+	// Name is a human-readable name for this rule.
+	Name string `yaml:"name" json:"name"`
+
+	// Pattern is the regex pattern to match credentials.
+	Pattern string `yaml:"pattern" json:"pattern"`
+
+	// Replacement is the text to replace matched credentials with.
+	// If empty, uses the default partial redaction (first 4 chars + ...[REDACTED]).
+	Replacement string `yaml:"replacement,omitempty" json:"replacement,omitempty"`
+
+	// Enabled controls whether this rule is active.
+	Enabled bool `yaml:"enabled" json:"enabled"`
 }
 
 // PolicyResult represents the result of a policy check.

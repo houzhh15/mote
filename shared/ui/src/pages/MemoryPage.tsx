@@ -55,7 +55,7 @@ const STYLES = {
   codeBlock: { background: 'rgba(0,0,0,0.04)', padding: '8px 12px', borderRadius: 6, fontFamily: 'monospace', fontSize: 13, wordBreak: 'break-all' } as React.CSSProperties,
 } as const;
 
-const CATEGORY_FILTER_OPTIONS = [{ value: null, label: '全部分类' }, ...CATEGORIES];
+const CATEGORY_FILTER_OPTIONS = [{ value: '', label: '全部分类' }, ...CATEGORIES];
 
 // === Category helpers (module-level, no re-creation) ===
 const CATEGORY_COLORS: Record<string, string> = {
@@ -126,7 +126,7 @@ const MemoryListTab = React.memo<MemoryListTabProps>(({ api, colorBgContainer, b
   const [memories, setMemories] = useState<Memory[]>([]);
   const [loading, setLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [filterCategory, setFilterCategory] = useState<string | null>(null);
+  const [filterCategory, setFilterCategory] = useState<string>('');
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(100);
@@ -142,11 +142,13 @@ const MemoryListTab = React.memo<MemoryListTabProps>(({ api, colorBgContainer, b
   const canUpdate = typeof api.updateMemory === 'function';
   const canExport = typeof api.exportMemories === 'function';
 
-  const fetchMemories = useCallback(async (page = 1, size = 100) => {
+  const fetchMemories = useCallback(async (page = 1, size = 100, category?: string) => {
     setLoading(true);
     try {
       const offset = (page - 1) * size;
-      const data = await api.getMemories({ limit: size, offset });
+      const opts: { limit: number; offset: number; category?: string } = { limit: size, offset };
+      if (category) opts.category = category;
+      const data = await api.getMemories(opts);
       setMemories(data.memories);
       setTotal(data.total);
     } catch (error) {
@@ -162,21 +164,24 @@ const MemoryListTab = React.memo<MemoryListTabProps>(({ api, colorBgContainer, b
   useEffect(() => {
     if (!initialLoadDone.current) {
       initialLoadDone.current = true;
-      fetchMemories(1, pageSize);
+      fetchMemories(1, pageSize, filterCategory || undefined);
     }
-  }, [fetchMemories, pageSize]);
+  }, [fetchMemories, pageSize, filterCategory]);
 
   // Debounced search — skip initial empty string to avoid duplicate load
   useEffect(() => {
     if (!initialLoadDone.current) return;
     const timer = setTimeout(() => {
       if (!searchQuery.trim()) {
-        fetchMemories(1, pageSize);
+        setCurrentPage(1);
+        fetchMemories(1, pageSize, filterCategory || undefined);
       } else {
         setLoading(true);
         api.searchMemories(searchQuery, 500).then(data => {
-          setMemories(data);
-          setTotal(data.length);
+          // Client-side category filter for search results
+          const filtered = filterCategory ? data.filter(m => m.category === filterCategory) : data;
+          setMemories(filtered);
+          setTotal(filtered.length);
           setCurrentPage(1);
         }).catch(error => {
           console.error('Failed to search memories:', error);
@@ -185,14 +190,14 @@ const MemoryListTab = React.memo<MemoryListTabProps>(({ api, colorBgContainer, b
       }
     }, 300);
     return () => clearTimeout(timer);
-  }, [searchQuery, api, fetchMemories, pageSize]);
+  }, [searchQuery, filterCategory, api, fetchMemories, pageSize]);
 
   const handlePageChange = useCallback((page: number, size?: number) => {
     const newSize = size || pageSize;
     setCurrentPage(page);
     if (size && size !== pageSize) setPageSize(size);
-    if (!searchQuery.trim()) fetchMemories(page, newSize);
-  }, [pageSize, searchQuery, fetchMemories]);
+    if (!searchQuery.trim()) fetchMemories(page, newSize, filterCategory || undefined);
+  }, [pageSize, searchQuery, fetchMemories, filterCategory]);
 
   const deleteMemory = useCallback((id: string) => {
     Modal.confirm({
@@ -202,14 +207,14 @@ const MemoryListTab = React.memo<MemoryListTabProps>(({ api, colorBgContainer, b
         try {
           await api.deleteMemory(id);
           message.success('删除成功');
-          fetchMemories(currentPage, pageSize);
+          fetchMemories(currentPage, pageSize, filterCategory || undefined);
         } catch (error) {
           console.error('Failed to delete memory:', error);
           message.error('删除失败');
         }
       },
     });
-  }, [api, fetchMemories, currentPage, pageSize]);
+  }, [api, fetchMemories, currentPage, pageSize, filterCategory]);
 
   const deleteGroup = useCallback((group: MemoryGroup) => {
     Modal.confirm({
@@ -219,14 +224,14 @@ const MemoryListTab = React.memo<MemoryListTabProps>(({ api, colorBgContainer, b
         try {
           for (const memory of group.memories) await api.deleteMemory(memory.id);
           message.success('删除成功');
-          fetchMemories(currentPage, pageSize);
+          fetchMemories(currentPage, pageSize, filterCategory || undefined);
         } catch (error) {
           console.error('Failed to delete group:', error);
           message.error('删除失败');
         }
       },
     });
-  }, [api, fetchMemories, currentPage, pageSize]);
+  }, [api, fetchMemories, currentPage, pageSize, filterCategory]);
 
   const handleSave = useCallback(async (values: { content: string; category: string }) => {
     try {
@@ -240,12 +245,12 @@ const MemoryListTab = React.memo<MemoryListTabProps>(({ api, colorBgContainer, b
       setEditModalVisible(false);
       form.resetFields();
       setSearchQuery('');
-      fetchMemories(1, pageSize);
+      fetchMemories(1, pageSize, filterCategory || undefined);
     } catch (error) {
       console.error('Failed to save memory:', error);
       message.error(selectedMemory ? '更新失败' : '添加失败');
     }
-  }, [api, selectedMemory, canUpdate, canCreate, form, fetchMemories, pageSize]);
+  }, [api, selectedMemory, canUpdate, canCreate, form, fetchMemories, pageSize, filterCategory]);
 
   const handleExport = useCallback(async () => {
     if (!canExport) return;
@@ -271,12 +276,7 @@ const MemoryListTab = React.memo<MemoryListTabProps>(({ api, colorBgContainer, b
     }
   }, [api, canExport]);
 
-  const filteredMemories = useMemo(() => {
-    if (!filterCategory) return memories;
-    return memories.filter(m => m.category === filterCategory);
-  }, [memories, filterCategory]);
-
-  const memoryGroups = useMemo(() => groupMemories(filteredMemories), [filteredMemories]);
+  const memoryGroups = useMemo(() => groupMemories(memories), [memories]);
 
   const toggleGroup = useCallback((key: string) => {
     setExpandedGroups(prev => {
@@ -308,10 +308,10 @@ const MemoryListTab = React.memo<MemoryListTabProps>(({ api, colorBgContainer, b
               <Input placeholder="搜索记忆..." value={searchQuery}
                 onChange={e => setSearchQuery(e.target.value)} style={STYLES.searchInput}
                 allowClear prefix={<SearchOutlined style={STYLES.searchPrefix} />} />
-              <Select placeholder="分类筛选" value={filterCategory}
-                onChange={setFilterCategory} allowClear style={STYLES.filterSelect}
+              <Select placeholder="分类筛选" value={filterCategory || undefined}
+                onChange={(v) => setFilterCategory(v || '')} allowClear style={STYLES.filterSelect}
                 options={CATEGORY_FILTER_OPTIONS} />
-              <Button icon={<ReloadOutlined />} onClick={() => fetchMemories(currentPage, pageSize)} className="page-header-btn">刷新</Button>
+              <Button icon={<ReloadOutlined />} onClick={() => fetchMemories(currentPage, pageSize, filterCategory || undefined)} className="page-header-btn">刷新</Button>
             </Space>
             <Space>
               {canExport && <Button icon={<ExportOutlined />} onClick={handleExport} className="page-header-btn">导出</Button>}

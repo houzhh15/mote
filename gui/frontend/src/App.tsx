@@ -15,6 +15,7 @@ import {
   NewChatPage,
   SkillCenterPage,
   SessionsPage,
+  AgentsPage,
   APIProvider,
   ThemeProvider,
   ChatManagerProvider,
@@ -162,6 +163,8 @@ const App: React.FC = () => {
         return <SkillCenterPage />;
       case 'mcp':
         return <MCPPage />;
+      case 'agents':
+        return <AgentsPage />;
       case 'cron':
         return <CronPage onSelectSession={handleSelectSession} />;
       default:

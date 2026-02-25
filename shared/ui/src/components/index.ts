@@ -14,6 +14,7 @@ export { StatusIndicator, ProviderStatusBadge, MCPStatusBadge } from './StatusIn
 export type { StatusIndicatorProps, ProviderStatusBadgeProps, MCPStatusBadgeProps } from './StatusIndicator';
 export { ErrorBanner, CompactErrorBanner } from './ErrorBanner';
 export type { ErrorBannerProps, CompactErrorBannerProps } from './ErrorBanner';
+export { ContextUsagePopover } from './ContextUsagePopover';
 
 // Sidebar components
 export { Sidebar } from './Sidebar';

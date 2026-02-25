@@ -8,7 +8,7 @@
  */
 
 import React, { createContext, useContext, useRef, useCallback } from 'react';
-import type { ChatRequest, StreamEvent, Message, ToolCallResult, ErrorDetail } from '../types';
+import type { ChatRequest, StreamEvent, Message, ToolCallResult, ErrorDetail, ApprovalRequestSSEEvent } from '../types';
 
 export interface ChatState {
   sessionId: string;
@@ -29,6 +29,11 @@ export interface ChatState {
   paused?: boolean;
   pausedAt?: Date;
   pausePendingTools?: string[];  // Names of tools about to be executed
+  // Multi-agent delegation
+  activeAgentName?: string;   // Currently active sub-agent name
+  activeAgentDepth?: number;  // Nesting depth (0 = main agent)
+  // Approval request - tool call waiting for user approval
+  approvalRequest?: ApprovalRequestSSEEvent;
 }
 
 export interface ChatManagerContextType {
@@ -213,6 +218,12 @@ export const ChatManagerProvider: React.FC<{ children: React.ReactNode }> = ({ c
     const handleEvent = (event: StreamEvent) => {
       if (abortController.signal.aborted) return;
 
+      // Track active sub-agent from multi-agent delegation events
+      if (event.agent_name) {
+        state.activeAgentName = event.agent_name;
+        state.activeAgentDepth = event.agent_depth || 0;
+      }
+
       const content = event.delta || event.content;
       if (event.type === 'content' && content) {
         accumulatedContent += content;
@@ -224,15 +235,20 @@ export const ChatManagerProvider: React.FC<{ children: React.ReactNode }> = ({ c
         // 使用 RAF 节流，减少高频更新
         notifySubscribers(sessionId);
       } else if (event.type === 'thinking' && event.thinking) {
-        // Replace thinking content per round (not accumulate) so panel shows current thinking only.
-        // When thinking arrives after a tool result, it's a new round — show fresh text.
-        accumulatedThinking = event.thinking;
+        // Accumulate thinking chunks within a round (providers send deltas, not full text).
+        // When a new round starts (after thinkingDone was set, e.g. after content arrived
+        // between tool call iterations), reset and start fresh.
+        if (state.thinkingDone) {
+          accumulatedThinking = '';
+        }
+        accumulatedThinking += event.thinking;
         state.currentThinking = accumulatedThinking;
         // Reset thinkingDone so UI re-shows the panel for new thinking rounds
         // (e.g. MiniMax produces thinking before each tool call iteration)
         state.thinkingDone = false;
-        // thinking 也使用节流
-        notifySubscribers(sessionId);
+        // thinking 使用立即通知，避免 RAF 节流被后续 tool_call/done 的
+        // immediate 通知取消导致 thinking 状态永远不可见
+        notifySubscribers(sessionId, true);
       } else if (event.type === 'tool_call' && event.tool_call) {
         const toolName = event.tool_call.name;
         const toolArgs = event.tool_call.arguments;
@@ -288,6 +304,8 @@ export const ChatManagerProvider: React.FC<{ children: React.ReactNode }> = ({ c
         accumulatedThinking = '';
         state.currentThinking = '';
         state.thinkingDone = false;
+        state.activeAgentName = undefined;
+        state.activeAgentDepth = undefined;
         // Keep tool calls visible until ChatPage processes them
         // state.currentToolCalls = {}; // Don't clear - let ChatPage handle it
 
@@ -354,6 +372,16 @@ export const ChatManagerProvider: React.FC<{ children: React.ReactNode }> = ({ c
         state.pausedAt = undefined;
         state.pausePendingTools = undefined;
         // pause_resumed 立即通知
+        notifySubscribers(sessionId, true);
+      } else if (event.type === 'approval_request' && event.approval_request) {
+        // Tool call waiting for user approval
+        state.approvalRequest = event.approval_request;
+        // approval_request 立即通知
+        notifySubscribers(sessionId, true);
+      } else if (event.type === 'approval_resolved') {
+        // Approval resolved (approved or rejected) — clear the popup
+        state.approvalRequest = undefined;
+        // approval_resolved 立即通知
         notifySubscribers(sessionId, true);
       }
     };

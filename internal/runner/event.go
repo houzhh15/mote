@@ -35,6 +35,10 @@ const (
 	EventTypePauseTimeout
 	// EventTypePauseResumed indicates execution has resumed after a pause.
 	EventTypePauseResumed
+	// EventTypeApprovalRequest indicates a tool call requires user approval.
+	EventTypeApprovalRequest
+	// EventTypeApprovalResolved indicates an approval request has been resolved.
+	EventTypeApprovalResolved
 )
 
 // String returns the string representation of the event type.
@@ -64,6 +68,10 @@ func (t EventType) String() string {
 		return "pause_timeout"
 	case EventTypePauseResumed:
 		return "pause_resumed"
+	case EventTypeApprovalRequest:
+		return "approval_request"
+	case EventTypeApprovalResolved:
+		return "approval_resolved"
 	default:
 		return "unknown"
 	}
@@ -133,6 +141,18 @@ type Event struct {
 
 	// PauseData contains pause-specific information for pause events.
 	PauseData *PauseEventData `json:"pause_data,omitempty"`
+
+	// AgentName identifies which sub-agent produced this event (empty for main agent).
+	AgentName string `json:"agent_name,omitempty"`
+
+	// AgentDepth is the delegation depth of the sub-agent (0 for main agent).
+	AgentDepth int `json:"agent_depth,omitempty"`
+
+	// ApprovalRequest contains data for approval_request events.
+	ApprovalRequest *ApprovalRequestEvent `json:"approval_request,omitempty"`
+
+	// ApprovalResolved contains data for approval_resolved events.
+	ApprovalResolved *ApprovalResolvedEvent `json:"approval_resolved,omitempty"`
 }
 
 // ToolResultEvent represents the result of a tool execution.
@@ -166,6 +186,39 @@ type ToolCallUpdateEvent struct {
 
 	// Arguments contains the tool call arguments (may be partial during streaming).
 	Arguments string `json:"arguments,omitempty"`
+}
+
+// ApprovalRequestEvent contains data for an approval_request event.
+type ApprovalRequestEvent struct {
+	// ID is the unique approval request ID.
+	ID string `json:"id"`
+
+	// ToolName is the name of the tool requiring approval.
+	ToolName string `json:"tool_name"`
+
+	// Arguments is the tool call arguments JSON string.
+	Arguments string `json:"arguments"`
+
+	// Reason explains why approval is required.
+	Reason string `json:"reason"`
+
+	// SessionID is the session requesting approval.
+	SessionID string `json:"session_id"`
+
+	// ExpiresAt is the ISO 8601 timestamp when the request expires.
+	ExpiresAt string `json:"expires_at"`
+}
+
+// ApprovalResolvedEvent contains data for an approval_resolved event.
+type ApprovalResolvedEvent struct {
+	// ID is the approval request ID that was resolved.
+	ID string `json:"id"`
+
+	// Approved indicates whether the request was approved.
+	Approved bool `json:"approved"`
+
+	// DecidedAt is the ISO 8601 timestamp of the decision.
+	DecidedAt string `json:"decided_at"`
 }
 
 // NewContentEvent creates a new content event.
@@ -281,11 +334,38 @@ func NewPauseResumedEvent(sessionID string, hasUserInput bool) Event {
 	}
 }
 
+// NewApprovalRequestEvent creates a new approval request event.
+func NewApprovalRequestEvent(id, toolName, arguments, reason, sessionID, expiresAt string) Event {
+	return Event{
+		Type: EventTypeApprovalRequest,
+		ApprovalRequest: &ApprovalRequestEvent{
+			ID:        id,
+			ToolName:  toolName,
+			Arguments: arguments,
+			Reason:    reason,
+			SessionID: sessionID,
+			ExpiresAt: expiresAt,
+		},
+	}
+}
+
+// NewApprovalResolvedEvent creates a new approval resolved event.
+func NewApprovalResolvedEvent(id string, approved bool, decidedAt string) Event {
+	return Event{
+		Type: EventTypeApprovalResolved,
+		ApprovalResolved: &ApprovalResolvedEvent{
+			ID:        id,
+			Approved:  approved,
+			DecidedAt: decidedAt,
+		},
+	}
+}
+
 // FromTypesEvent converts a types.Event to a runner.Event
 func FromTypesEvent(te types.Event) Event {
 	// Convert enums
 	eventType := EventType(te.Type)
-	
+
 	// Convert nested structures if needed
 	var toolCallUpdate *ToolCallUpdateEvent
 	if te.ToolCallUpdate != nil {
@@ -296,7 +376,7 @@ func FromTypesEvent(te types.Event) Event {
 			Arguments:  te.ToolCallUpdate.Arguments,
 		}
 	}
-	
+
 	var toolResult *ToolResultEvent
 	if te.ToolResult != nil {
 		toolResult = &ToolResultEvent{
@@ -307,7 +387,7 @@ func FromTypesEvent(te types.Event) Event {
 			DurationMs: te.ToolResult.DurationMs,
 		}
 	}
-	
+
 	var usage *Usage
 	if te.Usage != nil {
 		usage = &Usage{
@@ -316,7 +396,7 @@ func FromTypesEvent(te types.Event) Event {
 			TotalTokens:      te.Usage.TotalTokens,
 		}
 	}
-	
+
 	var pauseData *PauseEventData
 	if te.PauseData != nil {
 		var tools []ToolInfo
@@ -332,7 +412,7 @@ func FromTypesEvent(te types.Event) Event {
 			HasUserInput: te.PauseData.HasUserInput,
 		}
 	}
-	
+
 	return Event{
 		Type:             eventType,
 		Content:          te.Content,
@@ -348,6 +428,7 @@ func FromTypesEvent(te types.Event) Event {
 		TruncatedReason:  te.TruncatedReason,
 		PendingToolCalls: te.PendingToolCalls,
 		PauseData:        pauseData,
+		AgentName:        te.AgentName,
+		AgentDepth:       te.AgentDepth,
 	}
 }
-

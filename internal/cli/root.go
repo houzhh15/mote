@@ -122,6 +122,7 @@ for building and running AI agents.`,
 	rootCmd.AddCommand(NewSkillCmd())
 	rootCmd.AddCommand(NewWorkspaceCmd())
 	rootCmd.AddCommand(NewPromptCmd())
+	rootCmd.AddCommand(NewDelegateCmd())
 
 	return rootCmd
 }

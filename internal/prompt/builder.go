@@ -47,6 +47,8 @@ type SystemPromptBuilder struct {
 	injector         *PromptInjector
 	mcpManager       *client.Manager
 	mcpInjectionMode MCPInjectionMode
+	agents           []AgentInfo
+	maxOutputTokens  int // Maximum output tokens for the current model (0 = unknown)
 }
 
 // NewSystemPromptBuilder creates a new SystemPromptBuilder.
@@ -70,6 +72,11 @@ func (b *SystemPromptBuilder) WithMemory(m MemorySearcher) *SystemPromptBuilder 
 	return b
 }
 
+// GetConfig returns the prompt config (useful for sub-agent builders to inherit settings).
+func (b *SystemPromptBuilder) GetConfig() PromptConfig {
+	return b.config
+}
+
 // WithInjector sets the prompt injector for slot-based injections.
 func (b *SystemPromptBuilder) WithInjector(injector *PromptInjector) *SystemPromptBuilder {
 	b.injector = injector
@@ -82,9 +89,22 @@ func (b *SystemPromptBuilder) WithMCPManager(m *client.Manager) *SystemPromptBui
 	return b
 }
 
+// WithAgents sets the available sub-agents for prompt rendering.
+func (b *SystemPromptBuilder) WithAgents(agents []AgentInfo) *SystemPromptBuilder {
+	b.agents = agents
+	return b
+}
+
 // SetMCPInjectionMode sets the MCP injection mode.
 func (b *SystemPromptBuilder) SetMCPInjectionMode(mode MCPInjectionMode) {
 	b.mcpInjectionMode = mode
+}
+
+// SetMaxOutputTokens sets the maximum output token limit for the current model.
+// When set (>0), this is injected into the system prompt so the LLM can
+// self-regulate output size and avoid truncation.
+func (b *SystemPromptBuilder) SetMaxOutputTokens(tokens int) {
+	b.maxOutputTokens = tokens
 }
 
 // GetMCPInjectionMode returns the current MCP injection mode.
@@ -134,6 +154,7 @@ func (b *SystemPromptBuilder) prepareData() PromptData {
 		WorkspaceDir: b.config.WorkspaceDir,
 		Constraints:  b.config.Constraints,
 		ExtraPrompt:  b.config.ExtraPrompt,
+		Agents:       b.agents,
 	}
 
 	// Get tools from registry
@@ -148,6 +169,8 @@ func (b *SystemPromptBuilder) prepareData() PromptData {
 		}
 	}
 
+	data.MaxOutputTokens = b.maxOutputTokens
+
 	return data
 }
 
@@ -160,6 +183,7 @@ func (b *SystemPromptBuilder) renderTemplates(data PromptData) (string, error) {
 	}{
 		{baseIdentityTemplate, SlotIdentity},
 		{capabilitiesTemplate, SlotCapabilities},
+		{agentSectionTemplate, SlotCapabilities},
 		{memoryContextTemplate, SlotContext},
 		{currentContextTemplate, SlotContext},
 		{constraintsTemplate, SlotConstraints},
@@ -202,6 +226,12 @@ func (b *SystemPromptBuilder) renderTemplates(data PromptData) (string, error) {
 			result.WriteString("\n")
 			result.WriteString(tailContent)
 		}
+	}
+
+	// M08B: Append safety rules at the very end of the system prompt
+	if !b.config.DisableSafetyPrompt {
+		result.WriteString("\n")
+		result.WriteString(SafetyRulesPrompt)
 	}
 
 	return result.String(), nil

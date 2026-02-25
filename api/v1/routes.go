@@ -7,6 +7,7 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,6 +16,8 @@ import (
 	"github.com/spf13/viper"
 
 	internalChannel "mote/internal/channel"
+	"mote/internal/compaction"
+	"mote/internal/config"
 	"mote/internal/cron"
 	"mote/internal/gateway/handlers"
 	"mote/internal/mcp/client"
@@ -25,8 +28,10 @@ import (
 	"mote/internal/prompts"
 	"mote/internal/provider"
 	"mote/internal/provider/copilot"
+	"mote/internal/provider/glm"
 	"mote/internal/provider/minimax"
 	"mote/internal/runner"
+	"mote/internal/runner/delegate"
 	"mote/internal/skills"
 	"mote/internal/storage"
 	"mote/internal/tools"
@@ -45,6 +50,7 @@ type RouterDeps struct {
 	Tools            *tools.Registry
 	Memory           *memory.MemoryIndex
 	MemoryManager    *memory.MemoryManager // New: MemoryManager replaces MemoryIndex
+	RecallEngine     *memory.RecallEngine  // For recall stats
 	MCPClient        *client.Manager
 	MCPServer        *server.Server
 	DB               *storage.DB
@@ -66,6 +72,7 @@ type Router struct {
 	tools            *tools.Registry
 	memory           *memory.MemoryIndex
 	memoryManager    *memory.MemoryManager // New: MemoryManager replaces MemoryIndex
+	recallEngine     *memory.RecallEngine  // For recall stats
 	mcpClient        *client.Manager
 	mcpServer        *server.Server
 	db               *storage.DB
@@ -81,6 +88,7 @@ type Router struct {
 	embeddedServer   EmbeddedServerInterface
 	versionChecker   interface{} // *skills.VersionChecker
 	skillUpdater     interface{} // *skills.SkillUpdater
+	delegateTracker  *delegate.DelegationTracker
 }
 
 // NewRouter creates a new v1 API router.
@@ -93,6 +101,7 @@ func NewRouter(deps *RouterDeps) *Router {
 		tools:            deps.Tools,
 		memory:           deps.Memory,
 		memoryManager:    deps.MemoryManager,
+		recallEngine:     deps.RecallEngine,
 		mcpClient:        deps.MCPClient,
 		mcpServer:        deps.MCPServer,
 		db:               deps.DB,
@@ -135,6 +144,11 @@ func (r *Router) SetMemoryManager(m *memory.MemoryManager) {
 	r.memoryManager = m
 }
 
+// SetRecallEngine updates the recall engine dependency.
+func (r *Router) SetRecallEngine(re *memory.RecallEngine) {
+	r.recallEngine = re
+}
+
 // SetCronScheduler updates the cron scheduler dependency.
 func (r *Router) SetCronScheduler(c *cron.Scheduler) {
 	r.cronScheduler = c
@@ -165,6 +179,11 @@ func (r *Router) SetSkillUpdater(su interface{}) {
 	r.skillUpdater = su
 }
 
+// SetDelegateTracker sets the delegation tracker for audit queries.
+func (r *Router) SetDelegateTracker(t *delegate.DelegationTracker) {
+	r.delegateTracker = t
+}
+
 // RegisterRoutes registers all v1 API routes.
 func (r *Router) RegisterRoutes(router *mux.Router) {
 	v1 := router.PathPrefix("/api/v1").Subrouter()
@@ -184,9 +203,13 @@ func (r *Router) RegisterRoutes(router *mux.Router) {
 	v1.HandleFunc("/resume", r.HandleResume).Methods(http.MethodPost)
 	v1.HandleFunc("/pause/status", r.HandlePauseStatus).Methods(http.MethodGet)
 
+	// Session cancel (must be before /sessions/{id} routes)
+	v1.HandleFunc("/sessions/{id}/cancel", r.HandleCancelSession).Methods(http.MethodPost)
+
 	// Sessions
 	v1.HandleFunc("/sessions", r.HandleListSessions).Methods(http.MethodGet)
 	v1.HandleFunc("/sessions", r.HandleCreateSession).Methods(http.MethodPost)
+	v1.HandleFunc("/sessions/batch-delete", r.HandleBatchDeleteSessions).Methods(http.MethodPost)
 	v1.HandleFunc("/sessions/{id}", r.HandleGetSession).Methods(http.MethodGet)
 	v1.HandleFunc("/sessions/{id}", r.HandleUpdateSession).Methods(http.MethodPut)
 	v1.HandleFunc("/sessions/{id}", r.HandleDeleteSession).Methods(http.MethodDelete)
@@ -264,6 +287,8 @@ func (r *Router) RegisterRoutes(router *mux.Router) {
 	// Policy (M08)
 	v1.HandleFunc("/policy/status", r.HandlePolicyStatus).Methods(http.MethodGet)
 	v1.HandleFunc("/policy/check", r.HandlePolicyCheck).Methods(http.MethodPost)
+	v1.HandleFunc("/policy/config", r.HandleGetPolicyConfig).Methods(http.MethodGet)
+	v1.HandleFunc("/policy/config", r.HandleUpdatePolicyConfig).Methods(http.MethodPut)
 
 	// Approvals (M08)
 	v1.HandleFunc("/approvals", r.HandleApprovalList).Methods(http.MethodGet)
@@ -307,6 +332,19 @@ func (r *Router) RegisterRoutes(router *mux.Router) {
 	v1.HandleFunc("/prompts/{id}/toggle", r.HandleTogglePrompt).Methods(http.MethodPost)
 	v1.HandleFunc("/prompts/reload", r.HandleReloadPrompts).Methods(http.MethodPost)
 	v1.HandleFunc("/prompts/{id}/render", r.HandleRenderPrompt).Methods(http.MethodPost)
+
+	// Delegations (multi-agent)
+	v1.HandleFunc("/delegations", r.HandleListRecentDelegations).Methods(http.MethodGet)
+	v1.HandleFunc("/delegations/batch-delete", r.HandleBatchDeleteDelegations).Methods(http.MethodPost)
+	v1.HandleFunc("/sessions/{id}/delegations", r.HandleListDelegations).Methods(http.MethodGet)
+	v1.HandleFunc("/delegations/{id}", r.HandleGetDelegation).Methods(http.MethodGet)
+
+	// Agents (multi-agent CRUD)
+	v1.HandleFunc("/agents", r.HandleListAgents).Methods(http.MethodGet)
+	v1.HandleFunc("/agents", r.HandleAddAgent).Methods(http.MethodPost)
+	v1.HandleFunc("/agents/{name}", r.HandleGetAgent).Methods(http.MethodGet)
+	v1.HandleFunc("/agents/{name}", r.HandleUpdateAgent).Methods(http.MethodPut)
+	v1.HandleFunc("/agents/{name}", r.HandleDeleteAgent).Methods(http.MethodDelete)
 }
 
 // SetupLegacyRedirects sets up redirects from old /api/ to /api/v1/.
@@ -480,6 +518,7 @@ func (r *Router) HandleListSessions(w http.ResponseWriter, req *http.Request) {
 			s.Preview = preview
 		}
 		s.SelectedSkills = parseSkillsJSON(selectedSkillsStr)
+		s.Source = deriveSessionSource(s.ID)
 		sessions = append(sessions, s)
 	}
 
@@ -593,6 +632,68 @@ func (r *Router) HandleDeleteSession(w http.ResponseWriter, req *http.Request) {
 	handlers.SendJSON(w, http.StatusOK, SuccessResponse{Success: true, Message: "Session deleted"})
 }
 
+// HandleBatchDeleteSessions deletes multiple sessions at once.
+func (r *Router) HandleBatchDeleteSessions(w http.ResponseWriter, req *http.Request) {
+	if r.db == nil {
+		handlers.SendError(w, http.StatusServiceUnavailable, handlers.ErrCodeServiceUnavailable, "Database not available")
+		return
+	}
+
+	var body BatchDeleteSessionsRequest
+	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+		handlers.SendError(w, http.StatusBadRequest, ErrCodeInvalidRequest, "Invalid JSON body")
+		return
+	}
+
+	if len(body.IDs) == 0 {
+		handlers.SendError(w, http.StatusBadRequest, ErrCodeInvalidRequest, "No session IDs provided")
+		return
+	}
+
+	// Limit batch size to prevent abuse
+	if len(body.IDs) > 200 {
+		handlers.SendError(w, http.StatusBadRequest, ErrCodeInvalidRequest, "Too many session IDs (max 200)")
+		return
+	}
+
+	// Build placeholders for IN clause
+	placeholders := make([]string, len(body.IDs))
+	args := make([]interface{}, len(body.IDs))
+	for i, id := range body.IDs {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	inClause := strings.Join(placeholders, ",")
+
+	// Delete messages first
+	_, _ = r.db.Exec("DELETE FROM messages WHERE session_id IN ("+inClause+")", args...)
+
+	// Delete sessions
+	result, err := r.db.Exec("DELETE FROM sessions WHERE id IN ("+inClause+")", args...)
+	if err != nil {
+		handlers.SendError(w, http.StatusInternalServerError, handlers.ErrCodeInternalError, "Failed to delete sessions")
+		return
+	}
+
+	deleted, _ := result.RowsAffected()
+	handlers.SendJSON(w, http.StatusOK, map[string]interface{}{
+		"deleted": deleted,
+		"total":   len(body.IDs),
+	})
+}
+
+// deriveSessionSource determines the session source from its ID prefix.
+// Returns "delegate" for sub-agent sessions, "cron" for cron sessions, "chat" for normal sessions.
+func deriveSessionSource(sessionID string) string {
+	if strings.HasPrefix(sessionID, "delegate:") {
+		return "delegate"
+	}
+	if strings.HasPrefix(sessionID, "cron-") {
+		return "cron"
+	}
+	return "chat"
+}
+
 // HandleGetMessages returns messages for a session.
 func (r *Router) HandleGetMessages(w http.ResponseWriter, req *http.Request) {
 	if r.db == nil {
@@ -682,7 +783,79 @@ func (r *Router) HandleGetMessages(w http.ResponseWriter, req *http.Request) {
 		messages = []Message{}
 	}
 
-	handlers.SendJSON(w, http.StatusOK, MessagesListResponse{Messages: messages})
+	// --- Context-usage estimation: simulate what the model actually sees ---
+	//
+	// The DB stores ALL historical messages (compaction operates in-memory
+	// only during Run() and never saves results back).  Counting all DB
+	// messages produces a token total far exceeding the context window,
+	// which is misleading.  Instead, we simulate the runtime's
+	// BudgetMessages pass: convert raw messages to provider.Message,
+	// create a temporary Compactor with the session model's adapted config,
+	// and apply BudgetMessages to get the approximate message set the
+	// model would receive.  Token estimation is then computed only on
+	// the budgeted subset.
+
+	// 1. Convert raw DB messages → []provider.Message
+	var providerMessages []provider.Message
+	for _, rm := range rawMessages {
+		pm := provider.Message{
+			Role:    rm.Role,
+			Content: rm.Content,
+		}
+		if rm.ToolCallID != nil && *rm.ToolCallID != "" {
+			pm.ToolCallID = *rm.ToolCallID
+		}
+		if rm.ToolCallsJSON != nil && *rm.ToolCallsJSON != "" {
+			var storageTCs []storage.ToolCall
+			if err := json.Unmarshal([]byte(*rm.ToolCallsJSON), &storageTCs); err == nil {
+				for _, stc := range storageTCs {
+					pm.ToolCalls = append(pm.ToolCalls, provider.ToolCall{
+						ID:        stc.ID,
+						Type:      stc.Type,
+						Arguments: stc.GetArguments(),
+						Function: &struct {
+							Name      string `json:"name"`
+							Arguments string `json:"arguments"`
+						}{
+							Name:      stc.GetName(),
+							Arguments: stc.GetArguments(),
+						},
+					})
+				}
+			}
+		}
+		providerMessages = append(providerMessages, pm)
+	}
+
+	// 2. Get session model and context window
+	contextWindow := 0
+	if session, err := r.db.GetSession(sessionID); err == nil && session.Model != "" {
+		if r.multiPool != nil {
+			if prov, _, err := r.multiPool.GetProvider(session.Model); err == nil {
+				if cwp, ok := prov.(provider.ContextWindowProvider); ok {
+					contextWindow = cwp.ContextWindow(session.Model)
+				}
+			}
+		}
+	}
+
+	// 3. Create a temporary compactor with adapted config and apply BudgetMessages
+	budgeted := providerMessages
+	if contextWindow > 0 {
+		cfg := compaction.DefaultConfig()
+		cfg.AdaptForModel(contextWindow)
+		tmpCompactor := compaction.NewCompactor(cfg, nil)
+		budgeted = tmpCompactor.BudgetMessages(providerMessages, 0)
+	}
+
+	// 4. Count tokens only on the budgeted messages
+	tokenCounter := compaction.NewTokenCounter()
+	estimatedTokens := tokenCounter.EstimateMessages(budgeted)
+
+	handlers.SendJSON(w, http.StatusOK, MessagesListResponse{
+		Messages:        messages,
+		EstimatedTokens: estimatedTokens,
+	})
 }
 
 // HandleUpdateSessionModel updates the model for a specific session.
@@ -724,6 +897,10 @@ func (r *Router) HandleUpdateSessionModel(w http.ResponseWriter, req *http.Reque
 	}
 	// Check MiniMax models (with "minimax:" prefix)
 	if !modelValid && strings.HasPrefix(body.Model, "minimax:") {
+		modelValid = true
+	}
+	// Check GLM models (with "glm:" prefix)
+	if !modelValid && strings.HasPrefix(body.Model, "glm:") {
 		modelValid = true
 	}
 	// Check via multiPool if available
@@ -863,6 +1040,9 @@ func (r *Router) HandleReconfigureSession(w http.ResponseWriter, req *http.Reque
 			modelValid = true
 		}
 		if !modelValid && strings.HasPrefix(*body.Model, "minimax:") {
+			modelValid = true
+		}
+		if !modelValid && strings.HasPrefix(*body.Model, "glm:") {
 			modelValid = true
 		}
 		if !modelValid && r.multiPool != nil {
@@ -1064,6 +1244,12 @@ func (r *Router) HandleGetConfig(w http.ResponseWriter, req *http.Request) {
 			Model:     viper.GetString("minimax.model"),
 			MaxTokens: viper.GetInt("minimax.max_tokens"),
 		},
+		GLM: GLMConfigView{
+			APIKey:    maskAPIKey(viper.GetString("glm.api_key")),
+			Endpoint:  viper.GetString("glm.endpoint"),
+			Model:     viper.GetString("glm.model"),
+			MaxTokens: viper.GetInt("glm.max_tokens"),
+		},
 		Memory: MemoryConfigView{
 			Enabled: r.memory != nil,
 		},
@@ -1089,7 +1275,7 @@ func (r *Router) HandleUpdateConfig(w http.ResponseWriter, req *http.Request) {
 
 	// Update provider configuration
 	if body.Provider != nil {
-		validProviders := []string{"copilot", "copilot-acp", "ollama", "minimax"}
+		validProviders := []string{"copilot", "copilot-acp", "ollama", "minimax", "glm"}
 
 		// Validate and update default provider
 		if body.Provider.Default != "" {
@@ -1101,7 +1287,7 @@ func (r *Router) HandleUpdateConfig(w http.ResponseWriter, req *http.Request) {
 				}
 			}
 			if !valid {
-				handlers.SendError(w, http.StatusBadRequest, handlers.ErrCodeInvalidRequest, "Invalid provider type. Supported: copilot, copilot-acp, ollama, minimax")
+				handlers.SendError(w, http.StatusBadRequest, handlers.ErrCodeInvalidRequest, "Invalid provider type. Supported: copilot, copilot-acp, ollama, minimax, glm")
 				return
 			}
 			viper.Set("provider.default", body.Provider.Default)
@@ -1152,6 +1338,22 @@ func (r *Router) HandleUpdateConfig(w http.ResponseWriter, req *http.Request) {
 		}
 	}
 
+	// Update GLM configuration
+	if body.GLM != nil {
+		if body.GLM.APIKey != "" {
+			viper.Set("glm.api_key", body.GLM.APIKey)
+		}
+		if body.GLM.Endpoint != "" {
+			viper.Set("glm.endpoint", body.GLM.Endpoint)
+		}
+		if body.GLM.Model != "" {
+			viper.Set("glm.model", body.GLM.Model)
+		}
+		if body.GLM.MaxTokens > 0 {
+			viper.Set("glm.max_tokens", body.GLM.MaxTokens)
+		}
+	}
+
 	// Persist config changes to file
 	if err := viper.WriteConfig(); err != nil {
 		log.Warn().Err(err).Msg("Failed to persist config")
@@ -1188,6 +1390,12 @@ func (r *Router) HandleUpdateConfig(w http.ResponseWriter, req *http.Request) {
 			Endpoint:  viper.GetString("minimax.endpoint"),
 			Model:     viper.GetString("minimax.model"),
 			MaxTokens: viper.GetInt("minimax.max_tokens"),
+		},
+		GLM: GLMConfigView{
+			APIKey:    maskAPIKey(viper.GetString("glm.api_key")),
+			Endpoint:  viper.GetString("glm.endpoint"),
+			Model:     viper.GetString("glm.model"),
+			MaxTokens: viper.GetInt("glm.max_tokens"),
 		},
 		Memory: MemoryConfigView{
 			Enabled: r.memory != nil,
@@ -1372,6 +1580,43 @@ func (r *Router) HandleListModels(w http.ResponseWriter, req *http.Request) {
 					Provider:       "minimax",
 					DisplayName:    displayName,
 					Family:         "minimax",
+					IsFree:         false,
+					Multiplier:     0,
+					ContextWindow:  contextWindow,
+					MaxOutput:      maxOutput,
+					SupportsVision: false,
+					SupportsTools:  supportsTools,
+					Description:    description,
+					Available:      modelInfo.Available,
+				})
+			}
+		}
+
+		// Add GLM models if provider is available and not filtered out
+		if (providerFilter == "" || providerFilter == "glm") && r.multiPool.HasProvider("glm") {
+			for _, modelInfo := range r.multiPool.ListAllModels() {
+				if modelInfo.Provider != "glm" {
+					continue
+				}
+				// Use metadata if available, otherwise use defaults
+				meta, hasMeta := glm.ModelMetadata[modelInfo.OriginalID]
+				displayName := modelInfo.OriginalID
+				contextWindow := 128000
+				maxOutput := 16384
+				supportsTools := true
+				description := "GLM (智谱AI) cloud model"
+				if hasMeta {
+					displayName = meta.DisplayName
+					contextWindow = meta.ContextWindow
+					maxOutput = meta.MaxOutput
+					supportsTools = meta.SupportsTools
+					description = meta.Description
+				}
+				models = append(models, ModelView{
+					ID:             modelInfo.ID,
+					Provider:       "glm",
+					DisplayName:    displayName,
+					Family:         "glm",
 					IsFree:         false,
 					Multiplier:     0,
 					ContextWindow:  contextWindow,
@@ -1720,4 +1965,197 @@ func (r *Router) HandleProviderRecover(w http.ResponseWriter, req *http.Request)
 	default:
 		handlers.SendError(w, http.StatusBadRequest, handlers.ErrCodeInvalidRequest, "Unknown action: "+request.Action)
 	}
+}
+
+// HandleListDelegations returns all delegation records for a session.
+// HandleListRecentDelegations returns the most recent delegation records
+// across all sessions.  This is the primary data source for the Agents page
+// delegation history tab.
+func (r *Router) HandleListRecentDelegations(w http.ResponseWriter, req *http.Request) {
+	if r.delegateTracker == nil {
+		handlers.SendJSON(w, http.StatusOK, []any{})
+		return
+	}
+
+	limit := 50
+	if v := req.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	}
+
+	records, err := r.delegateTracker.GetRecent(limit)
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to list recent delegations")
+		handlers.SendError(w, http.StatusInternalServerError, handlers.ErrCodeInternalError, "failed to list delegations")
+		return
+	}
+
+	if records == nil {
+		records = []delegate.DelegationRecord{}
+	}
+	handlers.SendJSON(w, http.StatusOK, records)
+}
+
+func (r *Router) HandleListDelegations(w http.ResponseWriter, req *http.Request) {
+	if r.delegateTracker == nil {
+		handlers.SendJSON(w, http.StatusOK, []any{})
+		return
+	}
+
+	vars := mux.Vars(req)
+	sessionID := vars["id"]
+	if sessionID == "" {
+		handlers.SendError(w, http.StatusBadRequest, handlers.ErrCodeInvalidRequest, "session ID required")
+		return
+	}
+
+	records, err := r.delegateTracker.GetByParentSession(sessionID)
+	if err != nil {
+		log.Error().Err(err).Str("sessionID", sessionID).Msg("Failed to list delegations")
+		handlers.SendError(w, http.StatusInternalServerError, handlers.ErrCodeInternalError, "failed to list delegations")
+		return
+	}
+
+	if records == nil {
+		records = []delegate.DelegationRecord{}
+	}
+	handlers.SendJSON(w, http.StatusOK, records)
+}
+
+// HandleGetDelegation returns a single delegation record by ID.
+func (r *Router) HandleGetDelegation(w http.ResponseWriter, req *http.Request) {
+	if r.delegateTracker == nil {
+		handlers.SendError(w, http.StatusNotFound, "NOT_FOUND", "delegation tracking not enabled")
+		return
+	}
+
+	vars := mux.Vars(req)
+	id := vars["id"]
+	if id == "" {
+		handlers.SendError(w, http.StatusBadRequest, handlers.ErrCodeInvalidRequest, "delegation ID required")
+		return
+	}
+
+	record, err := r.delegateTracker.GetByID(id)
+	if err != nil {
+		log.Error().Err(err).Str("id", id).Msg("Failed to get delegation")
+		handlers.SendError(w, http.StatusInternalServerError, handlers.ErrCodeInternalError, "failed to get delegation")
+		return
+	}
+
+	if record == nil {
+		handlers.SendError(w, http.StatusNotFound, "NOT_FOUND", "delegation not found")
+		return
+	}
+
+	handlers.SendJSON(w, http.StatusOK, record)
+}
+
+// HandleBatchDeleteDelegations deletes multiple delegation records at once.
+func (r *Router) HandleBatchDeleteDelegations(w http.ResponseWriter, req *http.Request) {
+	if r.delegateTracker == nil {
+		handlers.SendError(w, http.StatusServiceUnavailable, handlers.ErrCodeServiceUnavailable, "delegation tracking not enabled")
+		return
+	}
+
+	var body BatchDeleteDelegationsRequest
+	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+		handlers.SendError(w, http.StatusBadRequest, ErrCodeInvalidRequest, "Invalid JSON body")
+		return
+	}
+
+	if len(body.IDs) == 0 {
+		handlers.SendError(w, http.StatusBadRequest, ErrCodeInvalidRequest, "No delegation IDs provided")
+		return
+	}
+
+	if len(body.IDs) > 200 {
+		handlers.SendError(w, http.StatusBadRequest, ErrCodeInvalidRequest, "Too many delegation IDs (max 200)")
+		return
+	}
+
+	deleted, err := r.delegateTracker.DeleteByIDs(body.IDs)
+	if err != nil {
+		log.Error().Err(err).Int("count", len(body.IDs)).Msg("Failed to batch delete delegations")
+		handlers.SendError(w, http.StatusInternalServerError, handlers.ErrCodeInternalError, "Failed to delete delegations")
+		return
+	}
+
+	handlers.SendJSON(w, http.StatusOK, map[string]interface{}{
+		"deleted": deleted,
+		"total":   len(body.IDs),
+	})
+}
+
+// HandleListAgents returns all configured delegate agents.
+func (r *Router) HandleListAgents(w http.ResponseWriter, req *http.Request) {
+	cfg := config.GetConfig()
+	if cfg == nil || len(cfg.Agents) == 0 {
+		handlers.SendJSON(w, http.StatusOK, map[string]any{"agents": map[string]any{}})
+		return
+	}
+	handlers.SendJSON(w, http.StatusOK, map[string]any{"agents": cfg.Agents})
+}
+
+// HandleGetAgent returns a single agent configuration by name.
+func (r *Router) HandleGetAgent(w http.ResponseWriter, req *http.Request) {
+	name := mux.Vars(req)["name"]
+	cfg := config.GetConfig()
+	if cfg == nil || cfg.Agents == nil {
+		handlers.SendError(w, http.StatusNotFound, "NOT_FOUND", "agent not found: "+name)
+		return
+	}
+	agent, ok := cfg.Agents[name]
+	if !ok {
+		handlers.SendError(w, http.StatusNotFound, "NOT_FOUND", "agent not found: "+name)
+		return
+	}
+	handlers.SendJSON(w, http.StatusOK, map[string]any{"name": name, "config": agent})
+}
+
+// HandleAddAgent adds a new agent configuration.
+func (r *Router) HandleAddAgent(w http.ResponseWriter, req *http.Request) {
+	var body struct {
+		Name  string             `json:"name"`
+		Agent config.AgentConfig `json:"agent"`
+	}
+	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+		handlers.SendError(w, http.StatusBadRequest, handlers.ErrCodeInvalidRequest, "invalid JSON body")
+		return
+	}
+	if body.Name == "" {
+		handlers.SendError(w, http.StatusBadRequest, handlers.ErrCodeInvalidRequest, "agent name required")
+		return
+	}
+	if err := config.AddAgent(body.Name, body.Agent); err != nil {
+		handlers.SendError(w, http.StatusConflict, "CONFLICT", err.Error())
+		return
+	}
+	handlers.SendJSON(w, http.StatusCreated, map[string]any{"name": body.Name, "agent": body.Agent})
+}
+
+// HandleUpdateAgent updates an existing agent configuration.
+func (r *Router) HandleUpdateAgent(w http.ResponseWriter, req *http.Request) {
+	name := mux.Vars(req)["name"]
+	var agent config.AgentConfig
+	if err := json.NewDecoder(req.Body).Decode(&agent); err != nil {
+		handlers.SendError(w, http.StatusBadRequest, handlers.ErrCodeInvalidRequest, "invalid JSON body")
+		return
+	}
+	if err := config.UpdateAgent(name, agent); err != nil {
+		handlers.SendError(w, http.StatusNotFound, "NOT_FOUND", err.Error())
+		return
+	}
+	handlers.SendJSON(w, http.StatusOK, map[string]any{"name": name, "agent": agent})
+}
+
+// HandleDeleteAgent removes an agent configuration.
+func (r *Router) HandleDeleteAgent(w http.ResponseWriter, req *http.Request) {
+	name := mux.Vars(req)["name"]
+	if err := config.RemoveAgent(name); err != nil {
+		handlers.SendError(w, http.StatusNotFound, "NOT_FOUND", err.Error())
+		return
+	}
+	handlers.SendJSON(w, http.StatusOK, map[string]any{"deleted": name})
 }

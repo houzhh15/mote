@@ -16,6 +16,8 @@ import (
 	"mote/internal/provider"
 	"mote/internal/runner"
 	"mote/pkg/logger"
+
+	"github.com/gorilla/mux"
 )
 
 // HandleChat handles synchronous chat requests.
@@ -48,6 +50,21 @@ func (r *Router) HandleChat(w http.ResponseWriter, req *http.Request) {
 	var attachments []provider.Attachment
 	if len(chatReq.Images) > 0 {
 		attachments = buildAttachmentsFromImages(chatReq.Images)
+	}
+
+	// Auto-detect image file paths in message text
+	if imagePaths := extractImagePaths(chatReq.Message); len(imagePaths) > 0 {
+		for _, imgPath := range imagePaths {
+			att, err := buildAttachmentFromFile(imgPath)
+			if err != nil {
+				logger.Warn().Err(err).Str("path", imgPath).Msg("Failed to build attachment from image path")
+				continue
+			}
+			attachments = append(attachments, att)
+		}
+		if len(attachments) > 0 {
+			logger.Info().Int("count", len(attachments)).Msg("Auto-detected image attachments from message")
+		}
 	}
 
 	// Provide a default message if only images are sent
@@ -120,6 +137,70 @@ func parseFileReferences(message string) (cleanMessage string, fileRefs []string
 	// Keep original message (including @ references for UI display)
 	cleanMessage = message
 	return
+}
+
+// imageExtensions lists file extensions recognized as images.
+var imageExtensions = map[string]bool{
+	".jpg": true, ".jpeg": true, ".png": true, ".gif": true,
+	".webp": true, ".bmp": true, ".svg": true, ".tiff": true, ".tif": true,
+}
+
+// imagePathRegex matches absolute file paths ending in image extensions.
+// Supports POSIX paths (/...) and home-relative paths (~/).
+// Uses a simple greedy match — path existence is validated by extractImagePaths.
+var imagePathRegex = regexp.MustCompile(`((?:/|~/)[^\s,，。！？\)]+\.(?:jpg|jpeg|png|gif|webp|bmp|svg|tiff|tif))`)
+
+// extractImagePaths extracts image file paths from message text.
+// Only returns paths that actually exist on disk and are image files.
+// This allows users to simply paste file paths in their message to include images.
+func extractImagePaths(message string) []string {
+	matches := imagePathRegex.FindAllStringSubmatch(message, -1)
+	var paths []string
+	seen := make(map[string]bool)
+
+	for _, match := range matches {
+		if len(match) < 2 {
+			continue
+		}
+		path := match[1]
+
+		// Expand ~ to home directory
+		if strings.HasPrefix(path, "~/") {
+			if home, err := os.UserHomeDir(); err == nil {
+				path = home + path[1:]
+			}
+		}
+
+		// Deduplicate
+		if seen[path] {
+			continue
+		}
+		seen[path] = true
+
+		// Validate path safety
+		if !isValidFilePath(path) {
+			logger.Warn().Str("path", path).Msg("Skipping unsafe image path")
+			continue
+		}
+
+		// Check file actually exists
+		info, err := os.Stat(path)
+		if err != nil || info.IsDir() {
+			logger.Debug().Str("path", path).Msg("Image path not found or is directory, skipping")
+			continue
+		}
+
+		// Verify extension is an image
+		ext := strings.ToLower(filepath.Ext(path))
+		if !imageExtensions[ext] {
+			continue
+		}
+
+		paths = append(paths, path)
+		logger.Info().Str("path", path).Msg("Detected image file path in message")
+	}
+
+	return paths
 }
 
 // isValidFilePath validates file path for security.
@@ -296,6 +377,26 @@ func detectLanguage(filePath string) string {
 	return "text"
 }
 
+// HandleCancelSession cancels a running chat session.
+// This stops the runner execution for the given session.
+func (r *Router) HandleCancelSession(w http.ResponseWriter, req *http.Request) {
+	vars := mux.Vars(req)
+	sessionID := vars["id"]
+	if sessionID == "" {
+		handlers.SendError(w, http.StatusBadRequest, ErrCodeInvalidRequest, "session ID required")
+		return
+	}
+
+	if r.runner == nil {
+		handlers.SendError(w, http.StatusServiceUnavailable, ErrCodeServiceUnavailable, "Agent runner not available")
+		return
+	}
+
+	r.runner.CancelSession(sessionID)
+	logger.Info().Str("sessionID", sessionID).Msg("Session cancelled via API")
+	handlers.SendJSON(w, http.StatusOK, map[string]string{"status": "cancelled"})
+}
+
 // HandleChatStream handles streaming chat requests using SSE.
 func (r *Router) HandleChatStream(w http.ResponseWriter, req *http.Request) {
 	var chatReq ChatRequest
@@ -344,6 +445,21 @@ func (r *Router) HandleChatStream(w http.ResponseWriter, req *http.Request) {
 		attachments = buildAttachmentsFromImages(chatReq.Images)
 	}
 
+	// Auto-detect image file paths in message text
+	if imagePaths := extractImagePaths(chatReq.Message); len(imagePaths) > 0 {
+		for _, imgPath := range imagePaths {
+			att, err := buildAttachmentFromFile(imgPath)
+			if err != nil {
+				logger.Warn().Err(err).Str("path", imgPath).Msg("Failed to build attachment from image path")
+				continue
+			}
+			attachments = append(attachments, att)
+		}
+		if len(attachments) > 0 {
+			logger.Info().Int("count", len(attachments)).Msg("Auto-detected image attachments from message")
+		}
+	}
+
 	// Provide a default message if only images are sent
 	message := chatReq.Message
 	if message == "" && len(attachments) > 0 {
@@ -379,6 +495,10 @@ func (r *Router) HandleChatStream(w http.ResponseWriter, req *http.Request) {
 					Type:     "thinking",
 					Thinking: event.Thinking,
 				}
+				logger.Debug().
+					Str("sessionID", sessionID).
+					Int("thinkingLen", len(event.Thinking)).
+					Msg("SSE: sending thinking event")
 			} else {
 				continue
 			}
@@ -452,13 +572,55 @@ func (r *Router) HandleChatStream(w http.ResponseWriter, req *http.Request) {
 			}
 			// Log heartbeat being sent to client
 			logger.Info().Msg("Sending heartbeat to client")
+		case runner.EventTypeApprovalRequest:
+			if event.ApprovalRequest != nil {
+				sseEvent = ChatStreamEvent{
+					Type: "approval_request",
+					ApprovalRequest: &ApprovalRequestSSEEvent{
+						ID:        event.ApprovalRequest.ID,
+						ToolName:  event.ApprovalRequest.ToolName,
+						Arguments: event.ApprovalRequest.Arguments,
+						Reason:    event.ApprovalRequest.Reason,
+						SessionID: event.ApprovalRequest.SessionID,
+						ExpiresAt: event.ApprovalRequest.ExpiresAt,
+					},
+				}
+			} else {
+				continue
+			}
+		case runner.EventTypeApprovalResolved:
+			if event.ApprovalResolved != nil {
+				sseEvent = ChatStreamEvent{
+					Type: "approval_resolved",
+					ApprovalResolved: &ApprovalResolvedSSEEvent{
+						ID:        event.ApprovalResolved.ID,
+						Approved:  event.ApprovalResolved.Approved,
+						DecidedAt: event.ApprovalResolved.DecidedAt,
+					},
+				}
+			} else {
+				continue
+			}
 		default:
 			continue
+		}
+
+		// Propagate sub-agent identity if present
+		if event.AgentName != "" {
+			sseEvent.AgentName = event.AgentName
+			sseEvent.AgentDepth = event.AgentDepth
 		}
 
 		data, _ := json.Marshal(sseEvent)
 		if _, err := fmt.Fprintf(w, "data: %s\n\n", data); err != nil {
 			logger.Error().Err(err).Msg("Failed to write SSE event to client")
+			// Drain remaining events to prevent goroutine leak.
+			// Without this, the runner goroutine blocks on channel send
+			// and can never finish, blocking the session queue.
+			go func() {
+				for range events {
+				}
+			}()
 			return
 		}
 		flusher.Flush()

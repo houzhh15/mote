@@ -127,6 +127,33 @@ func (p *MinimaxProvider) Models() []string {
 	return AvailableModels
 }
 
+// ContextWindow returns the context window size for the given model.
+// Implements provider.ContextWindowProvider.
+func (p *MinimaxProvider) ContextWindow(model string) int {
+	if model == "" {
+		model = p.model
+	}
+	// Strip provider prefix (session stores "minimax:MiniMax-M2.5")
+	model = strings.TrimPrefix(model, "minimax:")
+	if meta, ok := ModelMetadata[model]; ok {
+		return meta.ContextWindow
+	}
+	return 0
+}
+
+// MaxOutput returns the maximum output tokens for the given model.
+// Implements provider.MaxOutputProvider.
+func (p *MinimaxProvider) MaxOutput(model string) int {
+	if model == "" {
+		model = p.model
+	}
+	model = strings.TrimPrefix(model, "minimax:")
+	if meta, ok := ModelMetadata[model]; ok {
+		return meta.MaxOutput
+	}
+	return 0
+}
+
 // Chat sends a chat completion request and returns the response.
 func (p *MinimaxProvider) Chat(ctx context.Context, req provider.ChatRequest) (*provider.ChatResponse, error) {
 	chatReq := p.buildRequest(req, false)
@@ -227,70 +254,12 @@ func (p *MinimaxProvider) Stream(ctx context.Context, req provider.ChatRequest) 
 	if !strings.Contains(contentType, "text/event-stream") {
 		result, err := p.handleNonStreamResponse(resp)
 		if err != nil {
-			// If Stream endpoint returned empty body (ALB anomaly after
-			// sustained Chat usage e.g. compaction), fall back to the
-			// non-streaming Chat API which is not affected.
-			var pe *provider.ProviderError
-			if errors.As(err, &pe) && pe.Code == provider.ErrCodeServiceUnavailable {
-				logger.Warn().Msg("MiniMax Stream returned empty response — falling back to Chat API")
-				return p.streamViaChat(ctx, req)
-			}
 			return nil, err
 		}
 		return result, nil
 	}
 
 	return ProcessStream(resp.Body), nil
-}
-
-// streamViaChat falls back to the non-streaming Chat API when the Stream
-// endpoint returns an empty response (ALB anomaly after compaction).  The
-// Chat endpoint uses a different HTTP client and is unaffected by the
-// streaming endpoint's ALB session issue.  The ChatResponse is converted
-// to synthetic stream events so the caller sees no difference.
-func (p *MinimaxProvider) streamViaChat(ctx context.Context, req provider.ChatRequest) (<-chan provider.ChatEvent, error) {
-	chatResp, err := p.Chat(ctx, req)
-	if err != nil {
-		return nil, fmt.Errorf("Chat fallback also failed: %w", err)
-	}
-
-	logger.Info().
-		Int("content_len", len(chatResp.Content)).
-		Int("tool_calls", len(chatResp.ToolCalls)).
-		Str("finish_reason", chatResp.FinishReason).
-		Msg("MiniMax streamViaChat fallback succeeded")
-
-	events := make(chan provider.ChatEvent, 2+len(chatResp.ToolCalls))
-	go func() {
-		defer close(events)
-
-		if chatResp.Content != "" {
-			events <- provider.ChatEvent{
-				Type:  provider.EventTypeContent,
-				Delta: chatResp.Content,
-			}
-		}
-
-		for i := range chatResp.ToolCalls {
-			tc := chatResp.ToolCalls[i]
-			tc.Index = i
-			events <- provider.ChatEvent{
-				Type:     provider.EventTypeToolCall,
-				ToolCall: &tc,
-			}
-		}
-
-		doneEvent := provider.ChatEvent{
-			Type:         provider.EventTypeDone,
-			FinishReason: chatResp.FinishReason,
-		}
-		if chatResp.Usage != nil {
-			doneEvent.Usage = chatResp.Usage
-		}
-		events <- doneEvent
-	}()
-
-	return events, nil
 }
 
 // handleNonStreamResponse handles the case where MiniMax returns a regular JSON
@@ -419,10 +388,23 @@ func (p *MinimaxProvider) buildRequest(req provider.ChatRequest, stream bool) *c
 		ReasoningSplit: reasoningSplit,
 	}
 
-	// Set max_tokens
+	// Set max_tokens — cap to the model's documented MaxOutput to prevent
+	// sending out-of-range values.  The runner's default Config.MaxTokens
+	// is 32000, which exceeds MiniMax-M2.5's MaxOutput of 16384.
+	// Sending a value above MaxOutput may cause the API to silently cap
+	// it, leading to unexpected truncation when reasoning tokens consume
+	// part of the output budget.
 	maxTokens := req.MaxTokens
 	if maxTokens <= 0 {
 		maxTokens = p.maxTokens
+	}
+	if meta, ok := ModelMetadata[model]; ok && meta.MaxOutput > 0 && maxTokens > meta.MaxOutput {
+		logger.Debug().
+			Int("requested", maxTokens).
+			Int("maxOutput", meta.MaxOutput).
+			Str("model", model).
+			Msg("MiniMax: capping max_tokens to model MaxOutput")
+		maxTokens = meta.MaxOutput
 	}
 	if maxTokens > 0 {
 		chatReq.MaxTokens = maxTokens
@@ -504,20 +486,77 @@ func (p *MinimaxProvider) buildRequest(req provider.ChatRequest, stream bool) *c
 		}
 	}
 
-	// Process attachments (add text to last user message)
+	// Process attachments (add to last user message)
 	if len(req.Attachments) > 0 && len(chatReq.Messages) > 0 {
+		// Check if there are image attachments
+		hasImages := false
+		for _, att := range req.Attachments {
+			if att.Type == "image_url" && att.ImageURL != nil {
+				hasImages = true
+				break
+			}
+		}
+
 		for i := len(chatReq.Messages) - 1; i >= 0; i-- {
 			if chatReq.Messages[i].Role == "user" {
-				for _, att := range req.Attachments {
-					if att.Type == "text" {
-						contentText := fmt.Sprintf("\n\n--- File: %s ---\n```%s\n%s\n```",
-							att.Filename,
-							att.Metadata["language"],
-							att.Text)
-						if chatReq.Messages[i].Content != nil {
-							*chatReq.Messages[i].Content += contentText
-						} else {
-							chatReq.Messages[i].Content = strPtr(contentText)
+				if hasImages {
+					// Vision mode: convert to multipart content array
+					var parts []contentPart
+
+					// Add text part from existing content
+					if chatReq.Messages[i].Content != nil && *chatReq.Messages[i].Content != "" {
+						parts = append(parts, contentPart{
+							Type: "text",
+							Text: *chatReq.Messages[i].Content,
+						})
+					}
+
+					// Add all attachments as content parts
+					for _, att := range req.Attachments {
+						switch att.Type {
+						case "image_url":
+							if att.ImageURL != nil {
+								parts = append(parts, contentPart{
+									Type:     "image_url",
+									ImageURL: &visionImageURL{URL: att.ImageURL.URL},
+								})
+								logger.Info().
+									Str("filename", att.Filename).
+									Str("mimeType", att.MimeType).
+									Msg("MiniMax: adding image attachment to vision content")
+							}
+						case "text":
+							contentText := fmt.Sprintf("\n\n--- File: %s ---\n```%s\n%s\n```",
+								att.Filename,
+								att.Metadata["language"],
+								att.Text)
+							parts = append(parts, contentPart{
+								Type: "text",
+								Text: contentText,
+							})
+						}
+					}
+
+					// Switch to multipart content
+					chatReq.Messages[i].Content = nil
+					chatReq.Messages[i].ContentParts = parts
+
+					logger.Info().
+						Int("parts", len(parts)).
+						Msg("MiniMax: using multipart vision content")
+				} else {
+					// Text-only attachments: append to Content string as before
+					for _, att := range req.Attachments {
+						if att.Type == "text" {
+							contentText := fmt.Sprintf("\n\n--- File: %s ---\n```%s\n%s\n```",
+								att.Filename,
+								att.Metadata["language"],
+								att.Text)
+							if chatReq.Messages[i].Content != nil {
+								*chatReq.Messages[i].Content += contentText
+							} else {
+								chatReq.Messages[i].Content = strPtr(contentText)
+							}
 						}
 					}
 				}

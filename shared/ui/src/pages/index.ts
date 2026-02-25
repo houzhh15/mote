@@ -18,3 +18,4 @@ export { NewChatPage } from './NewChatPage';
 export type { NewChatPageProps } from './NewChatPage';
 export { SkillCenterPage } from './SkillCenterPage';
 export type { SkillCenterPageProps, SkillCenterTab } from './SkillCenterPage';
+export { AgentsPage } from './AgentsPage';

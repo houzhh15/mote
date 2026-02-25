@@ -3,6 +3,7 @@ package storage
 import (
 	"database/sql"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 
@@ -32,24 +33,24 @@ func Open(path string) (*DB, error) {
 		return nil, fmt.Errorf("create directory: %w", err)
 	}
 
+	// Build DSN with _pragma parameters so that every new connection in
+	// the pool is configured identically.  Previously PRAGMAs were set
+	// via db.Exec() which only applies to one pooled connection — any
+	// subsequent connections lacked WAL/busy_timeout, causing SQLITE_BUSY
+	// errors under concurrent load (e.g. two chat windows).
+	dsn := buildDSN(expandedPath)
+
 	// 打开数据库连接
-	db, err := sql.Open("sqlite", expandedPath)
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
 
-	// 配置 SQLite
-	pragmas := []string{
-		"PRAGMA journal_mode=WAL",
-		"PRAGMA foreign_keys=ON",
-		"PRAGMA busy_timeout=5000",
-	}
-	for _, pragma := range pragmas {
-		if _, err := db.Exec(pragma); err != nil {
-			db.Close()
-			return nil, fmt.Errorf("set pragma: %w", err)
-		}
-	}
+	// Limit connection pool size.  SQLite allows only one concurrent
+	// writer; keeping pool small prevents SQLITE_BUSY contention while
+	// still allowing concurrent reads via WAL mode.
+	db.SetMaxOpenConns(4)
+	db.SetMaxIdleConns(2)
 
 	// 执行迁移
 	if err := migrations.Run(db); err != nil {
@@ -58,6 +59,18 @@ func Open(path string) (*DB, error) {
 	}
 
 	return &DB{DB: db, path: expandedPath}, nil
+}
+
+// buildDSN constructs a modernc.org/sqlite DSN with _pragma parameters.
+// This ensures every pooled connection inherits the same configuration.
+func buildDSN(path string) string {
+	v := url.Values{}
+	v.Set("_pragma", "journal_mode=WAL")
+	v.Add("_pragma", "foreign_keys=ON")
+	v.Add("_pragma", "busy_timeout=30000") // 30s — generous for concurrent tool execution
+	v.Add("_pragma", "synchronous=NORMAL") // Safe with WAL; reduces fsync pressure
+	v.Add("_txlock", "immediate")          // Acquire write lock at BEGIN, fail fast instead of deadlock
+	return path + "?" + v.Encode()
 }
 
 // Path 返回数据库文件路径

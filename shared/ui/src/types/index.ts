@@ -76,6 +76,7 @@ export interface Session {
   preview?: string;  // First 50 chars of first user message
   model?: string;  // Session-specific model (if set)
   scenario?: string;  // Session scenario (chat, cron, channel)
+  source?: string;  // Source: chat/cron/delegate (derived from ID prefix)
   selected_skills?: string[];  // Selected skill IDs (undefined/null = all)
   created_at: string;
   updated_at: string;
@@ -96,6 +97,11 @@ export interface Message {
   images?: ImageAttachment[];  // Images attached to user messages
   tool_calls?: ToolCallResult[];
   timestamp?: string;
+}
+
+export interface MessagesResponse {
+  messages: Message[];
+  estimated_tokens: number;  // Backend-computed token estimate
 }
 
 export interface Memory {
@@ -166,8 +172,8 @@ export interface Config {
     port?: number;
   };
   provider?: {
-    default?: string;  // 'copilot' | 'ollama' | 'minimax'
-    enabled?: string[];  // List of enabled providers: ['copilot', 'ollama', 'minimax']
+    default?: string;  // 'copilot' | 'ollama' | 'minimax' | 'glm'
+    enabled?: string[];  // List of enabled providers: ['copilot', 'ollama', 'minimax', 'glm']
   };
   ollama?: {
     endpoint?: string;  // Ollama API endpoint (default: http://localhost:11434)
@@ -177,6 +183,12 @@ export interface Config {
     api_key?: string;    // MiniMax API key (masked)
     endpoint?: string;   // MiniMax API endpoint (default: https://api.minimaxi.com/v1)
     model?: string;      // Default MiniMax model
+    max_tokens?: number; // Max output tokens
+  };
+  glm?: {
+    api_key?: string;    // GLM API key (masked)
+    endpoint?: string;   // GLM API endpoint (default: https://open.bigmodel.cn/api/coding/paas/v4)
+    model?: string;      // Default GLM model
     max_tokens?: number; // Max output tokens
   };
   memory?: {
@@ -196,13 +208,19 @@ export interface Config {
 export interface UpdateConfigRequest {
   provider?: {
     default?: string;
-    enabled?: string[];  // List of enabled providers: ['copilot', 'ollama', 'minimax']
+    enabled?: string[];  // List of enabled providers: ['copilot', 'ollama', 'minimax', 'glm']
   };
   ollama?: {
     endpoint?: string;
     model?: string;
   };
   minimax?: {
+    api_key?: string;
+    endpoint?: string;
+    model?: string;
+    max_tokens?: number;
+  };
+  glm?: {
     api_key?: string;
     endpoint?: string;
     model?: string;
@@ -243,8 +261,23 @@ export interface ErrorDetail {
 }
 
 // Streaming event types
+export interface ApprovalRequestSSEEvent {
+  id: string;
+  tool_name: string;
+  arguments: string;
+  reason: string;
+  session_id: string;
+  expires_at: string;
+}
+
+export interface ApprovalResolvedSSEEvent {
+  id: string;
+  approved: boolean;
+  decided_at: string;
+}
+
 export interface StreamEvent {
-  type: 'content' | 'tool_call' | 'tool_call_update' | 'tool_result' | 'thinking' | 'error' | 'done' | 'truncated' | 'heartbeat' | 'pause' | 'pause_timeout' | 'pause_resumed';
+  type: 'content' | 'tool_call' | 'tool_call_update' | 'tool_result' | 'thinking' | 'error' | 'done' | 'truncated' | 'heartbeat' | 'pause' | 'pause_timeout' | 'pause_resumed' | 'approval_request' | 'approval_resolved';
   delta?: string;  // Content delta from backend
   content?: string;  // Also support content for compatibility
   thinking?: string;  // Thinking/reasoning content (temporary display)
@@ -280,6 +313,12 @@ export interface StreamEvent {
     pending_tools?: Array<{ id: string; name: string; arguments?: any }>;
     has_user_input?: boolean;
   };
+  // Approval events
+  approval_request?: ApprovalRequestSSEEvent;
+  approval_resolved?: ApprovalResolvedSSEEvent;
+  // Multi-agent delegation
+  agent_name?: string;   // Name of the sub-agent producing this event
+  agent_depth?: number;  // Nesting depth (0 = main agent)
 }
 
 // ================================================================
@@ -296,6 +335,7 @@ export interface ChannelStatus {
 
 export interface IMessageChannelConfig {
   enabled: boolean;
+  model?: string;
   selfId?: string;
   trigger: {
     prefix: string;
@@ -311,6 +351,7 @@ export interface IMessageChannelConfig {
 
 export interface AppleNotesChannelConfig {
   enabled: boolean;
+  model?: string;
   trigger: {
     prefix: string;
     caseSensitive: boolean;
@@ -326,6 +367,7 @@ export interface AppleNotesChannelConfig {
 
 export interface AppleRemindersChannelConfig {
   enabled: boolean;
+  model?: string;
   trigger: {
     prefix: string;
     caseSensitive: boolean;
@@ -501,4 +543,37 @@ export interface ReconfigureSessionResponse {
   workspace_path: string;
   selected_skills: string[] | null;
   message: string;
+}
+
+// ================================================================
+// Multi-Agent Delegate Types
+// ================================================================
+
+export interface AgentConfig {
+  enabled?: boolean;
+  description?: string;
+  provider?: string;
+  model?: string;
+  system_prompt?: string;
+  tools?: string[];
+  max_depth?: number;
+  timeout?: string;
+  max_iterations?: number;
+  temperature?: number;
+}
+
+export interface DelegationRecord {
+  id: string;
+  parent_session_id: string;
+  child_session_id: string;
+  agent_name: string;
+  depth: number;
+  chain: string; // JSON array string: '["main","researcher"]'
+  prompt: string;
+  status: 'running' | 'completed' | 'failed' | 'timeout';
+  started_at: string;
+  completed_at?: string;
+  result_length: number;
+  tokens_used: number;
+  error_message?: string;
 }

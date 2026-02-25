@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"mote/internal/compaction"
@@ -20,7 +21,7 @@ import (
 )
 
 const (
-	maxConsecutiveToolErrors = 3
+	maxConsecutiveToolErrors = 5
 	maxTransientRetries      = 2
 	heartbeatInterval        = 15 * time.Second
 )
@@ -28,10 +29,10 @@ const (
 // StandardOrchestrator 实现标准工具调用循环
 type StandardOrchestrator struct {
 	*BaseOrchestrator
-	
+
 	// Additional dependencies
-	policyExecutor  policy.PolicyChecker
-	approvalManager approval.ApprovalHandler
+	policyExecutor   policy.PolicyChecker
+	approvalManager  approval.ApprovalHandler
 	compactionConfig *compaction.CompactionConfig
 }
 
@@ -68,6 +69,12 @@ func (o *StandardOrchestrator) Run(ctx context.Context, request *RunRequest) (<-
 		// are handled by the caller (runLoopCoreWithOrchestrator).
 		// This method focuses on the core iteration loop only.
 
+		// Reset per-task compaction count so the first compaction in this
+		// execution uses LLM summarization (not truncation-only).
+		if o.compactor != nil {
+			o.compactor.ResetCompactionCount(request.SessionID)
+		}
+
 		// Add user message to session
 		_, err := o.sessions.AddMessage(request.SessionID, provider.RoleUser, request.UserInput, nil, "")
 		if err != nil {
@@ -77,6 +84,21 @@ func (o *StandardOrchestrator) Run(ctx context.Context, request *RunRequest) (<-
 
 		// Build messages - use direct method from runner for now
 		// TODO: Integrate MessageBuilder component
+
+		// Inject model's max output token limit into system prompt so the LLM
+		// can self-regulate its output size and avoid truncation.
+		if o.systemPrompt != nil {
+			if mop, ok := request.Provider.(provider.MaxOutputProvider); ok {
+				sessionModel := ""
+				if request.CachedSession.Session != nil {
+					sessionModel = request.CachedSession.Session.Model
+				}
+				if maxOut := mop.MaxOutput(sessionModel); maxOut > 0 {
+					o.systemPrompt.SetMaxOutputTokens(maxOut)
+				}
+			}
+		}
+
 		messages, err := o.buildMessagesLegacy(ctx, request.CachedSession, request.UserInput)
 		if err != nil {
 			events <- types.NewErrorEvent(err)
@@ -97,11 +119,46 @@ func (o *StandardOrchestrator) Run(ctx context.Context, request *RunRequest) (<-
 		// Track whether we've already retried after a context window overflow
 		contextRetried := false
 
+		// Track whether we've already retried after an empty stop response
+		emptyResponseRetried := false
+
+		// Track whether we've already retried after all tool calls had invalid JSON args
+		invalidArgsRetried := false
+
+		// Track whether we've already attempted non-streaming fallback for truncated tool args
+		nonStreamRetried := false
+
+		// Counter for consecutive output-too-long truncations (Strategy 3).
+		// After maxOutputTooLongRetries, hard stop to avoid infinite loop.
+		outputTooLongRetries := 0
+		const maxOutputTooLongRetries = 2
+
 		// Track transient provider error retries
 		transientRetries := 0
 
-		// After compaction, use Chat mode for next iteration
-		useChat := false
+		// Number of messages the last tool-call round appended to messages.
+		// Used to tell BudgetMessages which tail messages are the current
+		// iteration's tool results and must NOT be truncated — the model
+		// needs them in full to formulate its next response.
+		lastRoundMsgCount := 0
+
+		// Adapt compaction config to the model's actual context window.
+		// This is a one-time operation per Run() call.
+		// sessionCompactor is used for config-dependent operations (NeedsCompaction,
+		// BudgetMessages, Compact, TruncateOnly).  Count management (Reset/Get/
+		// IncrementCompactionCount) stays on o.compactor (shared).
+		sessionCompactor := o.compactor
+		if o.compactor != nil {
+			if cwp, ok := request.Provider.(provider.ContextWindowProvider); ok {
+				sessionModel := ""
+				if request.CachedSession.Session != nil {
+					sessionModel = request.CachedSession.Session.Model
+				}
+				if cw := cwp.ContextWindow(sessionModel); cw > 0 {
+					sessionCompactor = o.compactor.WithContextWindow(cw)
+				}
+			}
+		}
 
 		// Main iteration loop
 		for iteration := 0; iteration < o.config.MaxIterations; iteration++ {
@@ -133,29 +190,55 @@ func (o *StandardOrchestrator) Run(ctx context.Context, request *RunRequest) (<-
 				"sessionID", request.SessionID,
 				"iteration", iteration,
 				"messageCount", len(messages))
-			if o.compactor != nil {
-				if o.compactor.NeedsCompaction(messages) {
+			if sessionCompactor != nil {
+				if sessionCompactor.NeedsCompaction(messages) {
+					priorCompactions := o.compactor.GetCompactionCount(request.SessionID)
 					slog.Info("StandardOrchestrator: compacting messages",
 						"sessionID", request.SessionID,
 						"iteration", iteration,
-						"messageCount", len(messages))
-					compacted := o.compactor.CompactWithFallback(ctx, messages, request.Provider)
-					slog.Info("StandardOrchestrator: compaction done",
-						"sessionID", request.SessionID,
-						"iteration", iteration,
-						"newMessageCount", len(compacted))
+						"messageCount", len(messages),
+						"priorCompactions", priorCompactions)
 
-					// Reset provider connections after compaction
-					if resettable, ok := request.Provider.(provider.ConnectionResettable); ok {
-						resettable.ResetConnections()
-						slog.Info("StandardOrchestrator: reset provider connections after compaction",
-							"sessionID", request.SessionID)
+					var compacted []provider.Message
+
+					if priorCompactions == 0 {
+						// First compaction: use LLM summarization for best context retention.
+						events <- types.NewContentEvent("\n⏳ 正在压缩历史上下文，请稍候…\n\n")
+						compacted = sessionCompactor.CompactWithFallback(ctx, messages, request.Provider)
+						slog.Info("StandardOrchestrator: compaction done (LLM summary)",
+							"sessionID", request.SessionID,
+							"iteration", iteration,
+							"newMessageCount", len(compacted))
+
+						// Reset connections and cooldown ONLY after LLM-based compaction,
+						// because the summarization prov.Chat() call is what poisons ALB.
+						if resettable, ok := request.Provider.(provider.ConnectionResettable); ok {
+							resettable.ResetConnections()
+							slog.Info("StandardOrchestrator: reset provider connections after compaction",
+								"sessionID", request.SessionID)
+						}
+						slog.Info("StandardOrchestrator: post-compaction cooldown",
+							"sessionID", request.SessionID, "delay", "5s")
+						select {
+						case <-ctx.Done():
+							events <- types.NewErrorEvent(ctx.Err())
+							return
+						case <-time.After(5 * time.Second):
+						}
+					} else {
+						// Second+ compaction: truncation only, NO LLM call.
+						// Calling prov.Chat() mid-task for summarization causes MiniMax
+						// ALB session degradation. The first compaction's summary
+						// provides enough context for continuity.
+						events <- types.NewContentEvent("\n⏳ 正在截断历史上下文（无LLM调用）…\n\n")
+						compacted = sessionCompactor.TruncateOnly(messages)
+						slog.Info("StandardOrchestrator: compaction done (truncation only, no LLM call)",
+							"sessionID", request.SessionID,
+							"iteration", iteration,
+							"newMessageCount", len(compacted),
+							"priorCompactions", priorCompactions)
+						// No ResetConnections or cooldown needed — no LLM call was made.
 					}
-
-					// Use Chat mode for next iteration
-					useChat = true
-					slog.Info("StandardOrchestrator: will use Chat mode for next iteration after compaction",
-						"sessionID", request.SessionID)
 
 					// Sanity check
 					hasConv := false
@@ -188,6 +271,41 @@ func (o *StandardOrchestrator) Run(ctx context.Context, request *RunRequest) (<-
 			slog.Debug("StandardOrchestrator: building chat request",
 				"sessionID", request.SessionID,
 				"iteration", iteration)
+
+			// Proactive budget enforcement: truncate old tool results to keep
+			// request size within provider limits.  This is fast (no LLM calls)
+			// and prevents the oversized-request → empty-body failure pattern.
+			//
+			// We compute the actual tools JSON size so that the estimate is
+			// accurate.  Without this, the default 20 KB baseline can underestimate
+			// by ~30 KB when the registry has 15-25 tools (~47 KB JSON), causing
+			// oversized requests (119 KB) to slip through a 65 KB budget and
+			// eventually poison the MiniMax ALB session.
+			toolsOverhead := 0
+			if sessionCompactor != nil {
+				toolsOverhead = o.calculateToolsOverhead()
+				// protectedTail = lastRoundMsgCount: the assistant message with
+				// tool_calls + all tool result messages from the previous iteration.
+				// These are the model's freshly requested data and must be preserved
+				// in full (e.g. read_file results the model needs to analyze).
+				//
+				// CRITICAL: on the first iteration (lastRoundMsgCount=0), we must
+				// still protect at least the user's latest message and the preceding
+				// LLM message.  Without this floor, BudgetMessages Phase 2 can
+				// truncate the LLM's question (which is often at the END of a long
+				// message) to 512 bytes, and Phase 3 can drop messages entirely.
+				// The result: the LLM loses the Q&A context and re-asks the same
+				// question.
+				protectedTail := lastRoundMsgCount
+				if protectedTail < 2 {
+					protectedTail = 2
+				}
+				budgeted := sessionCompactor.BudgetMessages(messages, toolsOverhead, protectedTail)
+				if len(budgeted) > 0 {
+					messages = budgeted
+				}
+			}
+
 			sessionModel := ""
 			if request.CachedSession.Session != nil {
 				sessionModel = request.CachedSession.Session.Model
@@ -195,20 +313,17 @@ func (o *StandardOrchestrator) Run(ctx context.Context, request *RunRequest) (<-
 			req := o.buildChatRequest(messages, sessionModel, request.SessionID, request.Attachments)
 
 			// Call provider
-			resp, err := o.callProvider(ctx, request.Provider, req, events, useChat)
-			if useChat {
-				useChat = false // Only one iteration in Chat mode
-			}
+			resp, err := o.callProvider(ctx, request.Provider, req, events)
 			if err != nil {
-				// Reactive retry: on context window overflow, compact and retry once
-				if provider.IsContextWindowExceeded(err) && !contextRetried && o.compactor != nil {
+				// Reactive retry: on context window overflow, truncate and retry once
+				if provider.IsContextWindowExceeded(err) && !contextRetried && sessionCompactor != nil {
 					contextRetried = true
-					slog.Warn("StandardOrchestrator: context window exceeded, compacting and retrying",
+					slog.Warn("StandardOrchestrator: context window exceeded, truncating and retrying",
 						"sessionID", request.SessionID, "iteration", iteration)
-					events <- types.NewContentEvent("\n\n⚠️ Context window exceeded — compacting history and retrying…\n\n")
-					compacted := o.compactor.CompactWithFallback(ctx, messages, request.Provider)
-					if len(compacted) > 0 {
-						messages = compacted
+					events <- types.NewContentEvent("\n\n⚠️ Context window exceeded — truncating history and retrying…\n\n")
+					truncated := sessionCompactor.TruncateOnly(messages)
+					if len(truncated) > 0 && len(truncated) < len(messages) {
+						messages = truncated
 						continue
 					}
 				}
@@ -221,6 +336,12 @@ func (o *StandardOrchestrator) Run(ctx context.Context, request *RunRequest) (<-
 						"retry", transientRetries, "maxRetries", maxTransientRetries,
 						"backoff", backoff, "error", err)
 					events <- types.NewContentEvent(fmt.Sprintf("\n\n⚠️ Provider transient error — retrying in %s… (%d/%d)\n\n", backoff, transientRetries, maxTransientRetries))
+					// Reset connections before retry to try a fresh ALB session
+					if resettable, ok := request.Provider.(provider.ConnectionResettable); ok {
+						resettable.ResetConnections()
+						slog.Info("StandardOrchestrator: reset provider connections before retry",
+							"sessionID", request.SessionID)
+					}
 					select {
 					case <-ctx.Done():
 						events <- types.NewErrorEvent(ctx.Err())
@@ -229,6 +350,27 @@ func (o *StandardOrchestrator) Run(ctx context.Context, request *RunRequest) (<-
 					}
 					continue
 				}
+
+				// Last resort: if retries exhausted but we have a compactor, try
+				// emergency truncation to significantly reduce context size.
+				// Uses TruncateOnly (no LLM call) to avoid ALB poisoning.
+				if provider.IsRetryable(err) && sessionCompactor != nil && !contextRetried {
+					contextRetried = true
+					slog.Warn("StandardOrchestrator: retries exhausted, attempting emergency truncation",
+						"sessionID", request.SessionID, "iteration", iteration,
+						"messageCount", len(messages))
+					events <- types.NewContentEvent("\n\n⚠️ Provider errors persist — performing emergency context truncation…\n\n")
+					truncated := sessionCompactor.TruncateOnly(messages)
+					if len(truncated) > 0 && len(truncated) < len(messages) {
+						messages = truncated
+						transientRetries = 0
+						if resettable, ok := request.Provider.(provider.ConnectionResettable); ok {
+							resettable.ResetConnections()
+						}
+						continue
+					}
+				}
+
 				events <- types.NewErrorEvent(err)
 				return
 			}
@@ -249,14 +391,242 @@ func (o *StandardOrchestrator) Run(ctx context.Context, request *RunRequest) (<-
 				"finishReason", resp.FinishReason,
 				"hasUsage", resp.Usage != nil)
 
-			// Special handling for "length" with pending tool calls:
-			// Don't stop! Continue executing tools and warn the user.
-			if resp.FinishReason == provider.FinishReasonLength && len(resp.ToolCalls) > 0 {
-				slog.Warn("StandardOrchestrator: response truncated due to max_tokens, continuing with pending tool calls",
-					"sessionID", request.SessionID,
-					"pendingToolCalls", len(resp.ToolCalls),
-					"finishReason", resp.FinishReason)
-				// Fall through to execute the tool calls
+			// Validate tool call arguments JSON BEFORE execution.
+			// Models can produce truncated/invalid JSON arguments in several scenarios:
+			//   1. FinishReason=length: output truncated by max_tokens
+			//   2. FinishReason=tool_calls but arguments incomplete: observed with
+			//      MiniMax-M2.5 on large contexts where the model emits only a few
+			//      bytes of arguments (e.g., '{"arguments": ') before finishing.
+			// We validate ALL tool calls regardless of finish reason and drop any
+			// with unparseable JSON — BUT only when some calls are valid.
+			// When ALL calls are invalid, we keep them so the tool executor can
+			// return error messages (giving the model feedback) and the
+			// consecutiveToolErrors counter can eventually terminate the loop.
+			if len(resp.ToolCalls) > 0 {
+				validCalls := make([]provider.ToolCall, 0, len(resp.ToolCalls))
+				droppedCount := 0
+				for _, tc := range resp.ToolCalls {
+					rawArgs := tc.Arguments
+					if tc.Function != nil {
+						rawArgs = tc.Function.Arguments
+					}
+					if rawArgs == "" || json.Valid([]byte(rawArgs)) {
+						validCalls = append(validCalls, tc)
+					} else {
+						droppedCount++
+						// Log both head and tail of truncated args for diagnosis:
+						// head shows the tool call start, tail shows where truncation occurred.
+						argsTail := ""
+						if len(rawArgs) > 200 {
+							argsTail = rawArgs[len(rawArgs)-200:]
+						}
+						slog.Warn("StandardOrchestrator: tool call has invalid JSON arguments",
+							"sessionID", request.SessionID,
+							"toolName", tc.Name,
+							"finishReason", resp.FinishReason,
+							"argsLen", len(rawArgs),
+							"contentLen", len(resp.Content),
+							"rawArgsHead", truncateForLog(rawArgs, 200),
+							"rawArgsTail", argsTail)
+					}
+				}
+
+				if droppedCount > 0 {
+					slog.Warn("StandardOrchestrator: tool call JSON validation",
+						"sessionID", request.SessionID,
+						"validToolCalls", len(validCalls),
+						"droppedToolCalls", droppedCount,
+						"finishReason", resp.FinishReason)
+				}
+
+				if len(validCalls) == 0 && droppedCount > 0 {
+					// ALL tool calls have invalid JSON.
+					// Strategy 1: try context reduction + retry
+					if !invalidArgsRetried && sessionCompactor != nil {
+						invalidArgsRetried = true
+						currentBytes := sessionCompactor.EstimateRequestBytes(messages, toolsOverhead)
+						slog.Warn("StandardOrchestrator: all tool calls have invalid JSON args, forcing context reduction and retrying",
+							"sessionID", request.SessionID,
+							"iteration", iteration,
+							"messageCount", len(messages),
+							"estimatedBytes", currentBytes,
+							"finishReason", resp.FinishReason)
+						events <- types.NewContentEvent("\n\n⚠️ 模型生成的工具调用参数不完整，正在压缩上下文后重试…\n\n")
+
+						reducedBudget := currentBytes * 60 / 100
+						if reducedBudget < 20000 {
+							reducedBudget = 20000
+						}
+						reducedCompactor := sessionCompactor.WithMaxRequestBytes(reducedBudget)
+						truncated := reducedCompactor.BudgetMessages(messages, toolsOverhead, lastRoundMsgCount)
+
+						newBytes := sessionCompactor.EstimateRequestBytes(truncated, toolsOverhead)
+						if newBytes < currentBytes {
+							slog.Info("StandardOrchestrator: context reduction for invalid tool args succeeded",
+								"sessionID", request.SessionID,
+								"beforeBytes", currentBytes,
+								"afterBytes", newBytes,
+								"beforeMsgs", len(messages),
+								"afterMsgs", len(truncated))
+							messages = truncated
+							o.compactor.IncrementCompactionCount(request.SessionID)
+							if resettable, ok := request.Provider.(provider.ConnectionResettable); ok {
+								resettable.ResetConnections()
+							}
+							continue
+						}
+						slog.Warn("StandardOrchestrator: context reduction did not help for invalid tool args",
+							"sessionID", request.SessionID,
+							"beforeBytes", currentBytes,
+							"afterBytes", newBytes)
+					}
+
+					// Strategy 2: retry with non-streaming Chat() endpoint.
+					// Some providers (MiniMax-M2.5) have SSE streaming bugs where
+					// tool call argument chunks are incomplete.  The non-streaming
+					// endpoint returns the complete response in one JSON payload.
+					//
+					// Additionally, when reason_split=true, reasoning tokens may
+					// consume part of the max_tokens budget, leaving insufficient
+					// room for tool call arguments.  We increase max_tokens for
+					// the retry to give the model more output room.
+					if !nonStreamRetried {
+						nonStreamRetried = true
+						slog.Info("StandardOrchestrator: retrying with non-streaming Chat() due to truncated tool args",
+							"sessionID", request.SessionID,
+							"iteration", iteration,
+							"originalMaxTokens", req.MaxTokens)
+						events <- types.NewContentEvent("\n\n⚠️ 流式响应工具参数不完整，正在使用非流式模式重试…\n\n")
+
+						// Boost max_tokens for retry: reasoning tokens may have
+						// depleted the output budget.  Use 2x or at least 16384.
+						retryReq := req
+						retryReq.Stream = false
+						boostedMaxTokens := req.MaxTokens * 2
+						if boostedMaxTokens < 16384 {
+							boostedMaxTokens = 16384
+						}
+						retryReq.MaxTokens = boostedMaxTokens
+						slog.Info("StandardOrchestrator: non-streaming retry with boosted max_tokens",
+							"sessionID", request.SessionID,
+							"originalMaxTokens", req.MaxTokens,
+							"boostedMaxTokens", boostedMaxTokens)
+
+						chatResp, chatErr := request.Provider.Chat(ctx, retryReq)
+						if chatErr == nil && chatResp != nil && len(chatResp.ToolCalls) > 0 {
+							// Validate the non-streaming tool calls too
+							allValid := true
+							for _, tc := range chatResp.ToolCalls {
+								rawArgs := tc.Arguments
+								if tc.Function != nil {
+									rawArgs = tc.Function.Arguments
+								}
+								if rawArgs != "" && !json.Valid([]byte(rawArgs)) {
+									allValid = false
+									break
+								}
+							}
+							if allValid {
+								slog.Info("StandardOrchestrator: non-streaming retry produced valid tool calls",
+									"sessionID", request.SessionID,
+									"toolCallCount", len(chatResp.ToolCalls))
+								// Replace the response with the non-streaming one
+								resp = chatResp
+								// Emit tool call events for frontend display
+								for _, tc := range resp.ToolCalls {
+									storageTc := providerToStorageToolCall(tc)
+									select {
+									case events <- types.NewToolCallEvent(storageTc):
+									case <-ctx.Done():
+										return
+									}
+								}
+								// Reset droppedCount so we skip the error-feedback path
+								droppedCount = 0
+							} else {
+								slog.Warn("StandardOrchestrator: non-streaming retry also produced invalid tool call args",
+									"sessionID", request.SessionID)
+							}
+						} else if chatErr != nil {
+							slog.Warn("StandardOrchestrator: non-streaming Chat() retry failed",
+								"sessionID", request.SessionID,
+								"error", chatErr)
+						}
+					}
+
+					// Strategy 3: all retries exhausted, tool calls still invalid.
+					// The real cause is max_tokens exhaustion: model output was
+					// too long and got truncated, but the provider incorrectly
+					// reported finishReason=tool_calls instead of length.
+					//
+					// Do NOT execute invalid tool calls.  Instead, override
+					// finishReason to "length", clear tool calls, and feed
+					// the LLM an explicit error message so it can retry with
+					// a smaller output (e.g. split large files into chunks).
+					if droppedCount > 0 {
+						outputTooLongRetries++
+						slog.Warn("StandardOrchestrator: all retries exhausted, treating truncated tool args as output-too-long",
+							"sessionID", request.SessionID,
+							"droppedCount", droppedCount,
+							"originalFinishReason", resp.FinishReason,
+							"outputTooLongRetries", outputTooLongRetries,
+							"maxOutputTooLongRetries", maxOutputTooLongRetries,
+							"hasCompactor", sessionCompactor != nil,
+							"invalidArgsRetried", invalidArgsRetried,
+							"nonStreamRetried", nonStreamRetried)
+
+						// Collect truncated tool names before clearing
+						truncatedToolNames := make([]string, 0, len(resp.ToolCalls))
+						for _, tc := range resp.ToolCalls {
+							truncatedToolNames = append(truncatedToolNames, tc.Name)
+						}
+
+						// Override: treat as length-limited stop, do NOT execute
+						resp.FinishReason = provider.FinishReasonLength
+						resp.ToolCalls = nil
+
+						// Hard stop if the model keeps generating oversized output
+						if outputTooLongRetries >= maxOutputTooLongRetries {
+							slog.Error("StandardOrchestrator: output-too-long hard stop, model keeps generating oversized tool calls",
+								"sessionID", request.SessionID,
+								"outputTooLongRetries", outputTooLongRetries,
+								"tools", strings.Join(truncatedToolNames, ", "))
+							errMsg := fmt.Sprintf(
+								"[模型连续 %d 次生成超长工具调用，输出 token 不足以容纳完整参数。"+
+									"请手动将大文件拆分为多次小写入（每次 <8KB），或缩短输出内容后重试。]",
+								outputTooLongRetries)
+							_, _ = o.sessions.AddMessage(request.SessionID, provider.RoleAssistant, errMsg, nil, "")
+							events <- types.NewContentEvent("\n\n❌ " + errMsg + "\n\n")
+							events <- types.NewDoneEvent(&totalUsage)
+							return
+						}
+
+						errMsg := fmt.Sprintf(
+							"[System: Your tool call output was too long and got truncated "+
+								"(exceeded max output tokens). The tool call arguments were "+
+								"incomplete / invalid JSON and cannot be executed. "+
+								"Total %d tool call(s) failed (tools: %s). "+
+								"You MUST reduce the output size — for example, when writing "+
+								"large files, split the content into multiple smaller write_file "+
+								"calls (each under 8KB). Do NOT repeat the same large tool call. "+
+								"This is attempt %d of %d before the task is terminated.]",
+							droppedCount, strings.Join(truncatedToolNames, ", "),
+							outputTooLongRetries, maxOutputTooLongRetries)
+
+						events <- types.NewContentEvent("\n\n⚠️ 模型输出超长导致工具调用参数被截断（超出最大输出 token 限制），已中止执行。请缩小输出内容后重试。\n\n")
+
+						// Append as assistant message so the LLM sees the feedback
+						messages = append(messages, provider.Message{
+							Role:    provider.RoleAssistant,
+							Content: errMsg,
+						})
+						_, _ = o.sessions.AddMessage(request.SessionID, provider.RoleAssistant, errMsg, nil, "")
+						continue
+					}
+				} else if droppedCount > 0 {
+					// Some valid, some invalid — keep only valid ones
+					resp.ToolCalls = validCalls
+				}
 			}
 
 			shouldStop := resp.FinishReason == provider.FinishReasonStop ||
@@ -264,6 +634,70 @@ func (o *StandardOrchestrator) Run(ctx context.Context, request *RunRequest) (<-
 				(len(resp.ToolCalls) == 0 && resp.FinishReason != provider.FinishReasonToolCalls)
 
 			if shouldStop {
+				// Detect abnormal empty stop response: model returned stop with
+				// no content AND no tool calls.  This typically happens when the
+				// request payload is too large for the provider to process (even
+				// if it didn't return an explicit error).  The pattern has been
+				// observed with GLM-5 at ~167 KB request size.
+				//
+				// Strategy: use BudgetMessages with an artificially reduced byte
+				// budget (60% of current estimated size) to force aggressive
+				// truncation, then retry once.  TruncateOnly (token-based) is
+				// insufficient because the problem is byte-size, not token count.
+				if resp.Content == "" && len(resp.ToolCalls) == 0 && iteration > 0 {
+					if !emptyResponseRetried && sessionCompactor != nil {
+						emptyResponseRetried = true
+						currentBytes := sessionCompactor.EstimateRequestBytes(messages, toolsOverhead)
+						slog.Warn("StandardOrchestrator: empty stop response detected, forcing byte-budget truncation and retrying",
+							"sessionID", request.SessionID,
+							"iteration", iteration,
+							"messageCount", len(messages),
+							"estimatedBytes", currentBytes,
+							"finishReason", resp.FinishReason)
+						events <- types.NewContentEvent("\n\n⚠️ 模型返回空响应（可能上下文过长），正在压缩后重试…\n\n")
+
+						// Force truncation: use 60% of current size as budget
+						reducedBudget := currentBytes * 60 / 100
+						if reducedBudget < 20000 {
+							reducedBudget = 20000 // floor: 20 KB
+						}
+						reducedCompactor := sessionCompactor.WithMaxRequestBytes(reducedBudget)
+						truncated := reducedCompactor.BudgetMessages(messages, toolsOverhead, lastRoundMsgCount)
+
+						newBytes := sessionCompactor.EstimateRequestBytes(truncated, toolsOverhead)
+						if newBytes < currentBytes {
+							slog.Info("StandardOrchestrator: byte-budget truncation succeeded",
+								"sessionID", request.SessionID,
+								"beforeBytes", currentBytes,
+								"afterBytes", newBytes,
+								"beforeMsgs", len(messages),
+								"afterMsgs", len(truncated))
+							messages = truncated
+							o.compactor.IncrementCompactionCount(request.SessionID)
+							// Reset connections to get a fresh ALB session
+							if resettable, ok := request.Provider.(provider.ConnectionResettable); ok {
+								resettable.ResetConnections()
+							}
+							continue
+						}
+						slog.Warn("StandardOrchestrator: byte-budget truncation did not reduce size, cannot retry",
+							"sessionID", request.SessionID,
+							"beforeBytes", currentBytes,
+							"afterBytes", newBytes)
+					}
+
+					// Already retried or truncation didn't help: report error
+					slog.Error("StandardOrchestrator: empty stop response, giving up",
+						"sessionID", request.SessionID,
+						"iteration", iteration,
+						"emptyResponseRetried", emptyResponseRetried)
+					errMsg := "[模型返回了空响应，可能是上下文过长导致。请尝试新建会话或缩短输入内容。]"
+					_, _ = o.sessions.AddMessage(request.SessionID, provider.RoleAssistant, errMsg, nil, "")
+					events <- types.NewContentEvent(errMsg)
+					events <- types.NewDoneEvent(&totalUsage)
+					return
+				}
+
 				// LLM signaled completion - we're done
 				slog.Info("StandardOrchestrator: LLM signaled stop",
 					"sessionID", request.SessionID,
@@ -311,6 +745,9 @@ func (o *StandardOrchestrator) Run(ctx context.Context, request *RunRequest) (<-
 				return
 			}
 
+			// Successful provider call — reset transient retry counter
+			transientRetries = 0
+
 			// Process tool calls: append assistant message (with tool calls) FIRST
 			assistantMsg := provider.Message{
 				Role:      provider.RoleAssistant,
@@ -343,6 +780,10 @@ func (o *StandardOrchestrator) Run(ctx context.Context, request *RunRequest) (<-
 				"errorCount", toolErrorCount)
 			messages = append(messages, toolResults...)
 
+			// Track how many messages this round added (1 assistant + N tool results)
+			// so BudgetMessages on the next iteration knows what to protect.
+			lastRoundMsgCount = 1 + len(toolResults)
+
 			// Check for consecutive tool errors to prevent infinite loops.
 			// Only count as consecutive when ALL tools in the batch fail (matching original behavior).
 			allErrors := len(toolResults) > 0 && toolErrorCount == len(toolResults)
@@ -356,18 +797,42 @@ func (o *StandardOrchestrator) Run(ctx context.Context, request *RunRequest) (<-
 					"maxConsecutiveErrors", maxConsecutiveToolErrors)
 
 				if consecutiveToolErrors >= maxConsecutiveToolErrors {
-					slog.Error("StandardOrchestrator: stopping due to consecutive tool errors",
+					// First time hitting threshold: give the model one final chance.
+					// Second time (counter exceeded threshold): hard terminate.
+					if consecutiveToolErrors > maxConsecutiveToolErrors {
+						slog.Error("StandardOrchestrator: hard stop after final chance exhausted",
+							"sessionID", request.SessionID,
+							"consecutiveErrors", consecutiveToolErrors)
+						errMsg := fmt.Sprintf("[连续 %d 轮工具调用全部失败，任务已终止]", consecutiveToolErrors)
+						events <- types.Event{
+							Type:    types.EventTypeDone,
+							Content: errMsg,
+						}
+						return
+					}
+
+					slog.Error("StandardOrchestrator: consecutive tool errors hit threshold, giving model one final chance",
 						"sessionID", request.SessionID,
 						"consecutiveErrors", consecutiveToolErrors)
-					// Add a message to inform the LLM
-					errMsg := "[System: Multiple consecutive tool call errors detected. Stopping to prevent infinite loop. Please review the error messages and try a different approach.]"
+					errMsg := fmt.Sprintf("[System: %d consecutive tool call rounds have ALL failed. "+
+						"The tools or services you are calling may be unavailable. "+
+						"Do NOT call the same failing tool again. "+
+						"Either try a completely different approach, use a different tool, or explain to the user what went wrong and stop.]",
+						consecutiveToolErrors)
 					_, _ = o.sessions.AddMessage(request.SessionID, provider.RoleAssistant, errMsg, nil, "")
+					messages = append(messages, provider.Message{
+						Role:    provider.RoleAssistant,
+						Content: errMsg,
+					})
 					events <- types.Event{
 						Type:    types.EventTypeContent,
-						Content: "\n\n" + errMsg + "\n",
+						Content: "\n\n⚠️ " + errMsg + "\n\n",
 					}
-					events <- types.NewDoneEvent(&totalUsage)
-					return
+					// Give the model one final chance: continue the loop so
+					// the model sees the error message and can respond with
+					// text (stop) or try a different tool.  If it fails again,
+					// consecutiveToolErrors > maxConsecutiveToolErrors triggers hard stop above.
+					continue
 				}
 			} else {
 				// Reset error counter on successful tool execution
@@ -396,13 +861,8 @@ func (o *StandardOrchestrator) Run(ctx context.Context, request *RunRequest) (<-
 	return events, nil
 }
 
-// callProvider 调用提供商（Chat 或 Stream 模式）并收集响应
-func (o *StandardOrchestrator) callProvider(ctx context.Context, prov provider.Provider, req provider.ChatRequest, events chan<- types.Event, useChat bool) (*provider.ChatResponse, error) {
-	if useChat {
-		slog.Info("StandardOrchestrator: using Chat mode (post-compaction)", "useChat", true)
-		return prov.Chat(ctx, req)
-	}
-
+// callProvider calls the provider in Stream mode and collects the response.
+func (o *StandardOrchestrator) callProvider(ctx context.Context, prov provider.Provider, req provider.ChatRequest, events chan<- types.Event) (*provider.ChatResponse, error) {
 	// Stream mode: collect response while forwarding events
 	eventChan, streamErr := prov.Stream(ctx, req)
 	if streamErr != nil {
@@ -430,11 +890,19 @@ func (o *StandardOrchestrator) callProvider(ctx context.Context, prov provider.P
 		}
 		if event.Delta != "" {
 			resp.Content += event.Delta
-			events <- types.Event{Type: types.EventTypeContent, Content: event.Delta}
+			select {
+			case events <- types.Event{Type: types.EventTypeContent, Content: event.Delta}:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
 		}
 		if event.Thinking != "" {
 			thinkingBuilder += event.Thinking
-			events <- types.Event{Type: types.EventTypeThinking, Thinking: event.Thinking}
+			select {
+			case events <- types.Event{Type: types.EventTypeThinking, Thinking: event.Thinking}:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
 		}
 		if event.FinishReason != "" {
 			resp.FinishReason = event.FinishReason
@@ -465,7 +933,8 @@ func (o *StandardOrchestrator) callProvider(ctx context.Context, prov provider.P
 			}
 		}
 		if event.ToolCallUpdate != nil {
-			events <- types.Event{
+			select {
+			case events <- types.Event{
 				Type: types.EventTypeToolCallUpdate,
 				ToolCallUpdate: &types.ToolCallUpdateEvent{
 					ToolCallID: event.ToolCallUpdate.ID,
@@ -473,6 +942,9 @@ func (o *StandardOrchestrator) callProvider(ctx context.Context, prov provider.P
 					Status:     event.ToolCallUpdate.Status,
 					Arguments:  event.ToolCallUpdate.Arguments,
 				},
+			}:
+			case <-ctx.Done():
+				return nil, ctx.Err()
 			}
 		}
 		if event.Usage != nil {
@@ -486,7 +958,11 @@ func (o *StandardOrchestrator) callProvider(ctx context.Context, prov provider.P
 		slog.Warn("callProvider: content empty but thinking received, using thinking as fallback",
 			"thinkingLen", len(thinkingBuilder))
 		resp.Content = thinkingBuilder
-		events <- types.Event{Type: types.EventTypeContent, Content: thinkingBuilder}
+		select {
+		case events <- types.Event{Type: types.EventTypeContent, Content: thinkingBuilder}:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 	}
 
 	// Convert pending tool calls to final slice and emit tool call events
@@ -494,7 +970,11 @@ func (o *StandardOrchestrator) callProvider(ctx context.Context, prov provider.P
 		resp.ToolCalls = append(resp.ToolCalls, *tc)
 		// Emit tool call event for frontend display
 		storageTc := providerToStorageToolCall(*tc)
-		events <- types.NewToolCallEvent(storageTc)
+		select {
+		case events <- types.NewToolCallEvent(storageTc):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 	}
 
 	// Adjust FinishReason based on actual tool calls
@@ -541,23 +1021,23 @@ func providerToStorageToolCall(tc provider.ToolCall) *storage.ToolCall {
 func (o *StandardOrchestrator) executeToolsSimple(ctx context.Context, toolCalls []provider.ToolCall, events chan<- types.Event, sessionID string) ([]provider.Message, int) {
 	var results []provider.Message
 	errorCount := 0
-	
+
 	// Inject session ID into context
 	if sessionID != "" {
 		ctx = tools.WithSessionID(ctx, sessionID)
 	}
-	
+
 	for _, tc := range toolCalls {
 		toolName := tc.Name
 		if tc.Function != nil {
 			toolName = tc.Function.Name
 		}
-		
+
 		args := tc.Arguments
 		if tc.Function != nil {
 			args = tc.Function.Arguments
 		}
-		
+
 		// Parse arguments
 		var argsMap map[string]any
 		if args != "" {
@@ -573,12 +1053,12 @@ func (o *StandardOrchestrator) executeToolsSimple(ctx context.Context, toolCalls
 				continue
 			}
 		}
-		
+
 		// Execute tool
 		start := time.Now()
 		result, err := o.registry.Execute(ctx, toolName, argsMap)
 		duration := time.Since(start)
-		
+
 		var output string
 		var isError bool
 		if err != nil {
@@ -592,10 +1072,10 @@ func (o *StandardOrchestrator) executeToolsSimple(ctx context.Context, toolCalls
 				errorCount++
 			}
 		}
-		
+
 		// Emit tool result event
 		events <- types.NewToolResultEvent(tc.ID, toolName, output, isError, duration.Milliseconds())
-		
+
 		// Add tool result message
 		results = append(results, provider.Message{
 			Role:       provider.RoleTool,
@@ -603,7 +1083,7 @@ func (o *StandardOrchestrator) executeToolsSimple(ctx context.Context, toolCalls
 			ToolCallID: tc.ID,
 		})
 	}
-	
+
 	return results, errorCount
 }
 
@@ -611,15 +1091,65 @@ func (o *StandardOrchestrator) executeToolsSimple(ctx context.Context, toolCalls
 func (o *StandardOrchestrator) buildMessagesLegacy(ctx context.Context, cached *scheduler.CachedSession, userInput string) ([]provider.Message, error) {
 	var messages []provider.Message
 
-	// Add system prompt if available
+	// Build system prompt: SystemPromptBuilder (primary) or static config (fallback)
+	var sysPromptContent string
 	if o.systemPrompt != nil {
+		// SystemPromptBuilder handles: memory search, MCP injection, tool listing, slots
 		content, err := o.systemPrompt.Build(ctx, userInput)
 		if err == nil && content != "" {
-			messages = append(messages, provider.Message{
-				Role:    provider.RoleSystem,
-				Content: content,
-			})
+			sysPromptContent = content
 		}
+	} else if o.config.SystemPrompt != "" {
+		// Static config fallback
+		sysPromptContent = o.config.SystemPrompt
+	} else {
+		// No prompt configured - use minimal default
+		sysPromptContent = "You are a helpful AI assistant."
+	}
+
+	slog.Info("standard orchestrator: system prompt built",
+		"usedBuilder", o.systemPrompt != nil,
+		"staticConfigPrompt", o.config.SystemPrompt,
+		"finalPromptLen", len(sysPromptContent),
+		"finalPromptPreview", truncateForLog(sysPromptContent, 500),
+	)
+	// Inject skills into system prompt before passing to ContextManager
+	if o.skillManager != nil {
+		skillsSection := skills.NewPromptSection(o.skillManager)
+		if cached.Session != nil && len(cached.Session.SelectedSkills) > 0 {
+			skillsSection.WithSelectedSkills(cached.Session.SelectedSkills)
+		}
+		var skillsContent string
+		if section := skillsSection.Build(); section != "" {
+			skillsContent += section
+		}
+		if activePrompts := skillsSection.BuildActivePrompts(); activePrompts != "" {
+			skillsContent += "\n" + activePrompts
+		}
+		if skillsContent != "" {
+			sysPromptContent += "\n\n" + skillsContent
+		}
+	}
+
+	// Use Context Manager if available (preferred for advanced compression)
+	if o.contextManager != nil && cached.Session != nil {
+		ctxMessages, err := o.contextManager.BuildContext(ctx, cached.Session.ID, sysPromptContent, userInput)
+		if err != nil {
+			slog.Warn("context manager failed, falling back to legacy method",
+				"sessionID", cached.Session.ID,
+				"error", err)
+			// Fall through to legacy method below
+		} else {
+			return ctxMessages, nil
+		}
+	}
+
+	// Legacy method: manual message loading
+	if sysPromptContent != "" {
+		messages = append(messages, provider.Message{
+			Role:    provider.RoleSystem,
+			Content: sysPromptContent,
+		})
 	}
 
 	// Add history messages (including tool calls)
@@ -659,38 +1189,6 @@ func (o *StandardOrchestrator) buildMessagesLegacy(ctx context.Context, cached *
 		messages = append(messages, provMsg)
 	}
 
-	// Inject skills section if skillManager is available
-	if o.skillManager != nil {
-		skillsSection := skills.NewPromptSection(o.skillManager)
-		if cached.Session != nil && len(cached.Session.SelectedSkills) > 0 {
-			skillsSection.WithSelectedSkills(cached.Session.SelectedSkills)
-		}
-		var skillsContent string
-		if section := skillsSection.Build(); section != "" {
-			skillsContent += section
-		}
-		if activePrompts := skillsSection.BuildActivePrompts(); activePrompts != "" {
-			skillsContent += "\n" + activePrompts
-		}
-		if skillsContent != "" {
-			// Find system message and append, or prepend new one
-			found := false
-			for i, msg := range messages {
-				if msg.Role == provider.RoleSystem {
-					messages[i].Content += "\n\n" + skillsContent
-					found = true
-					break
-				}
-			}
-			if !found {
-				messages = append([]provider.Message{{
-					Role:    provider.RoleSystem,
-					Content: skillsContent,
-				}}, messages...)
-			}
-		}
-	}
-
 	// Add current user input
 	messages = append(messages, provider.Message{
 		Role:    provider.RoleUser,
@@ -723,4 +1221,23 @@ func convertToolCalls(tcs []provider.ToolCall) []storage.ToolCall {
 		})
 	}
 	return result
+}
+
+// calculateToolsOverhead returns the JSON-serialized size of the tool
+// definitions that will be included in every ChatRequest.  This allows
+// BudgetMessages to use an accurate baseline instead of the default 20 KB
+// estimate, which can be off by 2-3x for large registries.
+func (o *StandardOrchestrator) calculateToolsOverhead() int {
+	if o.registry == nil {
+		return 0
+	}
+	tools, err := o.registry.ToProviderTools()
+	if err != nil || len(tools) == 0 {
+		return 0
+	}
+	data, err := json.Marshal(tools)
+	if err != nil {
+		return 0
+	}
+	return len(data)
 }

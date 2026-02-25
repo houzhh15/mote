@@ -65,6 +65,51 @@ func TestOpen_WALMode(t *testing.T) {
 	}
 }
 
+func TestOpen_BusyTimeout(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+
+	db, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer db.Close()
+
+	var timeout int
+	if err := db.QueryRow("PRAGMA busy_timeout").Scan(&timeout); err != nil {
+		t.Fatalf("query busy_timeout: %v", err)
+	}
+	if timeout != 30000 {
+		t.Errorf("busy_timeout = %d, want 30000", timeout)
+	}
+}
+
+func TestBuildDSN(t *testing.T) {
+	dsn := buildDSN("/tmp/test.db")
+	if dsn == "/tmp/test.db" {
+		t.Fatal("buildDSN should append query params")
+	}
+	// Verify key parameters are present
+	for _, want := range []string{"journal_mode", "busy_timeout", "_txlock=immediate"} {
+		if !contains(dsn, want) {
+			t.Errorf("DSN %q missing %q", dsn, want)
+		}
+	}
+}
+
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsStr(s, substr))
+}
+
+func containsStr(s, sub string) bool {
+	for i := 0; i <= len(s)-len(sub); i++ {
+		if s[i:i+len(sub)] == sub {
+			return true
+		}
+	}
+	return false
+}
+
 func TestOpen_ForeignKeys(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")

@@ -12,6 +12,7 @@ import {
   SettingsPage,
   NewChatPage,
   SkillCenterPage,
+  AgentsPage,
   ThemeProvider,
   ChatManagerProvider,
 } from '@mote/shared-ui';
@@ -87,6 +88,8 @@ const App: React.FC = () => {
         return <CronPage onSelectSession={handleSelectSession} />;
       case 'mcp':
         return <MCPPage />;
+      case 'agents':
+        return <AgentsPage />;
       case 'settings':
         return <SettingsPage hideStatusCard hideHelpCard />;
       default:

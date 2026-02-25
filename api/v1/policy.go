@@ -47,8 +47,9 @@ type ApprovalListResponse struct {
 
 // ApprovalRespondRequest represents a request to respond to an approval.
 type ApprovalRespondRequest struct {
-	Approved bool   `json:"approved"`
-	Reason   string `json:"reason,omitempty"`
+	Approved          bool   `json:"approved"`
+	Reason            string `json:"reason,omitempty"`
+	ModifiedArguments string `json:"modified_arguments,omitempty"`
 }
 
 // ApprovalRespondResponse represents the response to an approval action.
@@ -178,7 +179,7 @@ func (r *Router) HandleApprovalRespond(w http.ResponseWriter, req *http.Request)
 		return
 	}
 
-	err := r.approvalManager.HandleResponse(requestID, respondReq.Approved, respondReq.Reason)
+	err := r.approvalManager.HandleResponse(requestID, respondReq.Approved, respondReq.Reason, respondReq.ModifiedArguments)
 	if err != nil {
 		handlers.SendError(w, http.StatusNotFound, ErrCodeNotFound, "Approval request not found or already processed")
 		return
@@ -195,4 +196,44 @@ func (r *Router) HandleApprovalRespond(w http.ResponseWriter, req *http.Request)
 		Approved:  respondReq.Approved,
 		Message:   message,
 	})
+}
+
+// HandleGetPolicyConfig returns the full policy configuration.
+func (r *Router) HandleGetPolicyConfig(w http.ResponseWriter, req *http.Request) {
+	if r.policyExecutor == nil {
+		handlers.SendJSON(w, http.StatusOK, policy.DefaultPolicy())
+		return
+	}
+	handlers.SendJSON(w, http.StatusOK, r.policyExecutor.GetPolicy())
+}
+
+// HandleUpdatePolicyConfig updates the policy configuration.
+func (r *Router) HandleUpdatePolicyConfig(w http.ResponseWriter, req *http.Request) {
+	var newPolicy policy.ToolPolicy
+	if err := json.NewDecoder(req.Body).Decode(&newPolicy); err != nil {
+		handlers.SendError(w, http.StatusBadRequest, ErrCodeInvalidRequest, "Invalid request body")
+		return
+	}
+	if err := policy.ValidatePolicy(&newPolicy); err != nil {
+		handlers.SendError(w, http.StatusBadRequest, ErrCodeValidationFailed, err.Error())
+		return
+	}
+	if r.policyExecutor == nil {
+		handlers.SendError(w, http.StatusServiceUnavailable, ErrCodeServiceUnavailable, "Policy executor not initialized")
+		return
+	}
+	r.policyExecutor.SetPolicy(&newPolicy)
+
+	// Sync new policy fields to runner (scrub rules, block message, circuit breaker)
+	if r.runner != nil {
+		if err := r.runner.SetScrubRules(newPolicy.ScrubRules); err != nil {
+			// Log but don't fail the request — policy itself was saved
+			handlers.SendJSON(w, http.StatusOK, map[string]any{"success": true, "warning": "scrub rules compile error: " + err.Error()})
+			return
+		}
+		r.runner.SetBlockMessageTemplate(newPolicy.BlockMessageTemplate)
+		r.runner.SetCircuitBreakerThreshold(newPolicy.CircuitBreakerThreshold)
+	}
+
+	handlers.SendJSON(w, http.StatusOK, map[string]any{"success": true})
 }

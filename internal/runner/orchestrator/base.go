@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"mote/internal/compaction"
+	internalContext "mote/internal/context"
 	"mote/internal/hooks"
 	"mote/internal/mcp/client"
 	"mote/internal/prompt"
@@ -22,10 +23,11 @@ type BaseOrchestrator struct {
 	systemPrompt *prompt.SystemPromptBuilder
 
 	// Optional components
-	skillManager *skills.Manager
-	hookManager  *hooks.Manager
-	mcpManager   *client.Manager
-	toolExecutor ToolExecutorFunc
+	skillManager   *skills.Manager
+	hookManager    *hooks.Manager
+	mcpManager     *client.Manager
+	contextManager *internalContext.Manager
+	toolExecutor   ToolExecutorFunc
 
 	// Configuration
 	config Config
@@ -69,6 +71,11 @@ func (b *BaseOrchestrator) SetMCPManager(m *client.Manager) {
 	b.mcpManager = m
 }
 
+// SetContextManager 设置上下文管理器
+func (b *BaseOrchestrator) SetContextManager(cm *internalContext.Manager) {
+	b.contextManager = cm
+}
+
 // SetToolExecutor 设置工具执行器
 func (b *BaseOrchestrator) SetToolExecutor(te ToolExecutorFunc) {
 	b.toolExecutor = te
@@ -86,7 +93,7 @@ func (b *BaseOrchestrator) triggerHook(ctx context.Context, hookCtx *hooks.Conte
 func (b *BaseOrchestrator) compressIfNeeded(ctx context.Context, messages []provider.Message, prov provider.Provider) []provider.Message {
 	if b.compactor != nil && b.compactor.NeedsCompaction(messages) {
 		compacted := b.compactor.CompactWithFallback(ctx, messages, prov)
-		
+
 		// Sanity check: compacted result must have at least a user or assistant message
 		hasConv := false
 		for _, m := range compacted {
@@ -96,20 +103,22 @@ func (b *BaseOrchestrator) compressIfNeeded(ctx context.Context, messages []prov
 			}
 		}
 		if hasConv {
-			b.compactor.IncrementCompactionCount(messages[0].Content) // Use first message as session indicator
+			// NOTE: Cannot increment compaction count here because we don't have sessionID.
+			// The caller (StandardOrchestrator) handles compaction counting in its primary path.
+			// This fallback path is only used when compactor is set but the primary path wasn't taken.
 			return compacted
 		}
 	}
-	
+
 	// Fallback: simple compression if we have too many messages
 	// Keep system messages and the most recent conversation messages
 	if len(messages) <= b.config.MaxTokens/1000 { // Rough heuristic: ~1000 tokens per message
 		return messages
 	}
-	
+
 	var systemMsgs []provider.Message
 	var convMsgs []provider.Message
-	
+
 	for _, msg := range messages {
 		if msg.Role == provider.RoleSystem {
 			systemMsgs = append(systemMsgs, msg)
@@ -117,25 +126,25 @@ func (b *BaseOrchestrator) compressIfNeeded(ctx context.Context, messages []prov
 			convMsgs = append(convMsgs, msg)
 		}
 	}
-	
+
 	// Keep approx 80% of max messages to leave room for response
 	maxConvMessages := (b.config.MaxTokens / 1000) * 4 / 5
 	if maxConvMessages < 10 {
 		maxConvMessages = 10
 	}
-	
+
 	// Keep most recent conversation messages
 	startIdx := 0
 	if len(convMsgs) > maxConvMessages {
 		startIdx = len(convMsgs) - maxConvMessages
 	}
 	keptConv := convMsgs[startIdx:]
-	
+
 	// Combine system + kept messages
 	result := make([]provider.Message, 0, len(systemMsgs)+len(keptConv))
 	result = append(result, systemMsgs...)
 	result = append(result, keptConv...)
-	
+
 	return result
 }
 
@@ -157,4 +166,13 @@ func (b *BaseOrchestrator) buildChatRequest(messages []provider.Message, model s
 		ConversationID: sessionID,
 	}
 	return req
+}
+
+// truncateForLog truncates a string to maxLen runes for debug logging.
+func truncateForLog(s string, maxLen int) string {
+	runes := []rune(s)
+	if len(runes) <= maxLen {
+		return s
+	}
+	return string(runes[:maxLen]) + "...(truncated)"
 }

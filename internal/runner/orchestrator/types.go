@@ -26,11 +26,12 @@ type RunRequest struct {
 
 // Config 控制循环行为
 type Config struct {
-	MaxIterations    int
-	MaxTokens        int
-	Temperature      float64
-	StreamOutput     bool
-	Timeout          time.Duration
+	MaxIterations int
+	MaxTokens     int
+	Temperature   float64
+	StreamOutput  bool
+	Timeout       time.Duration
+	SystemPrompt  string // Static system prompt fallback (used when SystemPromptBuilder is nil)
 }
 
 // LoopState 封装循环状态
@@ -42,7 +43,6 @@ type LoopState struct {
 	TotalTokens            int64
 	ContextRetried         bool
 	TransientRetries       int
-	UseChat                bool // After compaction, use Chat mode instead of Stream
 }
 
 // Usage 是 runner/types.Usage 的别名

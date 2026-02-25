@@ -331,3 +331,139 @@ func TestRegistryConcurrency(t *testing.T) {
 
 	wg.Wait()
 }
+
+func TestRegistry_Filter(t *testing.T) {
+	newReg := func() *Registry {
+		r := NewRegistry()
+		for _, name := range []string{"a", "b", "c"} {
+			r.MustRegister(&mockTool{
+				name: name, description: name, params: map[string]any{},
+				execFn: func(ctx context.Context, args map[string]any) (ToolResult, error) {
+					return NewSuccessResult(""), nil
+				},
+			})
+		}
+		return r
+	}
+
+	t.Run("allowlist filters to subset", func(t *testing.T) {
+		r := newReg()
+		r.Filter([]string{"a", "b"})
+		if r.Len() != 2 {
+			t.Fatalf("expected 2 tools, got %d", r.Len())
+		}
+		if _, ok := r.Get("c"); ok {
+			t.Error("tool 'c' should have been filtered out")
+		}
+	})
+
+	t.Run("wildcard keeps all", func(t *testing.T) {
+		r := newReg()
+		r.Filter([]string{"*"})
+		if r.Len() != 3 {
+			t.Fatalf("expected 3 tools, got %d", r.Len())
+		}
+	})
+
+	t.Run("empty allowlist removes all", func(t *testing.T) {
+		r := newReg()
+		r.Filter([]string{})
+		if r.Len() != 0 {
+			t.Fatalf("expected 0 tools, got %d", r.Len())
+		}
+	})
+
+	t.Run("exclusion pattern", func(t *testing.T) {
+		r := newReg()
+		r.Filter([]string{"*", "!b"})
+		if r.Len() != 2 {
+			t.Fatalf("expected 2 tools, got %d", r.Len())
+		}
+		if _, ok := r.Get("b"); ok {
+			t.Error("tool 'b' should have been excluded")
+		}
+	})
+
+	t.Run("glob pattern", func(t *testing.T) {
+		r := NewRegistry()
+		for _, name := range []string{"mcp_server1_tool1", "mcp_server1_tool2", "mcp_server2_tool1", "read_file"} {
+			r.MustRegister(&mockTool{
+				name: name, description: name, params: map[string]any{},
+				execFn: func(ctx context.Context, args map[string]any) (ToolResult, error) {
+					return NewSuccessResult(""), nil
+				},
+			})
+		}
+		r.Filter([]string{"mcp_server1_*", "read_file"})
+		if r.Len() != 3 {
+			t.Fatalf("expected 3 tools, got %d", r.Len())
+		}
+		if _, ok := r.Get("mcp_server2_tool1"); ok {
+			t.Error("mcp_server2_tool1 should have been filtered out")
+		}
+	})
+
+	t.Run("glob with exclusion", func(t *testing.T) {
+		r := NewRegistry()
+		for _, name := range []string{"mcp_s1_a", "mcp_s1_b", "mcp_s1_c", "other"} {
+			r.MustRegister(&mockTool{
+				name: name, description: name, params: map[string]any{},
+				execFn: func(ctx context.Context, args map[string]any) (ToolResult, error) {
+					return NewSuccessResult(""), nil
+				},
+			})
+		}
+		r.Filter([]string{"mcp_s1_*", "!mcp_s1_c"})
+		if r.Len() != 2 {
+			t.Fatalf("expected 2 tools, got %d", r.Len())
+		}
+		if _, ok := r.Get("mcp_s1_c"); ok {
+			t.Error("mcp_s1_c should have been excluded")
+		}
+		if _, ok := r.Get("other"); ok {
+			t.Error("other should have been filtered out")
+		}
+	})
+}
+
+func TestRegistry_Remove(t *testing.T) {
+	r := NewRegistry()
+	r.MustRegister(&mockTool{
+		name: "x", description: "x", params: map[string]any{},
+		execFn: func(ctx context.Context, args map[string]any) (ToolResult, error) {
+			return NewSuccessResult(""), nil
+		},
+	})
+	if r.Len() != 1 {
+		t.Fatal("expected 1 tool")
+	}
+	r.Remove("x")
+	if r.Len() != 0 {
+		t.Fatal("expected 0 tools after Remove")
+	}
+	// Remove non-existent should not panic
+	r.Remove("nonexistent")
+}
+
+func TestRegistry_SetAgentID(t *testing.T) {
+	r := NewRegistry()
+	if r.GetAgentID() != "" {
+		t.Error("expected empty agentID initially")
+	}
+	r.SetAgentID("agent-1")
+	if r.GetAgentID() != "agent-1" {
+		t.Errorf("expected 'agent-1', got %q", r.GetAgentID())
+	}
+
+	// Clone should inherit agentID
+	clone := r.Clone()
+	if clone.GetAgentID() != "agent-1" {
+		t.Errorf("clone expected 'agent-1', got %q", clone.GetAgentID())
+	}
+
+	// Changing clone agentID should not affect original
+	clone.SetAgentID("agent-2")
+	if r.GetAgentID() != "agent-1" {
+		t.Error("original agentID should not change")
+	}
+}

@@ -25,6 +25,7 @@ import (
 	"mote/internal/prompts"
 	"mote/internal/provider"
 	"mote/internal/runner"
+	"mote/internal/runner/delegate"
 	"mote/internal/skills"
 	"mote/internal/storage"
 	"mote/internal/tools"
@@ -50,6 +51,7 @@ type Server struct {
 	toolRegistry     *tools.Registry
 	memoryIndex      *memory.MemoryIndex
 	memoryManager    *memory.MemoryManager
+	recallEngine     *memory.RecallEngine
 	mcpClient        *client.Manager
 	mcpServer        *server.Server
 	cronScheduler    *cron.Scheduler
@@ -63,6 +65,7 @@ type Server struct {
 	embeddedServer   v1.EmbeddedServerInterface
 	versionChecker   interface{} // *skills.VersionChecker
 	skillUpdater     interface{} // *skills.SkillUpdater
+	delegateTracker  *delegate.DelegationTracker
 }
 
 // NewServer creates a new gateway server.
@@ -141,6 +144,7 @@ func (s *Server) setupRoutes() {
 		Tools:            s.toolRegistry,
 		Memory:           s.memoryIndex,
 		MemoryManager:    s.memoryManager,
+		RecallEngine:     s.recallEngine,
 		MCPClient:        s.mcpClient,
 		MCPServer:        s.mcpServer,
 		CronScheduler:    s.cronScheduler,
@@ -163,6 +167,9 @@ func (s *Server) setupRoutes() {
 	}
 	if s.skillUpdater != nil {
 		s.apiRouter.SetSkillUpdater(s.skillUpdater)
+	}
+	if s.delegateTracker != nil {
+		s.apiRouter.SetDelegateTracker(s.delegateTracker)
 	}
 
 	// Register API v1 routes
@@ -410,6 +417,14 @@ func (s *Server) SetMemoryManager(m *memory.MemoryManager) {
 	}
 }
 
+// SetRecallEngine sets the recall engine for stats tracking.
+func (s *Server) SetRecallEngine(re *memory.RecallEngine) {
+	s.recallEngine = re
+	if s.apiRouter != nil {
+		s.apiRouter.SetRecallEngine(re)
+	}
+}
+
 // SetMCPClient sets the MCP client manager dependency.
 func (s *Server) SetMCPClient(c *client.Manager) {
 	s.mcpClient = c
@@ -499,6 +514,14 @@ func (s *Server) SetMultiPool(pool *provider.MultiProviderPool) {
 	// Also update the API router
 	if s.apiRouter != nil {
 		s.apiRouter.SetMultiPool(pool)
+	}
+}
+
+// SetDelegateTracker sets the delegate tracker for audit queries.
+func (s *Server) SetDelegateTracker(t *delegate.DelegationTracker) {
+	s.delegateTracker = t
+	if s.apiRouter != nil {
+		s.apiRouter.SetDelegateTracker(t)
 	}
 }
 

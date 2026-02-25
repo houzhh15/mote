@@ -1,0 +1,74 @@
+# Multi-Agent Delegate Configuration Example
+# Add this to your ~/.mote/config.yaml to enable multi-agent delegation.
+#
+# The delegate tool allows the main agent to dispatch specialized tasks to
+# sub-agents, each with their own model, tools, and system prompt.
+
+# Global delegation settings
+delegate:
+  enabled: true
+  max_depth: 3          # Maximum delegation chain depth (1-10)
+  default_timeout: 5m   # Default timeout for delegated tasks
+
+# Agent definitions
+agents:
+  researcher:
+    description: "Research specialist for gathering and synthesizing information"
+    model: "gpt-4o"
+    system_prompt: |
+      You are a research specialist. Your role is to:
+      - Search for information using available tools
+      - Synthesize findings into clear, structured summaries
+      - Cite sources when possible
+      - Focus on accuracy and completeness
+    tools:
+      - "read_file"
+      - "grep"
+      - "list_dir"
+      - "http"
+      - "mcp_*"        # Include all MCP tools via glob
+      - "!write_file"   # Exclude write operations
+    max_depth: 2
+    timeout: "3m"
+    max_iterations: 20
+    temperature: 0.3
+
+  coder:
+    description: "Code implementation specialist for writing and modifying code"
+    model: "claude-sonnet-4-20250514"
+    system_prompt: |
+      You are a coding specialist. Your role is to:
+      - Write clean, well-structured code
+      - Follow project conventions and patterns
+      - Include error handling and edge cases
+      - Add comments for complex logic
+    tools:
+      - "read_file"
+      - "write_file"
+      - "grep"
+      - "list_dir"
+      - "patch"
+    max_depth: 1
+    timeout: "5m"
+    max_iterations: 30
+    temperature: 0.2
+
+  reviewer:
+    description: "Code review specialist for quality assurance"
+    model: "gpt-4o"
+    system_prompt: |
+      You are a code review specialist. Your role is to:
+      - Review code changes for correctness and style
+      - Identify potential bugs, security issues, and performance problems
+      - Suggest improvements with specific code examples
+      - Be constructive and prioritize critical issues
+    tools:
+      - "read_file"
+      - "grep"
+      - "list_dir"
+      - "!write_file"
+      - "!patch"
+    max_depth: 1
+    timeout: "3m"
+    max_iterations: 15
+    temperature: 0.1

@@ -156,12 +156,40 @@ func (mm *MemoryManager) AddBatch(ctx context.Context, entries []MemoryEntry) (*
 }
 
 // OnSessionEnd processes session end for summary capture.
+// It extracts key memories via LLM summary, indexes them, and writes to daily log.
 func (mm *MemoryManager) OnSessionEnd(ctx context.Context, sessionID string, messages []Message) error {
 	if mm.summaryCapture == nil {
 		return nil
 	}
-	_, err := mm.summaryCapture.OnSessionEnd(ctx, sessionID, messages)
-	return err
+	entries, err := mm.summaryCapture.OnSessionEnd(ctx, sessionID, messages)
+	if err != nil {
+		return err
+	}
+
+	// Index captured entries so they appear in search and stats
+	for _, entry := range entries {
+		if indexErr := mm.indexMgr.Index(ctx, entry); indexErr != nil {
+			mm.logger.Warn().Err(indexErr).Str("id", entry.ID).Msg("memory_manager: failed to index captured entry")
+		}
+	}
+
+	// Append captured entries to daily log
+	if len(entries) > 0 {
+		var summary string
+		for _, e := range entries {
+			cat := e.Category
+			if cat == "" {
+				cat = CategoryOther
+			}
+			summary += fmt.Sprintf("- [%s] %s\n", cat, e.Content)
+		}
+		section := "自动捕获"
+		if appendErr := mm.AppendDailyLog(ctx, summary, section); appendErr != nil {
+			mm.logger.Warn().Err(appendErr).Msg("memory_manager: failed to append to daily log")
+		}
+	}
+
+	return nil
 }
 
 // SetLLMProvider configures the LLM provider for summary capture.
@@ -282,6 +310,16 @@ func (mm *MemoryManager) GetByID(ctx context.Context, id string) (*MemoryEntry, 
 // List returns entries with pagination.
 func (mm *MemoryManager) List(ctx context.Context, limit, offset int) ([]SearchResult, error) {
 	return mm.indexMgr.List(ctx, limit, offset)
+}
+
+// ListFiltered returns entries with pagination and optional filtering.
+func (mm *MemoryManager) ListFiltered(ctx context.Context, limit, offset int, filter ListFilter) ([]SearchResult, error) {
+	return mm.indexMgr.ListFiltered(ctx, limit, offset, filter)
+}
+
+// CountFiltered returns the number of entries matching the filter.
+func (mm *MemoryManager) CountFiltered(ctx context.Context, filter ListFilter) (int, error) {
+	return mm.indexMgr.CountFiltered(ctx, filter)
 }
 
 // Count returns the number of indexed entries.

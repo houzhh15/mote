@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,19 +15,96 @@ import (
 
 // Config 是应用配置的根结构体
 type Config struct {
-	Version  string         `mapstructure:"version" yaml:"version"`
-	Gateway  GatewayConfig  `mapstructure:"gateway" yaml:"gateway"`
-	Provider ProviderConfig `mapstructure:"provider" yaml:"provider"` // 新增: Provider 选择
-	Copilot  CopilotConfig  `mapstructure:"copilot" yaml:"copilot"`
-	Ollama   OllamaConfig   `mapstructure:"ollama" yaml:"ollama"`   // 新增: Ollama 配置
-	Minimax  MinimaxConfig  `mapstructure:"minimax" yaml:"minimax"` // 新增: MiniMax 配置
-	Log      LogConfig      `mapstructure:"log" yaml:"log"`
-	Storage  StorageConfig  `mapstructure:"storage" yaml:"storage"`
-	Memory   MemoryConfig   `mapstructure:"memory" yaml:"memory"`
-	JSVM     JSVMConfig     `mapstructure:"jsvm" yaml:"jsvm"`
-	Cron     CronConfig     `mapstructure:"cron" yaml:"cron"`
-	MCP      MCPConfig      `mapstructure:"mcp" yaml:"mcp"`
-	Channels ChannelsConfig `mapstructure:"channels" yaml:"channels"`
+	Version  string                 `mapstructure:"version" yaml:"version"`
+	Gateway  GatewayConfig          `mapstructure:"gateway" yaml:"gateway"`
+	Provider ProviderConfig         `mapstructure:"provider" yaml:"provider"` // 新增: Provider 选择
+	Copilot  CopilotConfig          `mapstructure:"copilot" yaml:"copilot"`
+	Ollama   OllamaConfig           `mapstructure:"ollama" yaml:"ollama"`   // 新增: Ollama 配置
+	Minimax  MinimaxConfig          `mapstructure:"minimax" yaml:"minimax"` // 新增: MiniMax 配置
+	GLM      GLMConfig              `mapstructure:"glm" yaml:"glm"`         // 新增: GLM (智谱AI) 配置
+	Log      LogConfig              `mapstructure:"log" yaml:"log"`
+	Storage  StorageConfig          `mapstructure:"storage" yaml:"storage"`
+	Memory   MemoryConfig           `mapstructure:"memory" yaml:"memory"`
+	JSVM     JSVMConfig             `mapstructure:"jsvm" yaml:"jsvm"`
+	Cron     CronConfig             `mapstructure:"cron" yaml:"cron"`
+	MCP      MCPConfig              `mapstructure:"mcp" yaml:"mcp"`
+	Channels ChannelsConfig         `mapstructure:"channels" yaml:"channels"`
+	Agents   map[string]AgentConfig `mapstructure:"agents" yaml:"agents,omitempty"`
+	Delegate DelegateConfig         `mapstructure:"delegate" yaml:"delegate,omitempty"`
+}
+
+// AgentConfig 子代理配置
+type AgentConfig struct {
+	Enabled       *bool    `json:"enabled,omitempty" mapstructure:"enabled" yaml:"enabled,omitempty"`
+	Description   string   `json:"description" mapstructure:"description" yaml:"description,omitempty"`
+	Provider      string   `json:"provider" mapstructure:"provider" yaml:"provider,omitempty"`
+	Model         string   `json:"model" mapstructure:"model" yaml:"model,omitempty"`
+	SystemPrompt  string   `json:"system_prompt" mapstructure:"system_prompt" yaml:"system_prompt,omitempty"`
+	Tools         []string `json:"tools" mapstructure:"tools" yaml:"tools,omitempty"`
+	MaxDepth      int      `json:"max_depth" mapstructure:"max_depth" yaml:"max_depth,omitempty"`
+	Timeout       string   `json:"timeout" mapstructure:"timeout" yaml:"timeout,omitempty"`
+	MaxIterations int      `json:"max_iterations" mapstructure:"max_iterations" yaml:"max_iterations,omitempty"`
+	MaxTokens     int      `json:"max_tokens" mapstructure:"max_tokens" yaml:"max_tokens,omitempty"` // 最大输出 token 数，0 表示继承主 runner
+	Temperature   float64  `json:"temperature" mapstructure:"temperature" yaml:"temperature,omitempty"`
+}
+
+// IsEnabled returns true if the agent is enabled.
+// A nil Enabled pointer defaults to true (backward compatible).
+func (c *AgentConfig) IsEnabled() bool {
+	return c.Enabled == nil || *c.Enabled
+}
+
+// GetTimeout 解析 Timeout 字段为 time.Duration，默认返回 20 分钟
+func (c *AgentConfig) GetTimeout() time.Duration {
+	if c.Timeout == "" {
+		return 20 * time.Minute
+	}
+	d, err := time.ParseDuration(c.Timeout)
+	if err != nil {
+		return 20 * time.Minute
+	}
+	return d
+}
+
+// GetMaxDepth 返回最大递归深度，默认 3，上限 10
+func (c *AgentConfig) GetMaxDepth() int {
+	if c.MaxDepth <= 0 {
+		return 3
+	}
+	if c.MaxDepth > 10 {
+		return 10
+	}
+	return c.MaxDepth
+}
+
+// DelegateConfig 全局委托默认配置
+type DelegateConfig struct {
+	Enabled        bool   `mapstructure:"enabled" yaml:"enabled"`
+	MaxDepth       int    `mapstructure:"max_depth" yaml:"max_depth,omitempty"`
+	DefaultTimeout string `mapstructure:"default_timeout" yaml:"default_timeout,omitempty"`
+}
+
+// GetDefaultTimeout 解析 DefaultTimeout 字段为 time.Duration，默认返回 5 分钟
+func (c *DelegateConfig) GetDefaultTimeout() time.Duration {
+	if c.DefaultTimeout == "" {
+		return 5 * time.Minute
+	}
+	d, err := time.ParseDuration(c.DefaultTimeout)
+	if err != nil {
+		return 5 * time.Minute
+	}
+	return d
+}
+
+// GetMaxDepth 返回全局最大递归深度，默认 3，上限 10
+func (c *DelegateConfig) GetMaxDepth() int {
+	if c.MaxDepth <= 0 {
+		return 3
+	}
+	if c.MaxDepth > 10 {
+		return 10
+	}
+	return c.MaxDepth
 }
 
 // GatewayConfig 网关配置
@@ -121,6 +199,15 @@ type OllamaConfig struct {
 
 // MinimaxConfig MiniMax 云端 LLM 配置
 type MinimaxConfig struct {
+	APIKey    string `mapstructure:"api_key" yaml:"api_key"`       // API Key
+	Endpoint  string `mapstructure:"endpoint" yaml:"endpoint"`     // API 地址
+	Model     string `mapstructure:"model" yaml:"model"`           // 默认模型
+	MaxTokens int    `mapstructure:"max_tokens" yaml:"max_tokens"` // 最大输出 token 数
+	Timeout   string `mapstructure:"timeout" yaml:"timeout"`       // 超时时间
+}
+
+// GLMConfig GLM (智谱AI) 云端 LLM 配置
+type GLMConfig struct {
 	APIKey    string `mapstructure:"api_key" yaml:"api_key"`       // API Key
 	Endpoint  string `mapstructure:"endpoint" yaml:"endpoint"`     // API 地址
 	Model     string `mapstructure:"model" yaml:"model"`           // 默认模型
@@ -234,6 +321,7 @@ type ReplyConfig struct {
 // IMessageConfig iMessage 渠道配置
 type IMessageConfig struct {
 	Enabled   bool          `mapstructure:"enabled" yaml:"enabled"`
+	Model     string        `mapstructure:"model" yaml:"model,omitempty"` // 渠道专属模型（空=使用默认）
 	SelfID    string        `mapstructure:"self_id" yaml:"self_id"`
 	Trigger   TriggerConfig `mapstructure:"trigger" yaml:"trigger"`
 	Reply     ReplyConfig   `mapstructure:"reply" yaml:"reply"`
@@ -243,6 +331,7 @@ type IMessageConfig struct {
 // AppleNotesConfig Apple Notes 渠道配置
 type AppleNotesConfig struct {
 	Enabled       bool          `mapstructure:"enabled" yaml:"enabled"`
+	Model         string        `mapstructure:"model" yaml:"model,omitempty"` // 渠道专属模型（空=使用默认）
 	WatchFolder   string        `mapstructure:"watch_folder" yaml:"watch_folder"`
 	ArchiveFolder string        `mapstructure:"archive_folder" yaml:"archive_folder"`
 	PollInterval  time.Duration `mapstructure:"poll_interval" yaml:"poll_interval"`
@@ -253,6 +342,7 @@ type AppleNotesConfig struct {
 // AppleRemindersConfig Apple Reminders 渠道配置
 type AppleRemindersConfig struct {
 	Enabled      bool          `mapstructure:"enabled" yaml:"enabled"`
+	Model        string        `mapstructure:"model" yaml:"model,omitempty"` // 渠道专属模型（空=使用默认）
 	WatchList    string        `mapstructure:"watch_list" yaml:"watch_list"`
 	PollInterval time.Duration `mapstructure:"poll_interval" yaml:"poll_interval"`
 	Trigger      TriggerConfig `mapstructure:"trigger" yaml:"trigger"`
@@ -351,6 +441,72 @@ func Set(key string, value any) error {
 	return nil
 }
 
+// AddAgent 添加一个新的代理配置并持久化
+func AddAgent(name string, agent AgentConfig) error {
+	mu.Lock()
+	defer mu.Unlock()
+
+	if globalConfig == nil {
+		return errors.New("config not loaded")
+	}
+	if globalConfig.Agents == nil {
+		globalConfig.Agents = make(map[string]AgentConfig)
+	}
+	if _, exists := globalConfig.Agents[name]; exists {
+		return fmt.Errorf("agent already exists: %s", name)
+	}
+	globalConfig.Agents[name] = agent
+	viper.Set("agents", globalConfig.Agents)
+	if configPath != "" {
+		return save()
+	}
+	return nil
+}
+
+// UpdateAgent 更新已有代理配置并持久化
+func UpdateAgent(name string, agent AgentConfig) error {
+	mu.Lock()
+	defer mu.Unlock()
+
+	if globalConfig == nil {
+		return errors.New("config not loaded")
+	}
+	if globalConfig.Agents == nil || len(globalConfig.Agents) == 0 {
+		return fmt.Errorf("agent not found: %s", name)
+	}
+	if _, exists := globalConfig.Agents[name]; !exists {
+		return fmt.Errorf("agent not found: %s", name)
+	}
+	globalConfig.Agents[name] = agent
+	viper.Set("agents", globalConfig.Agents)
+	if configPath != "" {
+		return save()
+	}
+	return nil
+}
+
+// RemoveAgent 移除代理配置并持久化
+func RemoveAgent(name string) error {
+	mu.Lock()
+	defer mu.Unlock()
+
+	if globalConfig == nil {
+		return errors.New("config not loaded")
+	}
+	if globalConfig.Agents == nil {
+		return fmt.Errorf("agent not found: %s", name)
+	}
+	if _, exists := globalConfig.Agents[name]; !exists {
+		return fmt.Errorf("agent not found: %s", name)
+	}
+	delete(globalConfig.Agents, name)
+	viper.Set("agents", globalConfig.Agents)
+	if configPath != "" {
+		return save()
+	}
+	return nil
+}
+
 // Save 保存配置到文件
 func Save() error {
 	mu.Lock()
@@ -379,8 +535,8 @@ func save() error {
 		return err
 	}
 
-	// 写入文件
-	return os.WriteFile(configPath, data, 0644)
+	// 写入文件 (M08B: 使用 0600 保护含 API Key 的配置文件)
+	return os.WriteFile(configPath, data, 0600)
 }
 
 // SaveTo 保存配置到指定路径
@@ -408,4 +564,11 @@ func Reset() {
 	globalConfig = nil
 	configPath = ""
 	viper.Reset()
+}
+
+// SetTestConfig 设置全局配置（仅用于测试）
+func SetTestConfig(cfg *Config) {
+	mu.Lock()
+	defer mu.Unlock()
+	globalConfig = cfg
 }

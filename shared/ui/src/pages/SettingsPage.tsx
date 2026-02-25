@@ -19,6 +19,7 @@ import {
   Checkbox,
   Tag,
   Input,
+  Tabs,
   theme,
 } from 'antd';
 import {
@@ -31,11 +32,14 @@ import {
   ExclamationCircleOutlined,
   PoweroffOutlined,
   SettingOutlined,
+  SaveOutlined,
 } from '@ant-design/icons';
 import { MinimaxIcon } from '../components/MinimaxIcon';
+import { GlmIcon } from '../components/GlmIcon';
 import { useAPI } from '../context/APIContext';
 import type { ServiceStatus, AuthStatus, DeviceCodeResponse, ChannelStatus, IMessageChannelConfig, AppleNotesChannelConfig, AppleRemindersChannelConfig, ChannelConfig, Model, ProviderStatus } from '../types';
 import { ChannelCard, IMessageConfig, AppleNotesConfig, AppleRemindersConfig } from '../components/channels';
+import { SecuritySettingsTab, type SecuritySettingsTabHandle } from '../components/security/SecuritySettingsTab';
 import { OllamaIcon } from '../components/OllamaIcon';
 
 const { Title, Text, Paragraph } = Typography;
@@ -54,11 +58,13 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
   const api = useAPI();
   const { token } = theme.useToken();
   const [loading, setLoading] = useState(false);
+  const [activeTab, setActiveTab] = useState<string>('general');
   const [serviceStatus, setServiceStatus] = useState<ServiceStatus | null>(null);
   const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null);
   const [deviceCode, setDeviceCode] = useState<DeviceCodeResponse | null>(null);
   const [loginStep, setLoginStep] = useState<'idle' | 'waiting' | 'polling'>('idle');
   const pollingRef = useRef<number | null>(null);
+  const securityRef = useRef<SecuritySettingsTabHandle>(null);
 
   // Channel state
   const [channels, setChannels] = useState<ChannelStatus[]>([]);
@@ -67,8 +73,8 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
   const [currentConfig, setCurrentConfig] = useState<ChannelConfig | null>(null);
   const [channelLoading, setChannelLoading] = useState<Record<string, boolean>>({});
 
-  // Models state (used only for loading, consumed by other pages via API refresh)
-  const [, setModels] = useState<Model[]>([]);
+  // Models state (also passed to channel config modals for model selection)
+  const [models, setModels] = useState<Model[]>([]);
 
   // Provider state - multi-select support
   const [enabledProviders, setEnabledProviders] = useState<string[]>(['copilot']);
@@ -84,6 +90,11 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
   const [minimaxApiKey, setMinimaxApiKey] = useState('');
   const [minimaxEndpoint, setMinimaxEndpoint] = useState('https://api.minimaxi.com/v1');
   const [minimaxLoading, setMinimaxLoading] = useState(false);
+
+  // GLM config state
+  const [glmApiKey, setGlmApiKey] = useState('');
+  const [glmEndpoint, setGlmEndpoint] = useState('https://open.bigmodel.cn/api/coding/paas/v4');
+  const [glmLoading, setGlmLoading] = useState(false);
 
   // Check capabilities based on API availability
   const hasAuthSupport = Boolean(api.getAuthStatus);
@@ -130,6 +141,13 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
       }
       if (config.minimax?.endpoint) {
         setMinimaxEndpoint(config.minimax.endpoint);
+      }
+      // Load GLM config
+      if (config.glm?.api_key) {
+        setGlmApiKey(config.glm.api_key);
+      }
+      if (config.glm?.endpoint) {
+        setGlmEndpoint(config.glm.endpoint);
       }
     } catch (error) {
       console.error('Failed to load config:', error);
@@ -179,6 +197,33 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
       message.error('保存失败');
     } finally {
       setMinimaxLoading(false);
+    }
+  };
+
+  const handleGlmConfigSave = async () => {
+    setGlmLoading(true);
+    try {
+      const updatePayload: Record<string, string> = {};
+      // Only send api_key if it's a real new key (not masked)
+      if (glmApiKey && !glmApiKey.startsWith('****')) {
+        updatePayload.api_key = glmApiKey;
+      }
+      if (glmEndpoint) {
+        updatePayload.endpoint = glmEndpoint;
+      }
+      await api.updateConfig({
+        glm: updatePayload as any,
+      });
+      message.success('GLM 配置已保存并生效');
+      // Reload models to refresh GLM models
+      loadModels();
+      // Reload config to get masked key
+      loadConfig();
+    } catch (error) {
+      console.error('Failed to update GLM config:', error);
+      message.error('保存失败');
+    } finally {
+      setGlmLoading(false);
     }
   };
 
@@ -293,6 +338,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
       case 'copilot-acp': return 'Copilot ACP (付费模型)';
       case 'ollama': return 'Ollama (本地)';
       case 'minimax': return 'MiniMax (云端)';
+      case 'glm': return 'GLM 智谱AI (云端)';
       default: return provider;
     }
   };
@@ -304,6 +350,9 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
     }
     if (provider === 'minimax') {
       return <MinimaxIcon size={14} {...props} />;
+    }
+    if (provider === 'glm') {
+      return <GlmIcon size={14} {...props} />;
     }
     return <GithubOutlined {...props} />;
   };
@@ -527,12 +576,44 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
 
   return (
     <div className="settings-page" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      {/* Fixed Header */}
-      <div style={{ padding: '12px 24px', borderBottom: `1px solid ${token.colorBorderSecondary}`, background: token.colorBgContainer, flexShrink: 0 }}>
-        <Title level={4} style={{ margin: 0 }}>设置</Title>
+      {/* Fixed Header with Tabs */}
+      <div style={{ padding: '12px 24px 0', borderBottom: `1px solid ${token.colorBorderSecondary}`, background: token.colorBgContainer, flexShrink: 0 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <Tabs
+            activeKey={activeTab}
+            onChange={setActiveTab}
+            items={[
+              { key: 'general', label: '常规设置' },
+              { key: 'security', label: '安全策略' },
+            ]}
+            size="small"
+            style={{ marginBottom: 0, minHeight: 0 }}
+            tabBarStyle={{ marginBottom: 0 }}
+          />
+          {activeTab === 'security' && (
+            <Space>
+              <Button icon={<ReloadOutlined />} onClick={() => securityRef.current?.handleRefresh()} size="small" className="page-header-btn">
+                刷新
+              </Button>
+              <Button type="primary" icon={<SaveOutlined />} onClick={() => securityRef.current?.handleSave()} loading={securityRef.current?.saving} size="small" className="page-header-btn">
+                保存策略
+              </Button>
+            </Space>
+          )}
+        </div>
       </div>
       
-      {/* Scrollable Content */}
+      {/* Security Tab */}
+      {activeTab === 'security' && (
+        <div style={{ flex: 1, overflow: 'auto', padding: 24 }}>
+          <div style={{ maxWidth: 900 }}>
+            <SecuritySettingsTab ref={securityRef} />
+          </div>
+        </div>
+      )}
+
+      {/* General Tab - Scrollable Content */}
+      {activeTab === 'general' && (
       <div style={{ flex: 1, overflow: 'auto', padding: 24 }}>
         <div style={{ maxWidth: 900 }}>
         {/* Service Status */}
@@ -634,6 +715,13 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                       <MinimaxIcon size={14} />
                       MiniMax (云端)
                       {defaultProvider === 'minimax' && <Tag color="blue" style={{ marginLeft: 4 }}>默认</Tag>}
+                    </Space>
+                  </Checkbox>
+                  <Checkbox value="glm">
+                    <Space>
+                      <GlmIcon size={14} />
+                      GLM 智谱AI (云端)
+                      {defaultProvider === 'glm' && <Tag color="blue" style={{ marginLeft: 4 }}>默认</Tag>}
                     </Space>
                   </Checkbox>
                 </Space>
@@ -777,6 +865,46 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                       type="primary" 
                       onClick={handleMinimaxConfigSave}
                       loading={minimaxLoading}
+                    >
+                      保存
+                    </Button>
+                  </div>
+                </Space>
+              </div>
+            )}
+
+            {enabledProviders.includes('glm') && (
+              <div>
+                <Alert
+                  type="info"
+                  message="GLM (智谱AI) 需要配置 API Key，可在 open.bigmodel.cn 获取"
+                  showIcon
+                  style={{ marginBottom: 12 }}
+                />
+                <Space direction="vertical" style={{ width: '100%' }} size="small">
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <Text strong style={{ minWidth: 100 }}>API Key:</Text>
+                    <Input.Password
+                      value={glmApiKey}
+                      onChange={(e) => setGlmApiKey(e.target.value)}
+                      placeholder="请输入 GLM API Key"
+                      style={{ width: 300 }}
+                    />
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <Text strong style={{ minWidth: 100 }}>API 地址:</Text>
+                    <Input
+                      value={glmEndpoint}
+                      onChange={(e) => setGlmEndpoint(e.target.value)}
+                      placeholder="https://open.bigmodel.cn/api/coding/paas/v4"
+                      style={{ width: 300 }}
+                    />
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'flex-start', paddingLeft: 108 }}>
+                    <Button 
+                      type="primary" 
+                      onClick={handleGlmConfigSave}
+                      loading={glmLoading}
                     >
                       保存
                     </Button>
@@ -962,6 +1090,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
         <IMessageConfig
           visible={configModalVisible && currentChannelType === 'imessage'}
           config={currentConfig as IMessageChannelConfig}
+          models={models}
           onSave={handleSaveChannelConfig}
           onCancel={() => {
             setConfigModalVisible(false);
@@ -972,6 +1101,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
         <AppleNotesConfig
           visible={configModalVisible && currentChannelType === 'apple-notes'}
           config={currentConfig as AppleNotesChannelConfig}
+          models={models}
           onSave={handleSaveChannelConfig}
           onCancel={() => {
             setConfigModalVisible(false);
@@ -982,6 +1112,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
         <AppleRemindersConfig
           visible={configModalVisible && currentChannelType === 'apple-reminders'}
           config={currentConfig as AppleRemindersChannelConfig}
+          models={models}
           onSave={handleSaveChannelConfig}
           onCancel={() => {
             setConfigModalVisible(false);
@@ -1010,6 +1141,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
         )}
       </div>
       </div>
+      )}
     </div>
   );
 };

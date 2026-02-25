@@ -82,7 +82,6 @@ func TestLoopState_Initial(t *testing.T) {
 		TotalTokens:            0,
 		ContextRetried:         false,
 		TransientRetries:       0,
-		UseChat:                false,
 	}
 
 	if state.Iteration != 0 {
@@ -137,11 +136,10 @@ func TestStorageToolCall_Conversion(t *testing.T) {
 	if tc.Type != "function" {
 		t.Errorf("expected type 'function', got '%s'", tc.Type)
 	}
-	
+
 	// Test GetName method
 	name := tc.GetName()
 	if name != "test_tool" {
 		t.Errorf("expected function name 'test_tool', got '%s'", name)
 	}
 }
-

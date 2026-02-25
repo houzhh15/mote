@@ -9,6 +9,7 @@ import dayjs from 'dayjs';
 import { useAPI } from '../context/APIContext';
 import { OllamaIcon } from '../components/OllamaIcon';
 import { MinimaxIcon } from '../components/MinimaxIcon';
+import { GlmIcon } from '../components/GlmIcon';
 import type { CronJob, CronExecutingJob, Model } from '../types';
 
 const { Text } = Typography;
@@ -114,10 +115,11 @@ const getScheduleDescription = (type: ScheduleType, time?: dayjs.Dayjs, weekdays
 // Helper function to extract provider from model ID
 // Ollama models have "ollama:" prefix (e.g., "ollama:llama3.2")
 // Copilot models don't have prefix (e.g., "gpt-4", "claude-3.5-sonnet")
-const getProviderFromModel = (model?: string): 'copilot' | 'ollama' | 'minimax' | null => {
+const getProviderFromModel = (model?: string): 'copilot' | 'ollama' | 'minimax' | 'glm' | null => {
   if (!model) return null;
   if (model.startsWith('ollama:')) return 'ollama';
   if (model.startsWith('minimax:')) return 'minimax';
+  if (model.startsWith('glm:')) return 'glm';
   return 'copilot';
 };
 
@@ -358,10 +360,10 @@ export const CronPage: React.FC<CronPageProps> = ({ onSelectSession }) => {
                       )}
                       {job.model && (
                         <Tag 
-                          color={getProviderFromModel(job.model) === 'ollama' ? 'orange' : getProviderFromModel(job.model) === 'minimax' ? 'purple' : 'blue'}
+                          color={getProviderFromModel(job.model) === 'ollama' ? 'orange' : getProviderFromModel(job.model) === 'minimax' ? 'purple' : getProviderFromModel(job.model) === 'glm' ? 'cyan' : 'blue'}
                           style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11 }}
                         >
-                          {getProviderFromModel(job.model) === 'ollama' ? <OllamaIcon size={10} /> : getProviderFromModel(job.model) === 'minimax' ? <MinimaxIcon size={10} /> : <GithubOutlined style={{ fontSize: 10 }} />}
+                          {getProviderFromModel(job.model) === 'ollama' ? <OllamaIcon size={10} /> : getProviderFromModel(job.model) === 'minimax' ? <MinimaxIcon size={10} /> : getProviderFromModel(job.model) === 'glm' ? <GlmIcon size={10} /> : <GithubOutlined style={{ fontSize: 10 }} />}
                           {job.model}
                         </Tag>
                       )}
@@ -560,7 +562,7 @@ export const CronPage: React.FC<CronPageProps> = ({ onSelectSession }) => {
                 models.map((model) => (
                   <Select.Option key={model.id} value={model.id} disabled={model.available === false}>
                     <Space>
-                      {model.provider === 'ollama' ? <OllamaIcon size={12} /> : model.provider === 'minimax' ? <MinimaxIcon size={12} /> : <GithubOutlined style={{ fontSize: 12 }} />}
+                      {model.provider === 'ollama' ? <OllamaIcon size={12} /> : model.provider === 'minimax' ? <MinimaxIcon size={12} /> : model.provider === 'glm' ? <GlmIcon size={12} /> : <GithubOutlined style={{ fontSize: 12 }} />}
                       {model.display_name}
                     </Space>
                   </Select.Option>
@@ -571,8 +573,8 @@ export const CronPage: React.FC<CronPageProps> = ({ onSelectSession }) => {
                     key={provider} 
                     label={
                       <Space>
-                        {provider === 'ollama' ? <OllamaIcon /> : provider === 'minimax' ? <MinimaxIcon size={14} /> : <GithubOutlined />}
-                        {provider === 'ollama' ? 'Ollama' : provider === 'minimax' ? 'MiniMax' : provider === 'copilot-acp' ? 'Copilot ACP' : 'GitHub Copilot'}
+                        {provider === 'ollama' ? <OllamaIcon /> : provider === 'minimax' ? <MinimaxIcon size={14} /> : provider === 'glm' ? <GlmIcon size={14} /> : <GithubOutlined />}
+                        {provider === 'ollama' ? 'Ollama' : provider === 'minimax' ? 'MiniMax' : provider === 'glm' ? 'GLM 智谱AI' : provider === 'copilot-acp' ? 'Copilot ACP' : 'GitHub Copilot'}
                       </Space>
                     }
                   >

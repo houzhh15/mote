@@ -187,6 +187,16 @@ func (im *IndexManager) List(ctx context.Context, limit, offset int) ([]SearchRe
 	return im.legacy.List(ctx, limit, offset)
 }
 
+// ListFiltered returns entries with pagination and optional filtering.
+func (im *IndexManager) ListFiltered(ctx context.Context, limit, offset int, filter ListFilter) ([]SearchResult, error) {
+	return im.legacy.ListFiltered(ctx, limit, offset, filter)
+}
+
+// CountFiltered returns the number of entries matching the filter.
+func (im *IndexManager) CountFiltered(ctx context.Context, filter ListFilter) (int, error) {
+	return im.legacy.CountFiltered(ctx, filter)
+}
+
 // GetByID retrieves a memory entry by ID.
 func (im *IndexManager) GetByID(ctx context.Context, id string) (*MemoryEntry, error) {
 	return im.legacy.GetByID(ctx, id)

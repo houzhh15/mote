@@ -40,16 +40,18 @@ type mockLogger struct {
 	decisions []*ApprovalResult
 }
 
-func (m *mockLogger) LogRequest(req *ApprovalRequest) {
+func (m *mockLogger) LogRequest(req *ApprovalRequest) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.requests = append(m.requests, req)
+	return nil
 }
 
-func (m *mockLogger) LogDecision(req *ApprovalRequest, result *ApprovalResult) {
+func (m *mockLogger) LogDecision(req *ApprovalRequest, result *ApprovalResult) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.decisions = append(m.decisions, result)
+	return nil
 }
 
 func TestManager_RequestApproval_Approve(t *testing.T) {

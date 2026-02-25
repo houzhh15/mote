@@ -7,6 +7,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Input, Button, Select, Space, Typography, message, Modal, Tag, Tooltip, Dropdown, theme } from 'antd';
 import { SendOutlined, GithubOutlined, FolderOutlined, LinkOutlined, DisconnectOutlined, FolderOpenOutlined, ThunderboltOutlined, CloseCircleFilled } from '@ant-design/icons';
 import { MinimaxIcon } from '../components/MinimaxIcon';
+import { GlmIcon } from '../components/GlmIcon';
 import { useAPI } from '../context/APIContext';
 import { useInputHistory } from '../hooks';
 import { PromptSelector } from '../components/PromptSelector';
@@ -110,6 +111,9 @@ export const NewChatPage: React.FC<NewChatPageProps> = ({
     }
     if (model.provider === 'minimax') {
       return <MinimaxIcon size={12} style={{ marginRight: 8 }} />;
+    }
+    if (model.provider === 'glm') {
+      return <GlmIcon size={12} style={{ marginRight: 8 }} />;
     }
     return <GithubOutlined style={{ fontSize: 12, marginRight: 8 }} />;
   };

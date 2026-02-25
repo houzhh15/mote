@@ -11,30 +11,30 @@ import (
 
 func TestStandardBuilder_BuildMessages_MinimalDefault(t *testing.T) {
 	builder := NewStandardBuilder()
-	
+
 	cached := &scheduler.CachedSession{
 		Session: &storage.Session{
 			ID: "test-session",
 		},
 		Messages: []*storage.Message{},
 	}
-	
+
 	request := &BuildRequest{
 		SessionID:     "test-session",
 		UserInput:     "Hello",
 		CachedSession: cached,
 	}
-	
+
 	messages, err := builder.BuildMessages(context.Background(), request)
 	if err != nil {
 		t.Fatalf("BuildMessages failed: %v", err)
 	}
-	
+
 	// Should have system message + user input
 	if len(messages) != 2 {
 		t.Errorf("expected 2 messages, got %d", len(messages))
 	}
-	
+
 	// Check system message
 	if messages[0].Role != provider.RoleSystem {
 		t.Errorf("expected first message to be system, got %s", messages[0].Role)
@@ -42,7 +42,7 @@ func TestStandardBuilder_BuildMessages_MinimalDefault(t *testing.T) {
 	if messages[0].Content != "You are a helpful AI assistant." {
 		t.Errorf("unexpected system prompt: %s", messages[0].Content)
 	}
-	
+
 	// Check user message
 	if messages[1].Role != provider.RoleUser {
 		t.Errorf("expected second message to be user, got %s", messages[1].Role)
@@ -55,25 +55,25 @@ func TestStandardBuilder_BuildMessages_MinimalDefault(t *testing.T) {
 func TestStandardBuilder_BuildMessages_WithStaticPrompt(t *testing.T) {
 	builder := NewStandardBuilder()
 	builder.SetStaticPrompt("Custom system prompt")
-	
+
 	cached := &scheduler.CachedSession{
 		Session: &storage.Session{
 			ID: "test-session",
 		},
 		Messages: []*storage.Message{},
 	}
-	
+
 	request := &BuildRequest{
 		SessionID:     "test-session",
 		UserInput:     "Test",
 		CachedSession: cached,
 	}
-	
+
 	messages, err := builder.BuildMessages(context.Background(), request)
 	if err != nil {
 		t.Fatalf("BuildMessages failed: %v", err)
 	}
-	
+
 	if messages[0].Content != "Custom system prompt" {
 		t.Errorf("expected custom prompt, got: %s", messages[0].Content)
 	}
@@ -81,7 +81,7 @@ func TestStandardBuilder_BuildMessages_WithStaticPrompt(t *testing.T) {
 
 func TestStandardBuilder_BuildMessages_WithHistory(t *testing.T) {
 	builder := NewStandardBuilder()
-	
+
 	cached := &scheduler.CachedSession{
 		Session: &storage.Session{
 			ID: "test-session",
@@ -97,23 +97,23 @@ func TestStandardBuilder_BuildMessages_WithHistory(t *testing.T) {
 			},
 		},
 	}
-	
+
 	request := &BuildRequest{
 		SessionID:     "test-session",
 		UserInput:     "New question",
 		CachedSession: cached,
 	}
-	
+
 	messages, err := builder.BuildMessages(context.Background(), request)
 	if err != nil {
 		t.Fatalf("BuildMessages failed: %v", err)
 	}
-	
+
 	// Should have: system + 2 history + current user
 	if len(messages) != 4 {
 		t.Errorf("expected 4 messages, got %d", len(messages))
 	}
-	
+
 	// Verify order
 	if messages[0].Role != provider.RoleSystem {
 		t.Error("expected system message first")
@@ -132,26 +132,26 @@ func TestStandardBuilder_BuildMessages_WithHistory(t *testing.T) {
 func TestStandardBuilder_BuildMessages_RequestOverride(t *testing.T) {
 	builder := NewStandardBuilder()
 	builder.SetStaticPrompt("Default prompt")
-	
+
 	cached := &scheduler.CachedSession{
 		Session: &storage.Session{
 			ID: "test-session",
 		},
 		Messages: []*storage.Message{},
 	}
-	
+
 	request := &BuildRequest{
 		SessionID:     "test-session",
 		UserInput:     "Test",
 		CachedSession: cached,
 		SystemPrompt:  "Override prompt", // Request-level override
 	}
-	
+
 	messages, err := builder.BuildMessages(context.Background(), request)
 	if err != nil {
 		t.Fatalf("BuildMessages failed: %v", err)
 	}
-	
+
 	// Request override should take precedence
 	if messages[0].Content != "Override prompt" {
 		t.Errorf("expected override prompt, got: %s", messages[0].Content)
@@ -160,10 +160,10 @@ func TestStandardBuilder_BuildMessages_RequestOverride(t *testing.T) {
 
 func TestStandardBuilder_BuildMessages_WithToolCalls(t *testing.T) {
 	builder := NewStandardBuilder()
-	
+
 	// Create tool call JSON
 	toolCallJSON := []byte(`{"name":"test_tool","arguments":"{}"}`)
-	
+
 	cached := &scheduler.CachedSession{
 		Session: &storage.Session{
 			ID: "test-session",
@@ -187,23 +187,23 @@ func TestStandardBuilder_BuildMessages_WithToolCalls(t *testing.T) {
 			},
 		},
 	}
-	
+
 	request := &BuildRequest{
 		SessionID:     "test-session",
 		UserInput:     "Follow up",
 		CachedSession: cached,
 	}
-	
+
 	messages, err := builder.BuildMessages(context.Background(), request)
 	if err != nil {
 		t.Fatalf("BuildMessages failed: %v", err)
 	}
-	
+
 	// Should have: system + assistant with tool call + tool result + user
 	if len(messages) != 4 {
 		t.Errorf("expected 4 messages, got %d", len(messages))
 	}
-	
+
 	// Check assistant message has tool calls
 	assistantMsg := messages[1]
 	if assistantMsg.Role != provider.RoleAssistant {
@@ -215,7 +215,7 @@ func TestStandardBuilder_BuildMessages_WithToolCalls(t *testing.T) {
 	if assistantMsg.ToolCalls[0].ID != "call_123" {
 		t.Errorf("expected tool call ID 'call_123', got '%s'", assistantMsg.ToolCalls[0].ID)
 	}
-	
+
 	// Check tool result
 	toolMsg := messages[2]
 	if toolMsg.Role != provider.RoleTool {

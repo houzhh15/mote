@@ -135,16 +135,6 @@ Compression preserves:
 - Most recent conversation messages
 - Respects token and message limits
 
-## PromptBuilder
-
-Generates system prompts with tool information:
-
-```go
-pb := runner.NewPromptBuilder(registry)
-pb.SetBasePrompt("You are a helpful assistant.")
-prompt := pb.Build() // Includes tool descriptions
-```
-
 ## Error Types
 
 - `ErrMaxIterations`: Reached iteration limit
