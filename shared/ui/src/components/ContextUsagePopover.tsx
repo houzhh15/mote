@@ -2,10 +2,11 @@
 // ContextUsagePopover - Compact context window usage indicator
 // ================================================================
 
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Popover, Progress, Typography } from 'antd';
-import { DatabaseOutlined } from '@ant-design/icons';
+import { DatabaseOutlined, BarChartOutlined } from '@ant-design/icons';
 import type { Message, Model } from '../types';
+import { ContextDetailModal } from './ContextDetailModal';
 
 const { Text } = Typography;
 
@@ -74,6 +75,7 @@ interface ContextUsagePopoverProps {
   models: Model[];
   streamingTokens?: number;
   backendEstimatedTokens?: number;  // Backend-computed token estimate (accurate, byte-based)
+  sessionId?: string;               // Session ID for context detail API
   style?: React.CSSProperties;
 }
 
@@ -83,8 +85,10 @@ export const ContextUsagePopover: React.FC<ContextUsagePopoverProps> = ({
   models,
   streamingTokens = 0,
   backendEstimatedTokens,
+  sessionId,
   style,
 }) => {
+  const [detailOpen, setDetailOpen] = useState(false);
   const model = useMemo(() => models.find(m => m.id === currentModel), [models, currentModel]);
 
   // Use backend-provided token estimate when:
@@ -142,35 +146,60 @@ export const ContextUsagePopover: React.FC<ContextUsagePopoverProps> = ({
       <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#666' }}>
         <span>Tool Results</span><span>{toolResPct.toFixed(1)}%</span>
       </div>
+      {sessionId && (
+        <div
+          style={{
+            marginTop: 6,
+            paddingTop: 6,
+            borderTop: '1px solid rgba(0,0,0,0.06)',
+            textAlign: 'center',
+          }}
+        >
+          <span
+            onClick={(e) => { e.stopPropagation(); setDetailOpen(true); }}
+            style={{ fontSize: 11, color: '#1677ff', cursor: 'pointer', userSelect: 'none' }}
+          >
+            <BarChartOutlined style={{ marginRight: 3 }} />
+            查看详情
+          </span>
+        </div>
+      )}
     </div>
   );
 
   return (
-    <Popover content={popoverContent} trigger="hover" placement="topLeft" overlayInnerStyle={{ borderRadius: 8 }}>
-      <div
-        style={{
-          display: 'inline-flex',
-          alignItems: 'center',
-          gap: 3,
-          cursor: 'pointer',
-          padding: '0 4px',
-          fontSize: 11,
-          color: '#999',
-          lineHeight: '16px',
-          ...style,
-        }}
-      >
-        <DatabaseOutlined style={{ fontSize: 10 }} />
-        <span>{formatTokenCount(stats.totalTokens)}</span>
-        <Progress
-          percent={usagePercent}
-          showInfo={false}
-          strokeColor={getProgressColor(usagePercent)}
-          trailColor="rgba(0,0,0,0.06)"
-          size={[36, 3]}
-          style={{ margin: 0 }}
-        />
-      </div>
-    </Popover>
+    <>
+      <Popover content={popoverContent} trigger="hover" placement="topLeft" overlayInnerStyle={{ borderRadius: 8 }}>
+        <div
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 3,
+            cursor: 'pointer',
+            padding: '0 4px',
+            fontSize: 11,
+            color: '#999',
+            lineHeight: '16px',
+            ...style,
+          }}
+        >
+          <DatabaseOutlined style={{ fontSize: 10 }} />
+          <span>{formatTokenCount(stats.totalTokens)}</span>
+          <Progress
+            percent={usagePercent}
+            showInfo={false}
+            strokeColor={getProgressColor(usagePercent)}
+            trailColor="rgba(0,0,0,0.06)"
+            size={[36, 3]}
+            style={{ margin: 0 }}
+          />
+        </div>
+      </Popover>
+      <ContextDetailModal
+        open={detailOpen}
+        onClose={() => setDetailOpen(false)}
+        sessionId={sessionId}
+      />
+    </>
   );
 };

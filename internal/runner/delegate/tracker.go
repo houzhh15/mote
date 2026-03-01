@@ -28,6 +28,9 @@ type DelegationRecord struct {
 	ResultLength    int        `json:"result_length"`
 	TokensUsed      int        `json:"tokens_used"`
 	ErrorMessage    *string    `json:"error_message,omitempty"`
+	Mode            string     `json:"mode"`           // "legacy" or "structured"
+	ExecutedSteps   []string   `json:"executed_steps"` // PDA step labels executed
+	PDAStackDepth   int        `json:"pda_stack_depth"`
 }
 
 // NewTracker creates a new DelegationTracker.
@@ -37,13 +40,17 @@ func NewTracker(db *sql.DB) *DelegationTracker {
 
 // StartDelegation records the start of a delegation invocation.
 func (t *DelegationTracker) StartDelegation(record DelegationRecord) error {
+	mode := record.Mode
+	if mode == "" {
+		mode = "legacy"
+	}
 	_, err := t.db.Exec(`
 		INSERT INTO delegate_invocations 
-		(id, parent_session_id, child_session_id, agent_name, depth, chain, prompt, status, started_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		(id, parent_session_id, child_session_id, agent_name, depth, chain, prompt, status, started_at, mode)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		record.ID, record.ParentSessionID, record.ChildSessionID,
 		record.AgentName, record.Depth, record.Chain, record.Prompt,
-		"running", record.StartedAt)
+		"running", record.StartedAt, mode)
 	return err
 }
 
@@ -55,12 +62,32 @@ func (t *DelegationTracker) CompleteDelegation(
 	tokensUsed int,
 	errorMsg *string,
 ) error {
+	return t.CompleteDelegationWithPDA(id, status, resultLength, tokensUsed, errorMsg, nil, 0)
+}
+
+// CompleteDelegationWithPDA updates a delegation record with PDA execution details.
+func (t *DelegationTracker) CompleteDelegationWithPDA(
+	id string,
+	status string,
+	resultLength int,
+	tokensUsed int,
+	errorMsg *string,
+	executedSteps []string,
+	pdaStackDepth int,
+) error {
 	now := time.Now()
+	var stepsJSON *string
+	if len(executedSteps) > 0 {
+		data, _ := json.Marshal(executedSteps)
+		s := string(data)
+		stepsJSON = &s
+	}
 	_, err := t.db.Exec(`
 		UPDATE delegate_invocations 
-		SET status = ?, completed_at = ?, result_length = ?, tokens_used = ?, error_message = ?
+		SET status = ?, completed_at = ?, result_length = ?, tokens_used = ?, 
+		    error_message = ?, executed_steps = ?, pda_stack_depth = ?
 		WHERE id = ?`,
-		status, now, resultLength, tokensUsed, errorMsg, id)
+		status, now, resultLength, tokensUsed, errorMsg, stepsJSON, pdaStackDepth, id)
 	return err
 }
 

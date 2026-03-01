@@ -75,11 +75,28 @@ func (o *StandardOrchestrator) Run(ctx context.Context, request *RunRequest) (<-
 			o.compactor.ResetCompactionCount(request.SessionID)
 		}
 
-		// Add user message to session
-		_, err := o.sessions.AddMessage(request.SessionID, provider.RoleUser, request.UserInput, nil, "")
-		if err != nil {
-			events <- types.NewErrorEvent(err)
-			return
+		// InjectedMessages mode (PDA frame-local context): skip all session message
+		// persistence — the PDA engine owns its own context and the factory layer
+		// handles persisting the final summary. Writing intermediate messages
+		// would pollute the main session's history and inflate future LLM context.
+		isInjectedMode := request.InjectedMessages != nil
+
+		// persistMsg is a helper that writes an assistant message to session storage,
+		// but only when NOT in InjectedMessages mode (PDA sub-agent calls).
+		persistMsg := func(role, content string, toolCalls []storage.ToolCall, toolCallID string) {
+			if isInjectedMode {
+				return
+			}
+			_, _ = o.sessions.AddMessage(request.SessionID, role, content, toolCalls, toolCallID)
+		}
+
+		// Add user message to session (skip for InjectedMessages mode — PDA engine owns context)
+		if !isInjectedMode {
+			_, err := o.sessions.AddMessage(request.SessionID, provider.RoleUser, request.UserInput, nil, "")
+			if err != nil {
+				events <- types.NewErrorEvent(err)
+				return
+			}
 		}
 
 		// Build messages - use direct method from runner for now
@@ -88,6 +105,12 @@ func (o *StandardOrchestrator) Run(ctx context.Context, request *RunRequest) (<-
 		// Inject model's max output token limit into system prompt so the LLM
 		// can self-regulate its output size and avoid truncation.
 		if o.systemPrompt != nil {
+			// Inject session-bound workspace directory into system prompt
+			if o.workspaceResolver != nil && request.SessionID != "" {
+				if wsPath := o.workspaceResolver(request.SessionID); wsPath != "" {
+					o.systemPrompt.SetWorkspaceDir(wsPath)
+				}
+			}
 			if mop, ok := request.Provider.(provider.MaxOutputProvider); ok {
 				sessionModel := ""
 				if request.CachedSession.Session != nil {
@@ -99,10 +122,30 @@ func (o *StandardOrchestrator) Run(ctx context.Context, request *RunRequest) (<-
 			}
 		}
 
-		messages, err := o.buildMessagesLegacy(ctx, request.CachedSession, request.UserInput)
-		if err != nil {
-			events <- types.NewErrorEvent(err)
-			return
+		// Build initial messages: use InjectedMessages if provided (PDA frame-local context),
+		// otherwise load from session history (standard path).
+		var messages []provider.Message
+		if request.InjectedMessages != nil {
+			// PDA mode: build system prompt dynamically then prepend to injected context
+			var sysContent string
+			if o.systemPrompt != nil {
+				if c, err := o.systemPrompt.Build(ctx, request.UserInput); err == nil && c != "" {
+					sysContent = c
+				}
+			} else if o.config.SystemPrompt != "" {
+				sysContent = o.config.SystemPrompt
+			}
+			if sysContent != "" {
+				messages = append(messages, provider.Message{Role: provider.RoleSystem, Content: sysContent})
+			}
+			messages = append(messages, request.InjectedMessages...)
+		} else {
+			var err error
+			messages, err = o.buildMessagesLegacy(ctx, request.CachedSession, request.UserInput)
+			if err != nil {
+				events <- types.NewErrorEvent(err)
+				return
+			}
 		}
 
 		var totalUsage types.Usage
@@ -174,7 +217,7 @@ func (o *StandardOrchestrator) Run(ctx context.Context, request *RunRequest) (<-
 					"sessionID", request.SessionID,
 					"iteration", iteration,
 					"error", ctx.Err())
-				_, _ = o.sessions.AddMessage(request.SessionID, provider.RoleAssistant, "[任务被取消或超时]", nil, "")
+				persistMsg(provider.RoleAssistant, "[任务被取消或超时]", nil, "")
 				events <- types.NewErrorEvent(ErrContextCanceled)
 				return
 			default:
@@ -595,7 +638,7 @@ func (o *StandardOrchestrator) Run(ctx context.Context, request *RunRequest) (<-
 								"[模型连续 %d 次生成超长工具调用，输出 token 不足以容纳完整参数。"+
 									"请手动将大文件拆分为多次小写入（每次 <8KB），或缩短输出内容后重试。]",
 								outputTooLongRetries)
-							_, _ = o.sessions.AddMessage(request.SessionID, provider.RoleAssistant, errMsg, nil, "")
+							persistMsg(provider.RoleAssistant, errMsg, nil, "")
 							events <- types.NewContentEvent("\n\n❌ " + errMsg + "\n\n")
 							events <- types.NewDoneEvent(&totalUsage)
 							return
@@ -620,7 +663,7 @@ func (o *StandardOrchestrator) Run(ctx context.Context, request *RunRequest) (<-
 							Role:    provider.RoleAssistant,
 							Content: errMsg,
 						})
-						_, _ = o.sessions.AddMessage(request.SessionID, provider.RoleAssistant, errMsg, nil, "")
+						persistMsg(provider.RoleAssistant, errMsg, nil, "")
 						continue
 					}
 				} else if droppedCount > 0 {
@@ -692,7 +735,7 @@ func (o *StandardOrchestrator) Run(ctx context.Context, request *RunRequest) (<-
 						"iteration", iteration,
 						"emptyResponseRetried", emptyResponseRetried)
 					errMsg := "[模型返回了空响应，可能是上下文过长导致。请尝试新建会话或缩短输入内容。]"
-					_, _ = o.sessions.AddMessage(request.SessionID, provider.RoleAssistant, errMsg, nil, "")
+					persistMsg(provider.RoleAssistant, errMsg, nil, "")
 					events <- types.NewContentEvent(errMsg)
 					events <- types.NewDoneEvent(&totalUsage)
 					return
@@ -725,9 +768,9 @@ func (o *StandardOrchestrator) Run(ctx context.Context, request *RunRequest) (<-
 				}
 
 				if respContent != "" {
-					_, _ = o.sessions.AddMessage(request.SessionID, provider.RoleAssistant, respContent, nil, "")
+					persistMsg(provider.RoleAssistant, respContent, nil, "")
 				} else {
-					_, _ = o.sessions.AddMessage(request.SessionID, provider.RoleAssistant, "[任务已完成，无文本响应]", nil, "")
+					persistMsg(provider.RoleAssistant, "[任务已完成，无文本响应]", nil, "")
 				}
 
 				// Trigger after_response hook
@@ -819,7 +862,7 @@ func (o *StandardOrchestrator) Run(ctx context.Context, request *RunRequest) (<-
 						"Do NOT call the same failing tool again. "+
 						"Either try a completely different approach, use a different tool, or explain to the user what went wrong and stop.]",
 						consecutiveToolErrors)
-					_, _ = o.sessions.AddMessage(request.SessionID, provider.RoleAssistant, errMsg, nil, "")
+					persistMsg(provider.RoleAssistant, errMsg, nil, "")
 					messages = append(messages, provider.Message{
 						Role:    provider.RoleAssistant,
 						Content: errMsg,
@@ -839,11 +882,11 @@ func (o *StandardOrchestrator) Run(ctx context.Context, request *RunRequest) (<-
 				consecutiveToolErrors = 0
 			}
 
-			// Save to session
+			// Save to session (skip in InjectedMessages mode — PDA engine owns context)
 			storageTcs := convertToolCalls(resp.ToolCalls)
-			_, _ = o.sessions.AddMessage(request.SessionID, provider.RoleAssistant, resp.Content, storageTcs, "")
+			persistMsg(provider.RoleAssistant, resp.Content, storageTcs, "")
 			for _, result := range toolResults {
-				_, _ = o.sessions.AddMessage(request.SessionID, result.Role, result.Content, nil, result.ToolCallID)
+				persistMsg(result.Role, result.Content, nil, result.ToolCallID)
 			}
 			slog.Info("StandardOrchestrator: iteration saved, continuing to next",
 				"sessionID", request.SessionID, "iteration", iteration)
@@ -854,7 +897,7 @@ func (o *StandardOrchestrator) Run(ctx context.Context, request *RunRequest) (<-
 			"sessionID", request.SessionID,
 			"maxIterations", o.config.MaxIterations)
 		maxIterMsg := fmt.Sprintf("[已达到最大迭代次数 (%d)，任务执行被中止]", o.config.MaxIterations)
-		_, _ = o.sessions.AddMessage(request.SessionID, provider.RoleAssistant, maxIterMsg, nil, "")
+		persistMsg(provider.RoleAssistant, maxIterMsg, nil, "")
 		events <- types.NewErrorEvent(ErrMaxIterations)
 	}()
 

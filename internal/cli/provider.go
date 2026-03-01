@@ -17,7 +17,7 @@ func NewProviderCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "provider",
 		Short: "Manage LLM providers",
-		Long:  "Configure and manage LLM providers (copilot, ollama, minimax)",
+		Long:  "Configure and manage LLM providers (copilot, ollama, minimax, glm, vllm)",
 	}
 
 	cmd.AddCommand(newProviderListCmd())
@@ -59,6 +59,7 @@ func newProviderListCmd() *cobra.Command {
 				{"copilot", "GitHub Copilot API (REST, temporarily disabled)"},
 				{"ollama", "Local Ollama server"},
 				{"minimax", "MiniMax AI (cloud)"},
+				{"vllm", "Local vLLM server (high-throughput inference)"},
 			}
 
 			fmt.Println("Available providers:")
@@ -101,10 +102,11 @@ func newProviderUseCmd() *cobra.Command {
 				"copilot":     true,
 				"copilot-acp": true,
 				"ollama":      true,
+				"vllm":        true,
 			}
 
 			if !validProviders[providerName] {
-				return fmt.Errorf("unknown provider: %s (valid: copilot, copilot-acp, ollama)", providerName)
+				return fmt.Errorf("unknown provider: %s (valid: copilot, copilot-acp, ollama, vllm)", providerName)
 			}
 
 			// Load current config
@@ -171,6 +173,13 @@ func newProviderUseCmd() *cobra.Command {
 				} else {
 					fmt.Println("\nMiniMax provider configured.")
 				}
+			case "vllm":
+				endpoint := cfg.VLLM.Endpoint
+				if endpoint == "" {
+					endpoint = "http://localhost:8000"
+				}
+				fmt.Printf("\nNote: Make sure vLLM is running at %s\n", endpoint)
+				fmt.Println("You can configure vLLM settings with 'mote config set vllm.*'")
 			}
 
 			return nil
@@ -232,7 +241,7 @@ func newProviderStatusCmd() *cobra.Command {
 				}
 				model := cfg.Ollama.Model
 				if model == "" {
-					model = "llama3.2"
+					model = "(auto-detect)"
 				}
 				fmt.Printf("  Endpoint: %s\n", endpoint)
 				fmt.Printf("  Model: %s\n", model)
@@ -257,6 +266,25 @@ func newProviderStatusCmd() *cobra.Command {
 				fmt.Printf("  Endpoint: %s\n", endpoint)
 				fmt.Printf("  Model: %s\n", model)
 				fmt.Printf("  Max Tokens: %d\n", cfg.Minimax.MaxTokens)
+
+			case "vllm":
+				fmt.Println("vLLM Configuration:")
+				endpoint := cfg.VLLM.Endpoint
+				if endpoint == "" {
+					endpoint = "http://localhost:8000"
+				}
+				model := cfg.VLLM.Model
+				if model == "" {
+					model = "(auto-detect from /v1/models)"
+				}
+				if cfg.VLLM.APIKey != "" {
+					fmt.Println("  API Key: ****configured****")
+				} else {
+					fmt.Println("  API Key: not configured")
+				}
+				fmt.Printf("  Endpoint: %s\n", endpoint)
+				fmt.Printf("  Model: %s\n", model)
+				fmt.Printf("  Max Tokens: %d\n", cfg.VLLM.MaxTokens)
 			}
 
 			return nil
@@ -269,7 +297,7 @@ func newProviderEnableCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "enable <provider>",
 		Short: "Enable a provider",
-		Long:  "Enable a provider to be included in the model list (copilot, copilot-acp, ollama, or minimax)",
+		Long:  "Enable a provider to be included in the model list (copilot, copilot-acp, ollama, minimax, or vllm)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			providerName := strings.ToLower(args[0])
@@ -280,10 +308,11 @@ func newProviderEnableCmd() *cobra.Command {
 				"copilot-acp": true,
 				"ollama":      true,
 				"minimax":     true,
+				"vllm":        true,
 			}
 
 			if !validProviders[providerName] {
-				return fmt.Errorf("unknown provider: %s (valid: copilot, copilot-acp, ollama, minimax)", providerName)
+				return fmt.Errorf("unknown provider: %s (valid: copilot, copilot-acp, ollama, minimax, vllm)", providerName)
 			}
 
 			// Load current config
@@ -325,7 +354,7 @@ func newProviderDisableCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "disable <provider>",
 		Short: "Disable a provider",
-		Long:  "Disable a provider from the model list (copilot, copilot-acp, ollama, or minimax)",
+		Long:  "Disable a provider from the model list (copilot, copilot-acp, ollama, minimax, or vllm)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			providerName := strings.ToLower(args[0])
@@ -336,10 +365,11 @@ func newProviderDisableCmd() *cobra.Command {
 				"copilot-acp": true,
 				"ollama":      true,
 				"minimax":     true,
+				"vllm":        true,
 			}
 
 			if !validProviders[providerName] {
-				return fmt.Errorf("unknown provider: %s (valid: copilot, copilot-acp, ollama, minimax)", providerName)
+				return fmt.Errorf("unknown provider: %s (valid: copilot, copilot-acp, ollama, minimax, vllm)", providerName)
 			}
 
 			// Load current config

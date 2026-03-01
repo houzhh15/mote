@@ -77,6 +77,12 @@ func (b *SystemPromptBuilder) GetConfig() PromptConfig {
 	return b.config
 }
 
+// SetWorkspaceDir dynamically sets the workspace directory for the current session.
+// This is called per-request to inject the session-bound workspace path into the system prompt.
+func (b *SystemPromptBuilder) SetWorkspaceDir(dir string) {
+	b.config.WorkspaceDir = dir
+}
+
 // WithInjector sets the prompt injector for slot-based injections.
 func (b *SystemPromptBuilder) WithInjector(injector *PromptInjector) *SystemPromptBuilder {
 	b.injector = injector

@@ -19,6 +19,7 @@ import {
   Checkbox,
   Tag,
   Input,
+  InputNumber,
   Tabs,
   theme,
 } from 'antd';
@@ -41,6 +42,7 @@ import type { ServiceStatus, AuthStatus, DeviceCodeResponse, ChannelStatus, IMes
 import { ChannelCard, IMessageConfig, AppleNotesConfig, AppleRemindersConfig } from '../components/channels';
 import { SecuritySettingsTab, type SecuritySettingsTabHandle } from '../components/security/SecuritySettingsTab';
 import { OllamaIcon } from '../components/OllamaIcon';
+import { VllmIcon } from '../components/VllmIcon';
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -96,6 +98,13 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
   const [glmEndpoint, setGlmEndpoint] = useState('https://open.bigmodel.cn/api/coding/paas/v4');
   const [glmLoading, setGlmLoading] = useState(false);
 
+  // vLLM config state
+  const [vllmEndpoint, setVllmEndpoint] = useState('http://localhost:8000');
+  const [vllmApiKey, setVllmApiKey] = useState('');
+  const [vllmModel, setVllmModel] = useState('');
+  const [vllmMaxTokens, setVllmMaxTokens] = useState<number>(4096);
+  const [vllmLoading, setVllmLoading] = useState(false);
+
   // Check capabilities based on API availability
   const hasAuthSupport = Boolean(api.getAuthStatus);
   const hasRestartSupport = Boolean(api.restartService);
@@ -149,6 +158,19 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
       if (config.glm?.endpoint) {
         setGlmEndpoint(config.glm.endpoint);
       }
+      // Load vLLM config
+      if (config.vllm?.endpoint) {
+        setVllmEndpoint(config.vllm.endpoint);
+      }
+      if (config.vllm?.api_key) {
+        setVllmApiKey(config.vllm.api_key);
+      }
+      if (config.vllm?.model) {
+        setVllmModel(config.vllm.model);
+      }
+      if (config.vllm?.max_tokens) {
+        setVllmMaxTokens(config.vllm.max_tokens);
+      }
     } catch (error) {
       console.error('Failed to load config:', error);
     }
@@ -197,6 +219,37 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
       message.error('保存失败');
     } finally {
       setMinimaxLoading(false);
+    }
+  };
+
+  const handleVllmConfigSave = async () => {
+    setVllmLoading(true);
+    try {
+      const updatePayload: Record<string, any> = {};
+      if (vllmEndpoint) {
+        updatePayload.endpoint = vllmEndpoint;
+      }
+      // Only send api_key if it's a real new key (not masked)
+      if (vllmApiKey && !vllmApiKey.startsWith('****')) {
+        updatePayload.api_key = vllmApiKey;
+      }
+      if (vllmModel) {
+        updatePayload.model = vllmModel;
+      }
+      if (vllmMaxTokens > 0) {
+        updatePayload.max_tokens = vllmMaxTokens;
+      }
+      await api.updateConfig({
+        vllm: updatePayload as any,
+      });
+      message.success('vLLM 配置已保存并生效');
+      loadModels();
+      loadConfig();
+    } catch (error) {
+      console.error('Failed to update vLLM config:', error);
+      message.error('保存失败');
+    } finally {
+      setVllmLoading(false);
     }
   };
 
@@ -339,6 +392,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
       case 'ollama': return 'Ollama (本地)';
       case 'minimax': return 'MiniMax (云端)';
       case 'glm': return 'GLM 智谱AI (云端)';
+      case 'vllm': return 'vLLM (本地)';
       default: return provider;
     }
   };
@@ -353,6 +407,9 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
     }
     if (provider === 'glm') {
       return <GlmIcon size={14} {...props} />;
+    }
+    if (provider === 'vllm') {
+      return <VllmIcon size={14} {...props} />;
     }
     return <GithubOutlined {...props} />;
   };
@@ -724,6 +781,13 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                       {defaultProvider === 'glm' && <Tag color="blue" style={{ marginLeft: 4 }}>默认</Tag>}
                     </Space>
                   </Checkbox>
+                  <Checkbox value="vllm">
+                    <Space>
+                      <VllmIcon size={14} />
+                      vLLM (本地)
+                      {defaultProvider === 'vllm' && <Tag color="blue" style={{ marginLeft: 4 }}>默认</Tag>}
+                    </Space>
+                  </Checkbox>
                 </Space>
               </Checkbox.Group>
             </div>
@@ -905,6 +969,67 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                       type="primary" 
                       onClick={handleGlmConfigSave}
                       loading={glmLoading}
+                    >
+                      保存
+                    </Button>
+                  </div>
+                </Space>
+              </div>
+            )}
+
+            {enabledProviders.includes('vllm') && (
+              <div>
+                <Alert
+                  type="info"
+                  message="vLLM 需要在本地或远程运行 vLLM 服务（默认端口 8000）。模型名称可从服务自动获取，若服务未启动也可手动填写。"
+                  showIcon
+                  style={{ marginBottom: 12 }}
+                />
+                <Space direction="vertical" style={{ width: '100%' }} size="small">
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <Text strong style={{ minWidth: 100 }}>服务地址:</Text>
+                    <Input
+                      value={vllmEndpoint}
+                      onChange={(e) => setVllmEndpoint(e.target.value)}
+                      placeholder="http://localhost:8000"
+                      style={{ width: 300 }}
+                    />
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <Text strong style={{ minWidth: 100 }}>模型名称:</Text>
+                    <Input
+                      value={vllmModel}
+                      onChange={(e) => setVllmModel(e.target.value)}
+                      placeholder="例如: Qwen/Qwen2.5-7B-Instruct（留空则自动获取）"
+                      style={{ width: 300 }}
+                    />
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <Text strong style={{ minWidth: 100 }}>API Key:</Text>
+                    <Input.Password
+                      value={vllmApiKey}
+                      onChange={(e) => setVllmApiKey(e.target.value)}
+                      placeholder="可选，仅当 vLLM 启用 --api-key 时需要"
+                      style={{ width: 300 }}
+                    />
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <Text strong style={{ minWidth: 100 }}>最大 Tokens:</Text>
+                    <InputNumber
+                      value={vllmMaxTokens}
+                      onChange={(val) => setVllmMaxTokens(val || 4096)}
+                      min={1}
+                      max={131072}
+                      step={256}
+                      placeholder="4096"
+                      style={{ width: 300 }}
+                    />
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'flex-start', paddingLeft: 108 }}>
+                    <Button 
+                      type="primary" 
+                      onClick={handleVllmConfigSave}
+                      loading={vllmLoading}
                     >
                       保存
                     </Button>

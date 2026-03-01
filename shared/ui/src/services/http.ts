@@ -28,6 +28,8 @@ import type {
   MCPPromptContent,
   ReconfigureSessionRequest,
   ReconfigureSessionResponse,
+  PDACheckpointInfo,
+  SessionContextResponse,
 } from '../types';
 
 // Memory search result type from backend
@@ -149,6 +151,10 @@ export const createHttpAdapter = (options: HttpAdapterOptions = {}): APIAdapter 
     getSessionMessages: async (sessionId: string): Promise<MessagesResponse> => {
       const data = await fetchJSON<MessagesResponse>(`/api/v1/sessions/${sessionId}/messages`);
       return { messages: data.messages || [], estimated_tokens: data.estimated_tokens || 0 };
+    },
+
+    getSessionContext: async (sessionId: string): Promise<SessionContextResponse> => {
+      return fetchJSON<SessionContextResponse>(`/api/v1/sessions/${sessionId}/context`);
     },
 
     createSession: async (title?: string, scenario?: string): Promise<Session> => {
@@ -513,6 +519,10 @@ export const createHttpAdapter = (options: HttpAdapterOptions = {}): APIAdapter 
       await fetchJSON('/api/v1/skills/reload', { method: 'POST' });
     },
 
+    deleteSkill: async (skillId: string) => {
+      await fetchJSON(`/api/v1/skills/${skillId}`, { method: 'DELETE' });
+    },
+
     openSkillsDir: async (target: 'user' | 'workspace') => {
       await fetchJSON('/api/v1/skills/open', {
         method: 'POST',
@@ -592,6 +602,13 @@ export const createHttpAdapter = (options: HttpAdapterOptions = {}): APIAdapter 
         : `/api/v1/workspaces/${sessionId}/files`;
       const data = await fetchJSON<{ files: WorkspaceFile[] }>(url);
       return data.files || [];
+    },
+
+    openWorkspaceDir: async (path: string) => {
+      await fetchJSON('/api/v1/workspaces/open', {
+        method: 'POST',
+        body: JSON.stringify({ path }),
+      });
     },
 
     browseDirectory: async (path?: string) => {
@@ -688,6 +705,10 @@ export const createHttpAdapter = (options: HttpAdapterOptions = {}): APIAdapter 
       await fetchJSON(`/api/v1/agents/${encodeURIComponent(name)}`, { method: 'DELETE' });
     },
 
+    reloadAgents: async () => {
+      return fetchJSON<{ status: string; count: number }>('/api/v1/agents/reload', { method: 'POST' });
+    },
+
     getSessionDelegations: async (sessionId: string) => {
       return fetchJSON<import('../types').DelegationRecord[]>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/delegations`);
     },
@@ -706,6 +727,24 @@ export const createHttpAdapter = (options: HttpAdapterOptions = {}): APIAdapter 
         method: 'POST',
         body: JSON.stringify({ ids }),
       });
+    },
+
+    validateAgentCFG: async (name: string, steps: import('../types').Step[]) => {
+      return fetchJSON<import('../types').ValidationResult[]>(
+        `/api/v1/agents/${encodeURIComponent(name)}/validate-cfg`,
+        { method: 'POST', body: JSON.stringify({ steps }) }
+      );
+    },
+
+    saveAgentDraft: async (name: string, draft: { steps: import('../types').Step[] }) => {
+      await fetchJSON(`/api/v1/agents/${encodeURIComponent(name)}/draft`, {
+        method: 'POST',
+        body: JSON.stringify(draft),
+      });
+    },
+
+    discardAgentDraft: async (name: string) => {
+      await fetchJSON(`/api/v1/agents/${encodeURIComponent(name)}/draft`, { method: 'DELETE' });
     },
 
     // ============== Security Policy (M08B) ==============
@@ -742,6 +781,70 @@ export const createHttpAdapter = (options: HttpAdapterOptions = {}): APIAdapter 
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ approved, reason, modified_arguments: modifiedArguments }),
+      });
+    },
+
+    // ============== PDA Checkpoint Control ==============
+    getPDAStatus: async (sessionId: string): Promise<PDACheckpointInfo> => {
+      return fetchJSON<PDACheckpointInfo>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/pda`, {
+        method: 'POST',
+        body: JSON.stringify({ action: 'status' }),
+      });
+    },
+
+    resumePDA: async (sessionId: string, onEvent: (event: StreamEvent) => void, signal?: AbortSignal): Promise<void> => {
+      const response = await fetch(`${baseUrl}/api/v1/sessions/${encodeURIComponent(sessionId)}/pda`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'continue' }),
+        signal,
+      });
+
+      if (!response.ok) {
+        throw new Error(`PDA resume failed: ${response.status}`);
+      }
+
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error('No reader available');
+
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) {
+            onEvent({ type: 'done' });
+            break;
+          }
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              try {
+                const data = JSON.parse(line.slice(6));
+                onEvent(data as StreamEvent);
+              } catch {
+                // Ignore parse errors
+              }
+            }
+          }
+        }
+      } catch (err) {
+        if (signal?.aborted) {
+          return;
+        }
+        throw err;
+      }
+    },
+
+    clearPDACheckpoint: async (sessionId: string): Promise<void> => {
+      await fetchJSON(`/api/v1/sessions/${encodeURIComponent(sessionId)}/pda`, {
+        method: 'POST',
+        body: JSON.stringify({ action: 'restart' }),
       });
     },
 

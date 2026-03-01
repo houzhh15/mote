@@ -62,7 +62,7 @@ func NewMinimaxProvider(cfg Config) provider.Provider {
 
 	return &MinimaxProvider{
 		apiKey:    cfg.APIKey,
-		endpoint:  cfg.Endpoint,
+		endpoint:  strings.TrimRight(strings.TrimSpace(cfg.Endpoint), "/"),
 		model:     cfg.Model,
 		maxTokens: cfg.MaxTokens,
 		httpClient: &http.Client{

@@ -9,16 +9,18 @@ import { useAPI } from '../context/APIContext';
 import { OllamaIcon } from '../components/OllamaIcon';
 import { MinimaxIcon } from '../components/MinimaxIcon';
 import { GlmIcon } from '../components/GlmIcon';
+import { VllmIcon } from '../components/VllmIcon';
 import type { Session } from '../types';
 
 const { Text } = Typography;
 
 // Helper function to extract provider from model ID
-const getProviderFromModel = (model?: string): 'copilot' | 'ollama' | 'minimax' | 'glm' | null => {
+const getProviderFromModel = (model?: string): 'copilot' | 'ollama' | 'minimax' | 'glm' | 'vllm' | null => {
   if (!model) return null;
   if (model.startsWith('ollama:')) return 'ollama';
   if (model.startsWith('minimax:')) return 'minimax';
   if (model.startsWith('glm:')) return 'glm';
+  if (model.startsWith('vllm:')) return 'vllm';
   return 'copilot';
 };
 
@@ -278,10 +280,10 @@ export const SessionsPage: React.FC<SessionsPageProps> = ({ onSelectSession }) =
                       )}
                       {session.model && (
                         <Tag 
-                          color={getProviderFromModel(session.model) === 'ollama' ? 'orange' : getProviderFromModel(session.model) === 'minimax' ? 'purple' : getProviderFromModel(session.model) === 'glm' ? 'cyan' : 'blue'}
+                          color={getProviderFromModel(session.model) === 'ollama' ? 'orange' : getProviderFromModel(session.model) === 'minimax' ? 'purple' : getProviderFromModel(session.model) === 'glm' ? 'cyan' : getProviderFromModel(session.model) === 'vllm' ? 'green' : 'blue'}
                           style={{ display: 'flex', alignItems: 'center', gap: 4 }}
                         >
-                          {getProviderFromModel(session.model) === 'ollama' ? <OllamaIcon size={10} /> : getProviderFromModel(session.model) === 'minimax' ? <MinimaxIcon size={10} /> : getProviderFromModel(session.model) === 'glm' ? <GlmIcon size={10} /> : <GithubOutlined style={{ fontSize: 10 }} />}
+                          {getProviderFromModel(session.model) === 'ollama' ? <OllamaIcon size={10} /> : getProviderFromModel(session.model) === 'minimax' ? <MinimaxIcon size={10} /> : getProviderFromModel(session.model) === 'glm' ? <GlmIcon size={10} /> : getProviderFromModel(session.model) === 'vllm' ? <VllmIcon size={10} /> : <GithubOutlined style={{ fontSize: 10 }} />}
                           {session.model}
                         </Tag>
                       )}

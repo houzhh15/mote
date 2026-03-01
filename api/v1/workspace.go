@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -336,4 +337,51 @@ func listWindowsDrives() []DirectoryEntry {
 		}
 	}
 	return drives
+}
+
+// HandleOpenWorkspaceDir opens a workspace directory in the system file manager.
+func (r *Router) HandleOpenWorkspaceDir(w http.ResponseWriter, req *http.Request) {
+	var body struct {
+		Path string `json:"path"`
+	}
+	if err := json.NewDecoder(req.Body).Decode(&body); err != nil || body.Path == "" {
+		http.Error(w, "path is required", http.StatusBadRequest)
+		return
+	}
+
+	dir := body.Path
+
+	// Verify directory exists
+	info, err := os.Stat(dir)
+	if err != nil || !info.IsDir() {
+		http.Error(w, "directory does not exist: "+dir, http.StatusBadRequest)
+		return
+	}
+
+	// Open in file manager using platform-specific command
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", dir)
+	case "linux":
+		cmd = exec.Command("xdg-open", dir)
+	case "windows":
+		cmd = exec.Command("explorer", dir)
+	default:
+		http.Error(w, "unsupported operating system", http.StatusInternalServerError)
+		return
+	}
+
+	if err := cmd.Start(); err != nil {
+		http.Error(w, "failed to open directory: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]any{
+		"status":  "ok",
+		"message": "opened directory in file manager",
+		"path":    dir,
+	})
 }

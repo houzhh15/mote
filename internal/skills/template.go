@@ -26,6 +26,7 @@ func DefaultManifest(name, description string) map[string]any {
 		"version":     "1.0.0",
 		"description": description,
 		"author":      "",
+		"config":      map[string]any{},
 		"tools":       []any{},
 		"prompts":     []any{},
 		"hooks":       []any{},
@@ -44,7 +45,14 @@ This skill provides custom capabilities for the Mote agent.
 
 ## Configuration
 
-No configuration required.
+Skill configuration is defined in manifest.json under the "config" field.
+These values are automatically injected as the global variable `+"`SKILL_CONFIG`"+` in JS handlers.
+
+Example usage in JS:
+`+"`"+`javascript
+var BASE_URL = SKILL_CONFIG.base_url || 'https://default.example.com';
+var API_TOKEN = SKILL_CONFIG.api_token || '';
+`+"`"+`
 
 ## Tools
 

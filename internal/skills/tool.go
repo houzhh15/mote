@@ -20,15 +20,17 @@ type SkillTool struct {
 	skillDir string
 	def      *ToolDef
 	runtime  *jsvm.Runtime
+	config   map[string]any // Skill config from manifest.json
 }
 
 // NewSkillTool creates a new skill tool.
-func NewSkillTool(skillID, skillDir string, def *ToolDef, runtime *jsvm.Runtime) *SkillTool {
+func NewSkillTool(skillID, skillDir string, def *ToolDef, runtime *jsvm.Runtime, config map[string]any) *SkillTool {
 	return &SkillTool{
 		skillID:  skillID,
 		skillDir: skillDir,
 		def:      def,
 		runtime:  runtime,
+		config:   config,
 	}
 }
 
@@ -77,8 +79,8 @@ func (t *SkillTool) Execute(ctx context.Context, args map[string]any) (tools.Too
 		return tools.NewErrorResult(fmt.Sprintf("failed to read handler: %v", err)), nil
 	}
 
-	// Build script with function call
-	script := buildToolScript(string(scriptContent), funcName, args)
+	// Build script with function call (inject skill config)
+	script := buildToolScript(string(scriptContent), funcName, args, t.config)
 
 	// Execute with timeout
 	timeout := t.def.Timeout.Duration
@@ -139,15 +141,26 @@ func (t *SkillTool) HandlerPath() string {
 }
 
 // buildToolScript builds a script that calls the handler function.
-func buildToolScript(script, funcName string, args map[string]any) string {
+// It injects the skill's config from manifest.json as a SKILL_CONFIG global,
+// making it accessible to JS handlers.
+func buildToolScript(script, funcName string, args map[string]any, config map[string]any) string {
 	// JSON encode args
 	argsJSON := "{}"
 	if args != nil {
-		// Simple JSON encoding (in production, use proper encoding)
 		argsJSON = encodeArgs(args)
 	}
 
+	// JSON encode skill config
+	configJSON := "{}"
+	if config != nil {
+		if data, err := json.Marshal(config); err == nil {
+			configJSON = string(data)
+		}
+	}
+
 	return fmt.Sprintf(`
+var SKILL_CONFIG = %s;
+
 %s
 
 (function() {
@@ -155,7 +168,7 @@ func buildToolScript(script, funcName string, args map[string]any) string {
     var result = %s(args);
     return result;
 })();
-`, script, argsJSON, funcName)
+`, configJSON, script, argsJSON, funcName)
 }
 
 // encodeArgs converts args map to JSON string.
@@ -222,8 +235,8 @@ func NewSkillToolFactory(runtime *jsvm.Runtime) *SkillToolFactory {
 }
 
 // Create creates a skill tool from a definition.
-func (f *SkillToolFactory) Create(skillID, skillDir string, def *ToolDef) *SkillTool {
-	return NewSkillTool(skillID, skillDir, def, f.runtime)
+func (f *SkillToolFactory) Create(skillID, skillDir string, def *ToolDef, config map[string]any) *SkillTool {
+	return NewSkillTool(skillID, skillDir, def, f.runtime, config)
 }
 
 // SkillToolInfo contains information about a registered skill tool.

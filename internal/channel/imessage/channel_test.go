@@ -271,6 +271,94 @@ func TestIMessageChannel_HandleMessage_NoHandler(t *testing.T) {
 	ch.handleMessage(context.Background(), msg)
 }
 
+func TestIMessageChannel_EchoDedup(t *testing.T) {
+	// 测试场景：用户给自己发消息后，回显（相同内容、不同GUID）应该被去重跳过
+	ch := New(Config{
+		Trigger: channel.TriggerConfig{
+			Prefix:      "@mote",
+			SelfTrigger: true,
+		},
+		Reply: channel.ReplyConfig{
+			Prefix: "[Mote]",
+		},
+	})
+
+	callCount := 0
+	ch.OnMessage(func(ctx context.Context, msg channel.InboundMessage) error {
+		callCount++
+		return nil
+	})
+
+	// 第一条消息（原始发送）
+	msg1 := WatchMessage{
+		ChatID:   1,
+		Sender:   "me@icloud.com",
+		Text:     "@mote hello echo test",
+		IsFromMe: true,
+		GUID:     "guid-original",
+	}
+	ch.handleMessage(context.Background(), msg1)
+
+	if callCount != 1 {
+		t.Fatalf("expected 1 call after first message, got %d", callCount)
+	}
+
+	// 第二条消息（回显，相同内容不同GUID）
+	msg2 := WatchMessage{
+		ChatID:   1,
+		Sender:   "me@icloud.com",
+		Text:     "@mote hello echo test",
+		IsFromMe: true,
+		GUID:     "guid-echo",
+	}
+	ch.handleMessage(context.Background(), msg2)
+
+	if callCount != 1 {
+		t.Errorf("expected echo to be deduped (callCount=1), got callCount=%d", callCount)
+	}
+}
+
+func TestIMessageChannel_SentReplyDedup(t *testing.T) {
+	// 测试场景：SendMessage 发送回复后，回显应该被去重跳过
+	ch := New(Config{
+		Trigger: channel.TriggerConfig{
+			Prefix:      "@mote",
+			SelfTrigger: true,
+		},
+		Reply: channel.ReplyConfig{
+			Prefix:    "[Mote]",
+			Separator: "\n",
+		},
+	})
+
+	callCount := 0
+	ch.OnMessage(func(ctx context.Context, msg channel.InboundMessage) error {
+		callCount++
+		return nil
+	})
+
+	// 模拟 SendMessage 预注册去重（不需要真正发送命令）
+	replyContent := "[Mote]\nHere is my response"
+	dedupeKey := "1:" + replyContent
+	ch.processedMu.Lock()
+	ch.processedMsgs[dedupeKey] = time.Now()
+	ch.processedMu.Unlock()
+
+	// 模拟回复的回显到达
+	echoMsg := WatchMessage{
+		ChatID:   1,
+		Sender:   "me@icloud.com",
+		Text:     replyContent,
+		IsFromMe: true,
+		GUID:     "guid-reply-echo",
+	}
+	ch.handleMessage(context.Background(), echoMsg)
+
+	if callCount != 0 {
+		t.Errorf("expected reply echo to be skipped (callCount=0), got callCount=%d", callCount)
+	}
+}
+
 func TestIMessageChannel_OnMessage(t *testing.T) {
 	ch := New(Config{})
 

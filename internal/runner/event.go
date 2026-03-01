@@ -39,6 +39,8 @@ const (
 	EventTypeApprovalRequest
 	// EventTypeApprovalResolved indicates an approval request has been resolved.
 	EventTypeApprovalResolved
+	// EventTypePDAProgress indicates PDA step execution progress.
+	EventTypePDAProgress
 )
 
 // String returns the string representation of the event type.
@@ -72,6 +74,8 @@ func (t EventType) String() string {
 		return "approval_request"
 	case EventTypeApprovalResolved:
 		return "approval_resolved"
+	case EventTypePDAProgress:
+		return "pda_progress"
 	default:
 		return "unknown"
 	}
@@ -153,6 +157,9 @@ type Event struct {
 
 	// ApprovalResolved contains data for approval_resolved events.
 	ApprovalResolved *ApprovalResolvedEvent `json:"approval_resolved,omitempty"`
+
+	// PDAProgress contains PDA step progress information.
+	PDAProgress *PDAProgressEvent `json:"pda_progress,omitempty"`
 }
 
 // ToolResultEvent represents the result of a tool execution.
@@ -186,6 +193,29 @@ type ToolCallUpdateEvent struct {
 
 	// Arguments contains the tool call arguments (may be partial during streaming).
 	Arguments string `json:"arguments,omitempty"`
+}
+
+// PDAProgressEvent represents PDA step execution progress.
+type PDAProgressEvent struct {
+	AgentName     string           `json:"agent_name"`
+	StepIndex     int              `json:"step_index"`
+	TotalSteps    int              `json:"total_steps"`
+	StepLabel     string           `json:"step_label"`
+	StepType      string           `json:"step_type"`
+	Phase         string           `json:"phase"` // "started", "completed", "failed"
+	StackDepth    int              `json:"stack_depth"`
+	ExecutedSteps []string         `json:"executed_steps,omitempty"`
+	TotalTokens   int              `json:"total_tokens,omitempty"`
+	Model         string           `json:"model,omitempty"`
+	ParentSteps   []ParentStepInfo `json:"parent_steps,omitempty"`
+}
+
+// ParentStepInfo describes a parent frame's step progress.
+type ParentStepInfo struct {
+	AgentName  string `json:"agent_name"`
+	StepIndex  int    `json:"step_index"`
+	TotalSteps int    `json:"total_steps"`
+	StepLabel  string `json:"step_label"`
 }
 
 // ApprovalRequestEvent contains data for an approval_request event.
@@ -430,5 +460,36 @@ func FromTypesEvent(te types.Event) Event {
 		PauseData:        pauseData,
 		AgentName:        te.AgentName,
 		AgentDepth:       te.AgentDepth,
+		PDAProgress:      convertPDAProgress(te.PDAProgress),
+	}
+}
+
+// convertPDAProgress converts types.PDAProgressEvent to runner.PDAProgressEvent.
+func convertPDAProgress(tp *types.PDAProgressEvent) *PDAProgressEvent {
+	if tp == nil {
+		return nil
+	}
+	// Convert parent steps
+	var parentSteps []ParentStepInfo
+	for _, ps := range tp.ParentSteps {
+		parentSteps = append(parentSteps, ParentStepInfo{
+			AgentName:  ps.AgentName,
+			StepIndex:  ps.StepIndex,
+			TotalSteps: ps.TotalSteps,
+			StepLabel:  ps.StepLabel,
+		})
+	}
+	return &PDAProgressEvent{
+		AgentName:     tp.AgentName,
+		StepIndex:     tp.StepIndex,
+		TotalSteps:    tp.TotalSteps,
+		StepLabel:     tp.StepLabel,
+		StepType:      tp.StepType,
+		Phase:         tp.Phase,
+		StackDepth:    tp.StackDepth,
+		ExecutedSteps: tp.ExecutedSteps,
+		TotalTokens:   tp.TotalTokens,
+		Model:         tp.Model,
+		ParentSteps:   parentSteps,
 	}
 }

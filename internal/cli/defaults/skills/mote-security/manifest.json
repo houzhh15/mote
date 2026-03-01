@@ -1,0 +1,79 @@
+{
+  "id": "mote-security",
+  "name": "Mote Security Policy",
+  "version": "1.0.0",
+  "description": "Manage Mote security policies, dangerous operation rules, and approval settings.",
+  "author": "Mote Team",
+  "enabled": true,
+  "tools": [
+    {
+      "name": "mote_policy_status",
+      "description": "Get current security policy status including blocklist, allowlist, and dangerous operation rules",
+      "handler": "tools.js#policyStatus",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      }
+    },
+    {
+      "name": "mote_policy_check",
+      "description": "Check if a specific tool call would be allowed by current security policy",
+      "handler": "tools.js#policyCheck",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "type": "string",
+            "description": "Name of the tool to check"
+          },
+          "arguments": {
+            "type": "string",
+            "description": "JSON string of tool arguments to validate"
+          }
+        },
+        "required": ["tool"]
+      }
+    },
+    {
+      "name": "mote_approval_list",
+      "description": "List pending approval requests",
+      "handler": "tools.js#approvalList",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      }
+    },
+    {
+      "name": "mote_approval_respond",
+      "description": "Approve or deny a pending approval request",
+      "handler": "tools.js#approvalRespond",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "description": "ID of the approval request"
+          },
+          "approved": {
+            "type": "boolean",
+            "description": "Whether to approve (true) or deny (false)"
+          },
+          "reason": {
+            "type": "string",
+            "description": "Optional reason for the decision"
+          }
+        },
+        "required": ["request_id", "approved"]
+      }
+    }
+  ],
+  "prompts": [
+    {
+      "name": "security",
+      "file": "prompts/usage.md"
+    }
+  ],
+  "hooks": []
+}

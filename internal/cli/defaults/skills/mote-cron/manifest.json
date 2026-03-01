@@ -1,0 +1,118 @@
+{
+  "id": "mote-cron",
+  "name": "Mote Cron Scheduler",
+  "version": "1.0.1",
+  "description": "Create, manage, and run scheduled tasks (cron jobs). Use this skill when the user wants to automate tasks, set up reminders, or schedule recurring operations.",
+  "author": "mote",
+  "tools": [
+    {
+      "name": "mote_cron_list",
+      "description": "List all scheduled cron jobs",
+      "handler": "tools.js#cronList"
+    },
+    {
+      "name": "mote_cron_add",
+      "description": "Create a new scheduled cron job. Supports prompt, tool, and script job types.",
+      "handler": "tools.js#cronAdd",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Unique name for the cron job"
+          },
+          "schedule": {
+            "type": "string",
+            "description": "Cron expression (e.g., '0 9 * * *' for daily at 9 AM, '*/5 * * * *' for every 5 minutes)"
+          },
+          "type": {
+            "type": "string",
+            "description": "Job type: 'prompt' (send message to agent), 'tool' (execute a tool), or 'script' (run JavaScript)"
+          },
+          "message": {
+            "type": "string",
+            "description": "For prompt type: the message to send to the agent"
+          },
+          "tool": {
+            "type": "string",
+            "description": "For tool type: the name of the tool to execute"
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether the job is enabled (default: true)"
+          }
+        },
+        "required": ["name", "schedule"]
+      }
+    },
+    {
+      "name": "mote_cron_remove",
+      "description": "Delete a scheduled cron job",
+      "handler": "tools.js#cronRemove",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Name of the cron job to delete"
+          }
+        },
+        "required": ["name"]
+      }
+    },
+    {
+      "name": "mote_cron_run",
+      "description": "Trigger a cron job to run immediately",
+      "handler": "tools.js#cronRun",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Name of the cron job to run"
+          }
+        },
+        "required": ["name"]
+      }
+    },
+    {
+      "name": "mote_cron_get",
+      "description": "Get details of a specific cron job",
+      "handler": "tools.js#cronGet",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Name of the cron job"
+          }
+        },
+        "required": ["name"]
+      }
+    },
+    {
+      "name": "mote_cron_history",
+      "description": "Get execution history for cron jobs",
+      "handler": "tools.js#cronHistory",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "job_name": {
+            "type": "string",
+            "description": "Optional: filter history by job name"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Maximum number of history entries to return (default: 20)"
+          }
+        }
+      }
+    }
+  ],
+  "prompts": [
+    {
+      "name": "cron-usage",
+      "file": "prompts/usage.md"
+    }
+  ]
+}

@@ -23,11 +23,12 @@ type BaseOrchestrator struct {
 	systemPrompt *prompt.SystemPromptBuilder
 
 	// Optional components
-	skillManager   *skills.Manager
-	hookManager    *hooks.Manager
-	mcpManager     *client.Manager
-	contextManager *internalContext.Manager
-	toolExecutor   ToolExecutorFunc
+	skillManager      *skills.Manager
+	hookManager       *hooks.Manager
+	mcpManager        *client.Manager
+	contextManager    *internalContext.Manager
+	toolExecutor      ToolExecutorFunc
+	workspaceResolver func(sessionID string) string
 
 	// Configuration
 	config Config
@@ -79,6 +80,11 @@ func (b *BaseOrchestrator) SetContextManager(cm *internalContext.Manager) {
 // SetToolExecutor 设置工具执行器
 func (b *BaseOrchestrator) SetToolExecutor(te ToolExecutorFunc) {
 	b.toolExecutor = te
+}
+
+// SetWorkspaceResolver 设置工作区路径解析器
+func (b *BaseOrchestrator) SetWorkspaceResolver(resolver func(sessionID string) string) {
+	b.workspaceResolver = resolver
 }
 
 // triggerHook 触发钩子

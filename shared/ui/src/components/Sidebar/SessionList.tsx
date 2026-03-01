@@ -13,15 +13,17 @@ import { useAPI } from '../../context/APIContext';
 import { OllamaIcon } from '../OllamaIcon';
 import { MinimaxIcon } from '../MinimaxIcon';
 import { GlmIcon } from '../GlmIcon';
+import { VllmIcon } from '../VllmIcon';
 
 const { Text } = Typography;
 
 // Helper function to get provider from model
-const getProviderFromModel = (model?: string): 'copilot' | 'ollama' | 'minimax' | 'glm' | null => {
+const getProviderFromModel = (model?: string): 'copilot' | 'ollama' | 'minimax' | 'glm' | 'vllm' | null => {
   if (!model) return null;
   if (model.startsWith('ollama:')) return 'ollama';
   if (model.startsWith('minimax:')) return 'minimax';
   if (model.startsWith('glm:')) return 'glm';
+  if (model.startsWith('vllm:')) return 'vllm';
   return 'copilot';
 };
 
@@ -234,13 +236,31 @@ export const SessionList: React.FC<SessionListProps> = ({
                 }}
               >
                 <div className="session-item-icon">
-                  {session.source === 'cron' ? <ClockCircleOutlined style={{ color: '#13c2c2' }} /> : <MessageOutlined />}
+                  {session.source === 'cron' 
+                    ? <ClockCircleOutlined style={{ color: '#13c2c2' }} /> 
+                    : (session.is_pda || session.has_pda_checkpoint)
+                    ? <span style={{ fontSize: 14, lineHeight: 1 }}>📋</span>
+                    : <MessageOutlined />}
                 </div>
                 <div className="session-item-content">
                   <div className="session-item-title">
                     {getSessionTitle(session)}
                   </div>
                   <div className="session-item-meta">
+                    {(session.is_pda || session.has_pda_checkpoint) && (
+                      <span style={{ 
+                        fontSize: 9, 
+                        padding: '0 4px', 
+                        borderRadius: 3, 
+                        background: session.has_pda_checkpoint ? '#1890ff18' : '#52c41a18', 
+                        color: session.has_pda_checkpoint ? '#1890ff' : '#52c41a', 
+                        border: `1px solid ${session.has_pda_checkpoint ? '#1890ff33' : '#52c41a33'}`,
+                        marginRight: 4,
+                        fontWeight: 600,
+                      }}>
+                        {session.has_pda_checkpoint ? 'PDA' : 'PDA✓'}
+                      </span>
+                    )}
                     {session.model && (
                       <span className="session-item-model">
                         {getProviderFromModel(session.model) === 'ollama' 
@@ -249,6 +269,8 @@ export const SessionList: React.FC<SessionListProps> = ({
                           ? <MinimaxIcon size={12} />
                           : getProviderFromModel(session.model) === 'glm'
                           ? <GlmIcon size={12} />
+                          : getProviderFromModel(session.model) === 'vllm'
+                          ? <VllmIcon size={12} />
                           : <GithubOutlined style={{ fontSize: 12 }} />}
                         {' '}{session.model.split('/').pop()?.replace('ollama:', '')}
                       </span>

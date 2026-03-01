@@ -77,6 +77,9 @@ func (r *Router) HandleCreateCronJob(w http.ResponseWriter, req *http.Request) {
 		if createReq.Model != "" {
 			payloadMap["model"] = createReq.Model
 		}
+		if createReq.AgentID != "" {
+			payloadMap["agent_id"] = createReq.AgentID
+		}
 		payloadData, _ := json.Marshal(payloadMap)
 		payload = string(payloadData)
 	}
@@ -150,7 +153,7 @@ func (r *Router) HandleUpdateCronJob(w http.ResponseWriter, req *http.Request) {
 	if updateReq.Schedule != nil {
 		patch.Schedule = updateReq.Schedule
 	}
-	if updateReq.Prompt != nil || updateReq.Model != nil {
+	if updateReq.Prompt != nil || updateReq.Model != nil || updateReq.AgentID != nil {
 		// Need to get existing payload and merge changes
 		existingJob, _ := r.cronScheduler.GetJob(req.Context(), name)
 		var payloadMap map[string]string
@@ -162,6 +165,13 @@ func (r *Router) HandleUpdateCronJob(w http.ResponseWriter, req *http.Request) {
 		}
 		if updateReq.Model != nil {
 			payloadMap["model"] = *updateReq.Model
+		}
+		if updateReq.AgentID != nil {
+			if *updateReq.AgentID == "" {
+				delete(payloadMap, "agent_id") // Clear agent assignment
+			} else {
+				payloadMap["agent_id"] = *updateReq.AgentID
+			}
 		}
 		payloadData, _ := json.Marshal(payloadMap)
 		payloadStr := string(payloadData)
@@ -266,12 +276,13 @@ func (r *Router) HandleGetExecutingJobs(w http.ResponseWriter, req *http.Request
 
 // cronJobFromInternal converts internal cron.Job to API CronJob.
 func cronJobFromInternal(j *cron.Job) CronJob {
-	// Parse payload to extract prompt and model
-	var prompt, model string
+	// Parse payload to extract prompt, model, and agent_id
+	var prompt, model, agentID string
 	var payloadMap map[string]string
 	if err := json.Unmarshal([]byte(j.Payload), &payloadMap); err == nil {
 		prompt = payloadMap["prompt"]
 		model = payloadMap["model"]
+		agentID = payloadMap["agent_id"]
 	} else {
 		// Fallback: treat whole payload as prompt (legacy)
 		prompt = j.Payload
@@ -283,6 +294,7 @@ func cronJobFromInternal(j *cron.Job) CronJob {
 		Type:           string(j.Type),
 		Prompt:         prompt,
 		Model:          model,
+		AgentID:        agentID,
 		Enabled:        j.Enabled,
 		SessionID:      "cron-" + j.Name,
 		WorkspacePath:  j.WorkspacePath,

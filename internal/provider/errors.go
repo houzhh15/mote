@@ -29,6 +29,9 @@ const (
 	ErrCodeTimeout               ErrorCode = "TIMEOUT"                 // Request timeout
 	ErrCodeContextWindowExceeded ErrorCode = "CONTEXT_WINDOW_EXCEEDED" // Input exceeds model context window
 
+	// Model capability
+	ErrCodeToolsNotSupported ErrorCode = "TOOLS_NOT_SUPPORTED" // Model does not support tool calling
+
 	// Unknown
 	ErrCodeUnknown ErrorCode = "UNKNOWN" // Unclassified error
 )

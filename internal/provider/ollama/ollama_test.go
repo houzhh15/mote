@@ -120,19 +120,19 @@ func TestOllamaProvider_ChatError(t *testing.T) {
 		name       string
 		statusCode int
 		response   string
-		wantErr    error
+		wantCode   provider.ErrorCode // expected ProviderError.Code (empty = just check error exists)
 	}{
 		{
 			name:       "model not found",
 			statusCode: http.StatusNotFound,
 			response:   `{"error": "model 'unknown' not found"}`,
-			wantErr:    ErrModelNotFound,
+			wantCode:   provider.ErrCodeModelNotFound,
 		},
 		{
 			name:       "server error",
 			statusCode: http.StatusInternalServerError,
 			response:   `{"error": "internal error"}`,
-			wantErr:    nil,
+			wantCode:   "",
 		},
 	}
 
@@ -146,13 +146,19 @@ func TestOllamaProvider_ChatError(t *testing.T) {
 
 			p := NewOllamaProvider(Config{Endpoint: server.URL})
 
-			_, err := p.Chat(context.Background(), provider.ChatRequest{
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
+			_, err := p.Chat(ctx, provider.ChatRequest{
 				Messages: []provider.Message{{Role: "user", Content: "test"}},
 			})
 
 			require.Error(t, err)
-			if tt.wantErr != nil {
-				assert.ErrorIs(t, err, tt.wantErr)
+			if tt.wantCode != "" {
+				var provErr *provider.ProviderError
+				if assert.ErrorAs(t, err, &provErr) {
+					assert.Equal(t, tt.wantCode, provErr.Code)
+				}
 			}
 		})
 	}

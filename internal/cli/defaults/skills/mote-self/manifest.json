@@ -1,0 +1,205 @@
+{
+  "id": "mote-self",
+  "name": "Mote Self Management",
+  "version": "1.1.0",
+  "description": "Enable Mote to understand and configure itself",
+  "author": "mote",
+  "tools": [
+    {
+      "name": "mote_get_config",
+      "description": "Get Mote's current configuration settings",
+      "handler": "tools.js#getConfig"
+    },
+    {
+      "name": "mote_set_config",
+      "description": "Set a Mote configuration value (limited to allowed keys: copilot.model, copilot.mode, gateway.port, memory.enabled, cron.enabled)",
+      "handler": "tools.js#setConfig",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "Configuration key (e.g., copilot.model)"
+          },
+          "value": {
+            "type": "string",
+            "description": "Configuration value"
+          }
+        },
+        "required": ["key", "value"]
+      }
+    },
+    {
+      "name": "mote_list_models",
+      "description": "List all available models from all enabled providers (GitHub Copilot, Ollama)",
+      "handler": "tools.js#listModels"
+    },
+    {
+      "name": "mote_switch_model",
+      "description": "Switch the current model (supports models from all enabled providers, e.g., gpt-4.1, claude-sonnet-4, ollama:llama3.2)",
+      "handler": "tools.js#switchModel",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "model": {
+            "type": "string",
+            "description": "Model ID to switch to (e.g., gpt-4.1, claude-sonnet-4, ollama:llama3.2)"
+          }
+        },
+        "required": ["model"]
+      }
+    },
+    {
+      "name": "mote_list_providers",
+      "description": "List all available AI providers and their enable status",
+      "handler": "tools.js#listProviders"
+    },
+    {
+      "name": "mote_session_model",
+      "description": "Get or set the current session's model. If model is provided, sets the session model; otherwise returns current model.",
+      "handler": "tools.js#sessionModel",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "description": "Session ID (optional, uses current session if not provided)"
+          },
+          "model": {
+            "type": "string",
+            "description": "Model ID to set (optional, omit to get current model)"
+          }
+        }
+      }
+    },
+    {
+      "name": "mote_get_scenario_models",
+      "description": "Get default models for all scenarios (chat, cron, channel)",
+      "handler": "tools.js#getScenarioModels"
+    },
+    {
+      "name": "mote_set_scenario_model",
+      "description": "Set a scenario's default model",
+      "handler": "tools.js#setScenarioModel",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "scenario": {
+            "type": "string",
+            "description": "Scenario name: chat, cron, or channel"
+          },
+          "model": {
+            "type": "string",
+            "description": "Model ID to set as default for this scenario"
+          }
+        },
+        "required": ["scenario", "model"]
+      }
+    },
+    {
+      "name": "mote_get_version",
+      "description": "Get Mote version information",
+      "handler": "tools.js#getVersion"
+    },
+    {
+      "name": "mote_list_tools",
+      "description": "List all available tools in Mote",
+      "handler": "tools.js#listTools"
+    },
+    {
+      "name": "mote_list_skills",
+      "description": "List all registered skills in Mote",
+      "handler": "tools.js#listSkills"
+    },
+    {
+      "name": "mote_workspace_bind",
+      "description": "Bind a workspace directory to the current session for file operations",
+      "handler": "tools.js#workspaceBind",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Absolute path to the workspace directory"
+          },
+          "session_id": {
+            "type": "string",
+            "description": "Session ID (optional, uses current session if not provided)"
+          },
+          "read_only": {
+            "type": "boolean",
+            "description": "Whether the workspace is read-only (default: false)"
+          }
+        },
+        "required": ["path"]
+      }
+    },
+    {
+      "name": "mote_workspace_unbind",
+      "description": "Unbind the workspace from the current session",
+      "handler": "tools.js#workspaceUnbind",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "description": "Session ID (optional, uses current session if not provided)"
+          }
+        }
+      }
+    },
+    {
+      "name": "mote_workspace_list",
+      "description": "List all bound workspaces. Use this to see which directories are bound as workspaces to sessions.",
+      "handler": "tools.js#workspaceList"
+    },
+    {
+      "name": "mote_workspace_get",
+      "description": "Get the current session's bound workspace directory path and name. ALWAYS use this tool when user asks about 'workspace', 'working directory', or 'project directory'. Returns the actual bound workspace path, not the shell current directory.",
+      "handler": "tools.js#workspaceGet",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "description": "Session ID (optional, uses current session if not provided)"
+          }
+        }
+      }
+    },
+    {
+      "name": "mote_workspace_files",
+      "description": "List files in the current workspace",
+      "handler": "tools.js#workspaceFiles",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "description": "Session ID (optional, uses current session if not provided)"
+          },
+          "path": {
+            "type": "string",
+            "description": "Relative path within workspace (default: root)"
+          }
+        }
+      }
+    }
+  ],
+  "prompts": [
+    {
+      "name": "mote_knowledge",
+      "file": "prompts/about.md",
+      "tags": ["system", "identity"]
+    }
+  ],
+  "config": {
+    "allowed_config_keys": [
+      "copilot.model",
+      "copilot.mode",
+      "gateway.port",
+      "memory.enabled",
+      "cron.enabled"
+    ]
+  }
+}

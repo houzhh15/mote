@@ -58,6 +58,7 @@ func RunInit(opts *InitOptions) error {
 		filepath.Join(configDir, "ui"),
 		filepath.Join(configDir, "tools"),
 		filepath.Join(configDir, "skills"),
+		filepath.Join(configDir, "prompts"),
 	}
 
 	for _, dir := range dirs {
@@ -77,7 +78,7 @@ func RunInit(opts *InitOptions) error {
 		},
 		"ollama": map[string]any{
 			"endpoint":   "http://localhost:11434",
-			"model":      "llama3.2",
+			"model":      "",
 			"timeout":    "5m",
 			"keep_alive": "5m",
 		},
@@ -125,11 +126,57 @@ func RunInit(opts *InitOptions) error {
 		fmt.Printf("Warning: failed to copy default skills: %v\n", err)
 	}
 
+	// Copy default prompts
+	if err := copyDefaultPrompts(configDir, opts.Force); err != nil {
+		fmt.Printf("Warning: failed to copy default prompts: %v\n", err)
+	}
+
 	fmt.Printf("Initialized mote at %s\n", configDir)
 	fmt.Printf("  Config: %s\n", configPath)
 	fmt.Printf("  Database: %s\n", dataPath)
 
 	return nil
+}
+
+// copyDefaultPrompts copies embedded default prompts to the user's prompts directory.
+func copyDefaultPrompts(configDir string, force bool) error {
+	promptsDir := filepath.Join(configDir, "prompts")
+	promptsFS := defaults.GetDefaultPromptsFS()
+
+	return fs.WalkDir(promptsFS, "prompts", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		if path == "prompts" {
+			return nil
+		}
+
+		relPath, err := filepath.Rel("prompts", path)
+		if err != nil {
+			return err
+		}
+		destPath := filepath.Join(promptsDir, relPath)
+
+		if d.IsDir() {
+			return os.MkdirAll(destPath, 0755)
+		}
+
+		if _, err := os.Stat(destPath); err == nil && !force {
+			return nil
+		}
+
+		data, err := promptsFS.ReadFile(path)
+		if err != nil {
+			return err
+		}
+
+		if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
+			return err
+		}
+
+		return os.WriteFile(destPath, data, 0644)
+	})
 }
 
 // copyDefaultSkills copies embedded default skills to the user's skills directory.

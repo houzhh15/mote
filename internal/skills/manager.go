@@ -112,8 +112,26 @@ func (m *Manager) ScanAllPaths() error {
 	copy(paths, m.discoveryPaths)
 	// Preserve active instances but clear scanned registry & skillMDEntries
 	// to avoid duplicates on re-scan.
+	// Also verify that active skills still exist on disk; remove stale ones.
 	activeIDs := make(map[string]bool, len(m.active))
-	for id := range m.active {
+	for id, instance := range m.active {
+		skillDir := GetSkillDir(instance.Skill)
+		if skillDir != "" {
+			if _, err := os.Stat(skillDir); os.IsNotExist(err) {
+				// Skill directory no longer exists, clean up
+				log.Info().Str("skill_id", id).Str("path", skillDir).Msg("skill directory removed from disk, cleaning up")
+				if m.toolRegistry != nil {
+					for _, tool := range instance.Tools {
+						_ = m.toolRegistry.Unregister(tool.Name())
+					}
+				}
+				if m.promptCollector != nil {
+					m.promptCollector.Remove(id)
+				}
+				delete(m.active, id)
+				continue
+			}
+		}
 		activeIDs[id] = true
 	}
 	newRegistry := make(map[string]*SkillStatus, len(m.registry))
@@ -323,10 +341,11 @@ func (m *Manager) Activate(id string, config map[string]any) error {
 
 	skillDir := GetSkillDir(skill)
 
-	// Register tools
+	// Register tools (merge skill.Config with activation config)
+	mergedConfig := mergeConfig(skill.Config, config)
 	if m.toolRegistry != nil && m.jsRuntime != nil {
 		for _, toolDef := range skill.Tools {
-			skillTool := NewSkillTool(skill.ID, skillDir, toolDef, m.jsRuntime)
+			skillTool := NewSkillTool(skill.ID, skillDir, toolDef, m.jsRuntime, mergedConfig)
 			if err := m.toolRegistry.Register(skillTool); err != nil {
 				// Rollback registered tools
 				m.rollbackTools(instance)
@@ -430,6 +449,78 @@ func (m *Manager) Deactivate(id string) error {
 	return nil
 }
 
+// DeleteSkill completely removes a skill: deactivates it if active, removes from
+// registry, deletes its configuration, and optionally removes its directory from disk.
+// Builtin skills cannot be deleted.
+func (m *Manager) DeleteSkill(id string, removeFiles bool) error {
+	// Check if it's a builtin skill
+	if isBuiltinSkill(id) {
+		return ErrBuiltinSkillProtected
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Check if skill exists
+	status, exists := m.registry[id]
+	if !exists {
+		return ErrSkillNotFound
+	}
+
+	// If active, deactivate first (inline to avoid double-lock)
+	if instance, active := m.active[id]; active {
+		// Check dependencies
+		for depID, depInstance := range m.active {
+			if depID == id {
+				continue
+			}
+			for _, dep := range depInstance.Skill.Dependencies {
+				if dep == id {
+					return fmt.Errorf("cannot delete: %s depends on %s", depID, id)
+				}
+			}
+		}
+
+		// Unregister tools
+		if m.toolRegistry != nil {
+			for _, tool := range instance.Tools {
+				_ = m.toolRegistry.Unregister(tool.Name())
+			}
+		}
+
+		// Remove prompts from collector
+		if m.promptCollector != nil {
+			m.promptCollector.Remove(id)
+		}
+
+		delete(m.active, id)
+	}
+
+	// Get skill directory before removing from registry
+	skillDir := GetSkillDir(status.Skill)
+
+	// Remove from registry
+	delete(m.registry, id)
+
+	// Delete config
+	if m.configStore != nil {
+		_ = m.configStore.Delete(id)
+	}
+
+	log.Info().Str("skill_id", id).Bool("remove_files", removeFiles).Msg("deleted skill from registry")
+
+	// Remove files from disk if requested
+	if removeFiles && skillDir != "" {
+		if err := os.RemoveAll(skillDir); err != nil {
+			log.Warn().Err(err).Str("path", skillDir).Msg("failed to remove skill directory")
+			return fmt.Errorf("skill removed from registry but failed to delete files: %w", err)
+		}
+		log.Info().Str("path", skillDir).Msg("removed skill directory")
+	}
+
+	return nil
+}
+
 // IsActive returns whether a skill is currently active.
 func (m *Manager) IsActive(id string) bool {
 	m.mu.RLock()
@@ -520,6 +611,22 @@ func (m *Manager) rollbackTools(instance *SkillInstance) {
 	for _, tool := range instance.Tools {
 		_ = m.toolRegistry.Unregister(tool.Name())
 	}
+}
+
+// mergeConfig merges the skill's manifest config with activation-time overrides.
+// Activation config takes precedence over manifest config.
+func mergeConfig(manifestConfig, activationConfig map[string]any) map[string]any {
+	if len(manifestConfig) == 0 && len(activationConfig) == 0 {
+		return nil
+	}
+	merged := make(map[string]any)
+	for k, v := range manifestConfig {
+		merged[k] = v
+	}
+	for k, v := range activationConfig {
+		merged[k] = v
+	}
+	return merged
 }
 
 // resolvePrompt resolves a prompt definition to a SkillPrompt.

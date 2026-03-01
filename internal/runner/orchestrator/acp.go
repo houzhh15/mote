@@ -61,6 +61,13 @@ func (o *ACPOrchestrator) runACPLoop(ctx context.Context, request *RunRequest, e
 	prov := request.Provider
 	cached := request.CachedSession
 
+	// Inject session-bound workspace directory into system prompt
+	if o.systemPrompt != nil && o.workspaceResolver != nil && sessionID != "" {
+		if wsPath := o.workspaceResolver(sessionID); wsPath != "" {
+			o.systemPrompt.SetWorkspaceDir(wsPath)
+		}
+	}
+
 	// 1. 添加用户消息到会话
 	_, err := o.sessions.AddMessage(sessionID, provider.RoleUser, userInput, nil, "")
 	if err != nil {

@@ -17,13 +17,15 @@ import { PromptSelector } from '../components/PromptSelector';
 import { DirectoryPicker } from '../components/DirectoryPicker';
 import { FileSelector } from '../components/FileSelector';
 import type { FileSelectorMode } from '../components/FileSelector';
+import { MentionSelector } from '../components/MentionSelector';
 import { OllamaIcon } from '../components/OllamaIcon';
+import { VllmIcon } from '../components/VllmIcon';
 import { StatusIndicator, ErrorBanner } from '../components';
 import { ContextUsagePopover } from '../components/ContextUsagePopover';
 import { useConnectionStatusSafe, useHasConnectionIssuesSafe } from '../context/ConnectionStatusContext';
 import moteLogo from '../assets/mote_logo.png';
 import userAvatar from '../assets/user.png';
-import type { Message, Model, Workspace, ErrorDetail, Skill, ReconfigureSessionResponse, ImageAttachment, ApprovalRequestSSEEvent } from '../types';
+import type { Message, Model, Workspace, ErrorDetail, Skill, ReconfigureSessionResponse, ImageAttachment, ApprovalRequestSSEEvent, PDACheckpointInfo } from '../types';
 
 const { TextArea } = Input;
 const { Text } = Typography;
@@ -224,9 +226,13 @@ const MessageItem = memo<MessageItemProps>(({
                   )}
                 </>
               ) : (
-                <div className="markdown-content">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
-                </div>
+                hasAgentMarkers(msg.content) ? (
+                  <ContentWithAgentTags content={msg.content} />
+                ) : (
+                  <div className="markdown-content">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
+                  </div>
+                )
               )}
             </div>
           )}
@@ -290,6 +296,99 @@ const escapeHtml = (str: string): string => {
   div.textContent = str;
   return div.innerHTML;
 };
+
+// Agent depth color palette for sub-agent tags
+const AGENT_TAG_COLORS = [
+  { bg: '#1890ff18', border: '#1890ff44', text: '#1890ff' },
+  { bg: '#52c41a18', border: '#52c41a44', text: '#52c41a' },
+  { bg: '#faad1418', border: '#faad1444', text: '#d48806' },
+  { bg: '#eb2f9618', border: '#eb2f9644', text: '#eb2f96' },
+  { bg: '#722ed118', border: '#722ed144', text: '#722ed1' },
+];
+
+// Render streaming content with inline agent tags.
+// Replaces <<AGENT:name:depth>> and <<AGENT_END>> markers with styled HTML tags.
+const renderContentWithAgentTags = (text: string): string => {
+  const escaped = escapeHtml(text);
+  return escaped
+    .replace(/&lt;&lt;AGENT:([^:]+):(\d+)&gt;&gt;/g, (_match, name, depthStr) => {
+      const depth = parseInt(depthStr, 10);
+      const c = AGENT_TAG_COLORS[depth % AGENT_TAG_COLORS.length];
+      return `<span style="display:inline-block;font-size:11px;font-weight:600;padding:1px 8px;border-radius:4px;background:${c.bg};border:1px solid ${c.border};color:${c.text};margin:2px 0;vertical-align:middle;">${name}</span>\n`;
+    })
+    .replace(/&lt;&lt;AGENT_END&gt;&gt;/g, '\n');
+};
+
+// Check if content contains agent transition markers
+const hasAgentMarkers = (content: string): boolean =>
+  /<<AGENT:[^>]+>>/.test(content);
+
+// Split content by agent markers and render with ReactMarkdown + styled agent tags.
+// Each <<AGENT:name:depth>> becomes a styled tag header, and the text between
+// markers is rendered as Markdown.
+const AGENT_MARKER_RE = /<<AGENT:([^:]+):(\d+)>>|<<AGENT_END>>/g;
+
+const ContentWithAgentTags: React.FC<{ content: string }> = memo(({ content }) => {
+  const parts: React.ReactNode[] = [];
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  const re = new RegExp(AGENT_MARKER_RE.source, 'g');
+  let key = 0;
+
+  while ((match = re.exec(content)) !== null) {
+    // Text before this marker → Markdown
+    const before = content.slice(lastIndex, match.index).replace(/^\n+|\n+$/g, '');
+    if (before) {
+      parts.push(
+        <div key={key++} className="markdown-content">
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{before}</ReactMarkdown>
+        </div>
+      );
+    }
+    lastIndex = re.lastIndex;
+
+    if (match[0].startsWith('<<AGENT_END')) {
+      // AGENT_END — just a separator, no visual element needed
+      continue;
+    }
+
+    // <<AGENT:name:depth>>
+    const name = match[1];
+    const depth = parseInt(match[2], 10);
+    const c = AGENT_TAG_COLORS[depth % AGENT_TAG_COLORS.length];
+    parts.push(
+      <span
+        key={key++}
+        style={{
+          display: 'inline-block',
+          fontSize: 11,
+          fontWeight: 600,
+          padding: '1px 8px',
+          borderRadius: 4,
+          background: c.bg,
+          border: `1px solid ${c.border}`,
+          color: c.text,
+          margin: '6px 0 2px',
+          verticalAlign: 'middle',
+        }}
+      >
+        {name}
+      </span>
+    );
+  }
+
+  // Remaining text after last marker
+  const tail = content.slice(lastIndex).replace(/^\n+|\n+$/g, '');
+  if (tail) {
+    parts.push(
+      <div key={key++} className="markdown-content">
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>{tail}</ReactMarkdown>
+      </div>
+    );
+  }
+
+  return <>{parts}</>;
+});
 
 // ================================================================
 // ThinkingPanel - Fixed above input area, subscribes independently
@@ -416,11 +515,14 @@ const StreamingContent: React.FC<StreamingContentProps> = ({ sessionId, tokenCol
   const toolCallsRef = useRef<HTMLDivElement>(null);
   const toolCallsContentRef = useRef<HTMLDivElement>(null);
   const agentBadgeRef = useRef<HTMLDivElement>(null);
+  const pdaPanelRef = useRef<HTMLDivElement>(null);
+  const pdaPanelContentRef = useRef<HTMLDivElement>(null);
   
   // 状态存储在 ref 中
   const lastContentLengthRef = useRef(0);
   const lastToolCallsJsonRef = useRef('');
   const lastAgentNameRef = useRef<string | undefined>(undefined);
+  const lastPdaJsonRef = useRef('');
 
   // 使用 useLayoutEffect 确保 DOM 已准备好
   useEffect(() => {
@@ -431,8 +533,16 @@ const StreamingContent: React.FC<StreamingContentProps> = ({ sessionId, tokenCol
       const newContent = state.currentContent || '';
       // 压缩连续空行（3个以上换行 → 2个），并去掉开头空行
       const displayContent = newContent.replace(/^\n+/, '').replace(/\n{3,}/g, '\n\n');
-      if (contentRef.current && contentRef.current.textContent !== displayContent) {
-        contentRef.current.textContent = displayContent;
+      // Check if content contains agent markers
+      const hasAgentTags = displayContent.includes('<<AGENT:');
+      if (contentRef.current) {
+        if (hasAgentTags) {
+          // Use innerHTML for styled agent tags — always update since
+          // content is streaming and changes every event
+          contentRef.current.innerHTML = renderContentWithAgentTags(displayContent);
+        } else if (contentRef.current.textContent !== displayContent) {
+          contentRef.current.textContent = displayContent;
+        }
         
         // 内容增加时请求滚动
         if (newContent.length > lastContentLengthRef.current) {
@@ -457,7 +567,7 @@ const StreamingContent: React.FC<StreamingContentProps> = ({ sessionId, tokenCol
             agentBadgeRef.current.innerHTML = `
               <div style="display: flex; align-items: center; gap: 8px;">
                 <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #52c41a; animation: agentPulse 1.5s ease-in-out infinite;"></span>
-                <span style="font-weight: 600;">🤖 ${escapeHtml(state.activeAgentName)}</span>
+                <span style="font-weight: 600;">${escapeHtml(state.activeAgentName)}</span>
                 <span style="opacity: 0.7; font-size: 10px;">深度 ${depth}</span>
                 ${chainDots ? `<span style="font-size: 10px;">${chainDots}</span>` : ''}
               </div>
@@ -533,6 +643,107 @@ const StreamingContent: React.FC<StreamingContentProps> = ({ sessionId, tokenCol
           }
         }
       }
+
+      // === 4. 更新 PDA 进度面板 ===
+      const pdaSteps = state.pdaSteps;
+      const pdaProgress = state.pdaProgress;
+      const newPdaJson = pdaSteps ? JSON.stringify(pdaSteps) + JSON.stringify(pdaProgress) : '';
+      
+      if (newPdaJson !== lastPdaJsonRef.current) {
+        lastPdaJsonRef.current = newPdaJson;
+        
+        if (pdaPanelRef.current && pdaPanelContentRef.current) {
+          if (pdaSteps && pdaSteps.length > 0 && pdaProgress) {
+            pdaPanelRef.current.style.display = 'block';
+
+            // --- Parent breadcrumb (when inside a sub-agent) ---
+            let parentBreadcrumbHtml = '';
+            if (pdaProgress.parent_steps && pdaProgress.parent_steps.length > 0) {
+              const crumbs = pdaProgress.parent_steps.map(ps => {
+                const pCompleted = ps.step_index;
+                return '<span style="display: inline-flex; align-items: center; gap: 3px; padding: 2px 6px; border-radius: 4px; background: ' + tokenColors.colorBgLayout + '; border: 1px solid ' + tokenColors.colorBorderSecondary + '; font-size: 10px;">' +
+                  '<span style="opacity: 0.7;">' + escapeHtml(ps.agent_name) + '</span>' +
+                  '<span style="font-weight: 600;">' + pCompleted + '/' + ps.total_steps + '</span>' +
+                  '</span>';
+              }).join('<span style="opacity: 0.4; font-size: 10px; margin: 0 2px;">›</span>');
+              parentBreadcrumbHtml = '<div style="display: flex; align-items: center; gap: 4px; margin-bottom: 6px; flex-wrap: wrap;">' +
+                '<span style="font-size: 10px; opacity: 0.5;">调用栈:</span>' +
+                crumbs +
+                '<span style="opacity: 0.4; font-size: 10px; margin: 0 2px;">›</span>' +
+                '<span style="display: inline-flex; align-items: center; gap: 3px; padding: 2px 6px; border-radius: 4px; background: #1890ff22; border: 1px solid #1890ff44; font-size: 10px; color: #1890ff; font-weight: 600;">' +
+                escapeHtml(pdaProgress.agent_name) +
+                '</span>' +
+                '</div>';
+            }
+            
+            const stepsHtml = pdaSteps.map((step, i) => {
+              const isCurrent = i === pdaProgress.step_index;
+              let icon = '';
+              let labelStyle = '';
+              if (step.phase === 'completed') {
+                icon = '<span style="color: #52c41a; font-size: 13px;">✓</span>';
+                labelStyle = 'color: #52c41a;';
+              } else if (step.phase === 'started') {
+                icon = '<span style="display: inline-block; width: 10px; height: 10px; border: 2px solid #1890ff; border-top-color: transparent; border-radius: 50%; animation: pdaSpin 0.8s linear infinite;"></span>';
+                labelStyle = 'color: #1890ff; font-weight: 600;';
+              } else if (step.phase === 'failed') {
+                icon = '<span style="color: #ff4d4f; font-size: 13px;">✗</span>';
+                labelStyle = 'color: #ff4d4f;';
+              } else {
+                icon = '<span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: ' + tokenColors.colorBorderSecondary + '; opacity: 0.5;"></span>';
+                labelStyle = 'opacity: 0.5;';
+              }
+              
+              const typeBadge = step.type ? '<span style="font-size: 9px; padding: 0 4px; border-radius: 3px; background: ' + tokenColors.colorBgLayout + '; border: 1px solid ' + tokenColors.colorBorderSecondary + '; margin-left: 6px;">' + escapeHtml(step.type) + '</span>' : '';
+              const bg = isCurrent ? 'background: ' + tokenColors.colorBgLayout + ';' : '';
+              
+              return '<div style="display: flex; align-items: center; gap: 8px; padding: 3px 6px; border-radius: 4px; ' + bg + '">' +
+                '<span style="flex-shrink: 0; width: 16px; text-align: center;">' + icon + '</span>' +
+                '<span style="font-size: 12px; ' + labelStyle + '">' + escapeHtml(step.label) + typeBadge + '</span>' +
+                '</div>';
+            }).join('');
+
+            const agentLabel = pdaProgress.agent_name ? escapeHtml(pdaProgress.agent_name) : '';
+            const progressCount = pdaSteps.filter(s => s.phase === 'completed').length;
+            const agentSpan = agentLabel ? '<span style="font-size: 11px; opacity: 0.7;">' + agentLabel + '</span>' : '';
+
+            // Model badge
+            const modelName = pdaProgress.model || '';
+            const modelShort = modelName ? modelName.split('/').pop() || modelName : '';
+            const modelBadgeHtml = modelShort ? '<span style="font-size: 9px; padding: 1px 5px; border-radius: 3px; background: #722ed122; color: #722ed1; border: 1px solid #722ed144; margin-left: 4px;"> ' + escapeHtml(modelShort) + '</span>' : '';
+
+            // Token count
+            const tokenCount = pdaProgress.total_tokens || 0;
+            const tokenBadgeHtml = tokenCount > 0 ? '<span style="font-size: 9px; padding: 1px 5px; border-radius: 3px; background: #fa8c1622; color: #fa8c16; border: 1px solid #fa8c1644;">⚡ ' + tokenCount.toLocaleString() + ' tokens</span>' : '';
+
+            // Stack depth indicator
+            const stackDepth = pdaProgress.stack_depth || 0;
+            const stackBadgeHtml = stackDepth > 1 ? '<span style="font-size: 9px; padding: 1px 5px; border-radius: 3px; background: #13c2c222; color: #13c2c2; border: 1px solid #13c2c244;">📚 深度 ' + stackDepth + '</span>' : '';
+
+            const headerHtml = '<div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px;">' +
+              '<div style="display: flex; align-items: center; gap: 6px;">' +
+              '<span style="font-size: 13px;">📋</span>' +
+              '<span style="font-weight: 600; font-size: 12px;">PDA 执行进度</span>' +
+              agentSpan +
+              '</div>' +
+              '<div style="display: flex; align-items: center; gap: 4px;">' +
+              modelBadgeHtml +
+              tokenBadgeHtml +
+              stackBadgeHtml +
+              '<span style="font-size: 11px; opacity: 0.7; margin-left: 4px;">' + progressCount + '/' + pdaSteps.length + '</span>' +
+              '</div>' +
+              '</div>' +
+              '<div style="height: 2px; background: ' + tokenColors.colorBorderSecondary + '; border-radius: 1px; margin-bottom: 8px; overflow: hidden;">' +
+              '<div style="height: 100%; width: ' + Math.round((progressCount / pdaSteps.length) * 100) + '%; background: #1890ff; border-radius: 1px; transition: width 0.3s ease;"></div>' +
+              '</div>';
+            
+            pdaPanelContentRef.current.innerHTML = parentBreadcrumbHtml + headerHtml + stepsHtml;
+            onScrollRequest?.();
+          } else {
+            pdaPanelRef.current.style.display = 'none';
+          }
+        }
+      }
     });
 
     return () => {
@@ -579,6 +790,23 @@ const StreamingContent: React.FC<StreamingContentProps> = ({ sessionId, tokenCol
               boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
             }}
           />
+          {/* PDA Progress Panel - 初始隐藏，由 JS 控制显示和内容 */}
+          <div
+            ref={pdaPanelRef}
+            style={{
+              display: 'none',
+              marginBottom: 8,
+              padding: '8px 12px',
+              fontSize: 12,
+              color: tokenColors.colorText,
+              background: `linear-gradient(135deg, ${tokenColors.colorBgLayout}, ${tokenColors.colorBgContainer})`,
+              border: `1px solid ${tokenColors.colorBorderSecondary}`,
+              borderRadius: 8,
+              boxShadow: '0 1px 3px rgba(0,0,0,0.06)',
+            }}
+          >
+            <div ref={pdaPanelContentRef}></div>
+          </div>
           {/* Tool Calls - 初始隐藏，由 JS 控制显示和内容 */}
           <div 
             ref={toolCallsRef}
@@ -869,8 +1097,16 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
   const [fileSelectorMode, setFileSelectorMode] = useState<FileSelectorMode>('context');
   const [_filesToContext, _setFilesToContext] = useState<Set<string>>(new Set());
   const [tabTriggerPos, setTabTriggerPos] = useState<number | null>(null);
+
+  // @ mention selector state (unified agent + file selector)
+  const [mentionSelectorVisible, setMentionSelectorVisible] = useState(false);
+  const [mentionSearchQuery, setMentionSearchQuery] = useState('');
+
+  // Direct delegate: selected target agent via @ mention
+  const [targetAgent, setTargetAgent] = useState<string | null>(null);
   
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
+  const [allWorkspaces, setAllWorkspaces] = useState<Workspace[]>([]);
   const [workspaceModalVisible, setWorkspaceModalVisible] = useState(false);
   const [workspacePath, setWorkspacePath] = useState('');
   const [directoryPickerVisible, setDirectoryPickerVisible] = useState(false);
@@ -894,6 +1130,10 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
   const [approvalRequest, setApprovalRequest] = useState<ApprovalRequestSSEEvent | null>(null);
   const [approvalEditArgs, setApprovalEditArgs] = useState<string>('');
   const approvalArgsModifiedRef = useRef(false);
+  // PDA checkpoint state
+  const [pdaCheckpoint, setPdaCheckpoint] = useState<PDACheckpointInfo | null>(null);
+  const [pdaResuming, setPdaResuming] = useState(false);
+  const pdaStopRequestedRef = useRef(false);
   // Pasted images state
   const [pastedImages, setPastedImages] = useState<ImageAttachment[]>([]);
   const lastScrollHeightRef = useRef(0);
@@ -1057,6 +1297,19 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
             }
             // Load session skills: undefined/null/empty means all
             setSelectedSkills(session.selected_skills || []);
+            // Check for PDA checkpoint
+            if (session.has_pda_checkpoint && api.getPDAStatus) {
+              try {
+                const checkpoint = await api.getPDAStatus(initialSessionId);
+                if (checkpoint.has_checkpoint) {
+                  setPdaCheckpoint(checkpoint);
+                }
+              } catch (e) {
+                console.error('Failed to load PDA checkpoint status:', e);
+              }
+            } else {
+              setPdaCheckpoint(null);
+            }
           } catch (e) {
             console.error('Failed to load session model:', e);
           }
@@ -1087,6 +1340,19 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
                   setCurrentModel(session.model);
                 }
                 setSelectedSkills(session.selected_skills || []);
+                // Check for PDA checkpoint
+                if (session.has_pda_checkpoint && api.getPDAStatus) {
+                  try {
+                    const checkpoint = await api.getPDAStatus(chatSession.id);
+                    if (checkpoint.has_checkpoint) {
+                      setPdaCheckpoint(checkpoint);
+                    }
+                  } catch (e) {
+                    console.error('Failed to load PDA checkpoint status:', e);
+                  }
+                } else {
+                  setPdaCheckpoint(null);
+                }
               } catch (e) {
                 console.error('Failed to load session model:', e);
               }
@@ -1116,6 +1382,7 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
   const processPendingMessage = useCallback(async (sid: string) => {
     const storageKey = `mote_pending_message_${sid}`;
     const imagesKey = `mote_pending_images_${sid}`;
+    const targetAgentKey = `mote_pending_target_agent_${sid}`;
     const pendingMessage = sessionStorage.getItem(storageKey);
     if (pendingMessage) {
       sessionStorage.removeItem(storageKey);
@@ -1130,6 +1397,15 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
         } catch {
           // Ignore parse errors
         }
+      }
+
+      // Check for pending target agent (direct delegate)
+      let pendingTargetAgent: string | undefined;
+      const storedTargetAgent = sessionStorage.getItem(targetAgentKey);
+      if (storedTargetAgent) {
+        sessionStorage.removeItem(targetAgentKey);
+        pendingTargetAgent = storedTargetAgent;
+        setTargetAgent(null); // Don't persist after sending
       }
       
       // 等待一小段时间确保页面已完全渲染
@@ -1158,6 +1434,7 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
           session_id: sid,
           stream: true,
           images: pendingImages,
+          ...(pendingTargetAgent ? { target_agent: pendingTargetAgent } : {}),
         },
         api.chat,
         (_assistantMessage, error) => {
@@ -1390,6 +1667,7 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
       if (!sessionId || !api.getWorkspaces) return;
       try {
         const workspaces = await api.getWorkspaces();
+        setAllWorkspaces(workspaces || []);
         const currentWorkspace = workspaces.find((w: Workspace) => w.session_id === sessionId);
         setWorkspace(currentWorkspace || null);
       } catch (e) {
@@ -1399,6 +1677,21 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
     };
     loadWorkspace();
   }, [api, sessionId]);
+
+  // 获取去重后的工作区列表（按 path 去重）
+  const uniqueWorkspaces: Workspace[] = useMemo(() => {
+    const seen = new Set<string>();
+    return allWorkspaces.filter((ws) => {
+      if (seen.has(ws.path)) return false;
+      seen.add(ws.path);
+      return true;
+    });
+  }, [allWorkspaces]);
+
+  // 选择已有工作区
+  const handleSelectExistingWorkspace = (selectedPath: string) => {
+    setWorkspacePath(selectedPath);
+  };
 
   // Handle workspace binding
   const handleBindWorkspace = async () => {
@@ -1628,6 +1921,10 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
     currentResponseRef.current = '';
     streamEndReloadedRef.current = false;  // Reset for new chat
 
+    // Capture and clear target agent before async call
+    const currentTargetAgent = targetAgent;
+    setTargetAgent(null);
+
     // 使用 ChatManager 发起请求，它会在后台持续运行
     chatManager.startChat(
       sessionId,
@@ -1636,6 +1933,7 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
         session_id: sessionId,
         stream: true,
         images: currentImages,
+        ...(currentTargetAgent ? { target_agent: currentTargetAgent } : {}),
       },
       api.chat,
       (_assistantMessage, error) => {
@@ -1688,6 +1986,9 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
 
   const handleStop = () => {
     if (streaming && sessionId) {
+      if (pdaResuming) {
+        pdaStopRequestedRef.current = true;
+      }
       chatManager.abortChat(sessionId);
       
       // Cancel the backend execution — this is essential because
@@ -1701,6 +2002,7 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
       // Clear truncation state when stopping
       setTruncated(false);
       setTruncatedInfo(null);
+      setPdaResuming(false);
       
       // 如果有累积的响应内容，保存为一条中断的消息
       if (currentResponseRef.current.trim()) {
@@ -1766,6 +2068,71 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
     }
   };
 
+  // PDA checkpoint handlers
+  const handlePDAResume = async () => {
+    if (!sessionId || !api.resumePDA) {
+      message.warning('PDA 恢复功能不可用');
+      return;
+    }
+    pdaStopRequestedRef.current = false;
+    setPdaResuming(true);
+    setStreaming(true);
+    setLoading(true);
+    currentResponseRef.current = '';
+
+    // Use chatManager to handle the SSE stream — wrap resumePDA as a chat function
+    const resumeAsChatFn = async (_request: any, onEvent: (event: any) => void, signal?: AbortSignal) => {
+      return api.resumePDA!(sessionId!, onEvent, signal);
+    };
+
+    chatManager.startChat(
+      sessionId,
+      { session_id: sessionId, message: '', stream: true },
+      resumeAsChatFn,
+      (error) => {
+        const isStoppedByUser = pdaStopRequestedRef.current;
+        pdaStopRequestedRef.current = false;
+        setPdaResuming(false);
+        setStreaming(false);
+        setLoading(false);
+        if (error && !isStoppedByUser) {
+          message.error(`PDA 恢复失败: ${error}`);
+        } else if (!error) {
+          message.success('PDA 任务已恢复完成');
+        } else {
+          message.info('已停止 PDA 恢复');
+        }
+        // Refresh checkpoint status after resume/stop/error, don't blindly clear.
+        if (api.getPDAStatus) {
+          api.getPDAStatus(sessionId!).then((checkpoint) => {
+            setPdaCheckpoint(checkpoint.has_checkpoint ? checkpoint : null);
+          }).catch(() => {
+            // Ignore status refresh failure
+          });
+        }
+        // Reload messages
+        api.getSessionMessages(sessionId!).then(resp => {
+          setMessages(resp.messages || []);
+          setBackendEstimatedTokens(resp.estimated_tokens || 0);
+        }).catch(console.error);
+      },
+    );
+  };
+
+  const handlePDAClear = async () => {
+    if (!sessionId || !api.clearPDACheckpoint) {
+      message.warning('PDA 清除功能不可用');
+      return;
+    }
+    try {
+      await api.clearPDACheckpoint(sessionId);
+      setPdaCheckpoint(null);
+      message.success('PDA 检查点已清除');
+    } catch (err: any) {
+      message.error(`清除失败: ${err.message}`);
+    }
+  };
+
   const handleClear = async () => {
     if (!sessionId) {
       message.warning('没有活动会话');
@@ -1816,10 +2183,14 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
         setFileSelectorVisible(false);
         setFileSearchQuery('');
       }
+      if (mentionSelectorVisible) {
+        setMentionSelectorVisible(false);
+        setMentionSearchQuery('');
+      }
     }
     
     // Tab key path completion
-    if (e.key === 'Tab' && !e.shiftKey && !promptSelectorVisible && !fileSelectorVisible) {
+    if (e.key === 'Tab' && !e.shiftKey && !promptSelectorVisible && !fileSelectorVisible && !mentionSelectorVisible) {
       const value = inputValue;
       const cursorPos = e.currentTarget.selectionStart;
       const beforeCursor = value.substring(0, cursorPos);
@@ -1895,23 +2266,26 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
       setPromptSearchQuery('');
     }
     
-    // ===== Detect @ for file selector =====
+    // ===== Detect @ for mention selector (agents + files) =====
     if (value.endsWith('@')) {
       const beforeAt = value.slice(0, -1);
       if (beforeAt === '' || beforeAt.endsWith(' ') || beforeAt.endsWith('\n')) {
-        setFileSelectorVisible(true);
-        setFileSearchQuery('');
-        setFileSelectorMode('context'); // Default mode
+        setMentionSelectorVisible(true);
+        setMentionSearchQuery('');
+        setFileSelectorVisible(false);
         setPromptSelectorVisible(false); // Mutually exclusive
         return;
       }
     }
     
     const lastAtIndex = value.lastIndexOf('@');
+    if (lastAtIndex !== -1 && mentionSelectorVisible) {
+      setMentionSearchQuery(value.slice(lastAtIndex + 1));
+    }
+    
+    // Legacy file selector (for Tab-triggered path completion)
     if (lastAtIndex !== -1 && fileSelectorVisible) {
       setFileSearchQuery(value.slice(lastAtIndex + 1));
-    } else if (!fileSelectorVisible) {
-      // Don't close if already closed
     }
   };
 
@@ -1921,8 +2295,33 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
     setPromptSelectorVisible(false);
     setPromptSearchQuery('');
   };
+
+  // Handle agent selection from @ mention
+  const handleMentionAgentSelect = (agentName: string) => {
+    // Remove the @... text from input
+    const lastAtIndex = inputValue.lastIndexOf('@');
+    const before = lastAtIndex >= 0 ? inputValue.substring(0, lastAtIndex) : inputValue;
+    setInputValue(before.trimEnd());
+    setTargetAgent(agentName);
+    setMentionSelectorVisible(false);
+    setMentionSearchQuery('');
+  };
+
+  // Handle file selection from @ mention
+  const handleMentionFileSelect = (filepath: string, mode: FileSelectorMode) => {
+    const lastAtIndex = inputValue.lastIndexOf('@');
+    const before = inputValue.substring(0, lastAtIndex);
+    if (mode === 'context') {
+      _setFilesToContext((prev: Set<string>) => new Set(prev).add(filepath));
+      setInputValue(`${before}@${filepath} `);
+    } else {
+      setInputValue(`${before}${filepath} `);
+    }
+    setMentionSelectorVisible(false);
+    setMentionSearchQuery('');
+  };
   
-  // Handle file selection
+  // Handle file selection (legacy, for Tab completion)
   const handleFileSelect = (filepath: string, mode: FileSelectorMode) => {
     if (fileSelectorMode === 'path-only' && tabTriggerPos !== null) {
       // Tab completion: replace path fragment
@@ -2136,6 +2535,60 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
           </Space>
         </div>
       )}
+
+      {/* PDA Checkpoint Banner - shown when session has a saved PDA checkpoint */}
+      {pdaCheckpoint && pdaCheckpoint.has_checkpoint && (
+        <div style={{
+          padding: '12px 24px',
+          background: 'linear-gradient(135deg, #e6f4ff 0%, #f0f5ff 100%)',
+          borderBottom: `1px solid #91caff`,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 12,
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1 }}>
+            <span style={{ fontSize: 16 }}>📋</span>
+            <div style={{ flex: 1 }}>
+              <Text strong style={{ color: '#0958d9', fontSize: 13 }}>
+                PDA 任务中断检查点
+              </Text>
+              <Text style={{ color: '#4096ff', fontSize: 12, marginLeft: 8 }}>
+                代理「{pdaCheckpoint.agent_name || '未知'}」
+                在步骤 {(pdaCheckpoint.interrupt_step ?? 0) + 1} 处中断
+                {pdaCheckpoint.interrupt_reason && ` — ${pdaCheckpoint.interrupt_reason}`}
+              </Text>
+              {pdaCheckpoint.executed_steps && pdaCheckpoint.executed_steps.length > 0 && (
+                <div style={{ marginTop: 4 }}>
+                  <Text style={{ color: '#8c8c8c', fontSize: 11 }}>
+                    已完成: {pdaCheckpoint.executed_steps.join(' → ')}
+                  </Text>
+                </div>
+              )}
+            </div>
+          </div>
+          <Space>
+            <Button
+              type="primary"
+              size="small"
+              icon={<PlayCircleOutlined />}
+              onClick={handlePDAResume}
+              loading={pdaResuming}
+              disabled={streaming}
+            >
+              继续执行
+            </Button>
+            <Button
+              size="small"
+              danger
+              onClick={handlePDAClear}
+              disabled={pdaResuming || streaming}
+            >
+              清除检查点
+            </Button>
+          </Space>
+        </div>
+      )}
       
       {/* Header - 无标题 */}
       <div style={{ padding: '12px 24px', borderBottom: `1px solid ${tokenColors.colorBorderSecondary}`, background: tokenColors.colorBgContainer }}>
@@ -2223,8 +2676,8 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
                       key={provider}
                       label={
                         <Space>
-                          {(provider === 'copilot' || provider === 'copilot-acp') ? <GithubOutlined /> : provider === 'minimax' ? <MinimaxIcon size={14} /> : provider === 'glm' ? <GlmIcon size={14} /> : <OllamaIcon />}
-                          {provider === 'copilot' ? 'Copilot API' : provider === 'copilot-acp' ? 'Copilot ACP' : provider === 'minimax' ? 'MiniMax' : provider === 'glm' ? 'GLM 智谱AI' : 'Ollama'}
+                          {(provider === 'copilot' || provider === 'copilot-acp') ? <GithubOutlined /> : provider === 'minimax' ? <MinimaxIcon size={14} /> : provider === 'glm' ? <GlmIcon size={14} /> : provider === 'vllm' ? <VllmIcon size={14} /> : <OllamaIcon />}
+                          {provider === 'copilot' ? 'Copilot API' : provider === 'copilot-acp' ? 'Copilot ACP' : provider === 'minimax' ? 'MiniMax' : provider === 'glm' ? 'GLM 智谱AI' : provider === 'vllm' ? 'vLLM' : 'Ollama'}
                         </Space>
                       }
                     >
@@ -2267,7 +2720,7 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
                       display: 'inline-block',
                       maxWidth: '100%'
                     }}>
-                      {workspace.alias || workspace.path.split('/').pop()}
+                      {workspace.alias || workspace.path.split(/[\/\\]/).pop()}
                     </span>
                   </Button>
                 </Tooltip>
@@ -2321,8 +2774,20 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
           setWorkspacePath('');
         }}
         footer={workspace ? [
-          <Button key="open" type="primary" icon={<FolderOpenOutlined />} onClick={() => {
-            // Copy workspace path to clipboard
+          <Button key="finder" icon={<FolderOpenOutlined />} onClick={async () => {
+            try {
+              if (api.openWorkspaceDir) {
+                await api.openWorkspaceDir(workspace.path);
+              } else {
+                message.info(`工作区路径: ${workspace.path}`);
+              }
+            } catch (e: any) {
+              message.error(e.message || '打开目录失败');
+            }
+          }}>
+            {navigator.platform?.toLowerCase().includes('win') ? '在资源管理器中打开' : '在 Finder 中打开'}
+          </Button>,
+          <Button key="copy" onClick={() => {
             navigator.clipboard.writeText(workspace.path).then(() => {
               message.success('工作区路径已复制到剪贴板');
             }).catch(() => {
@@ -2368,21 +2833,38 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
             <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
               绑定工作区后，对话中可以访问该目录下的文件。工作区与当前会话关联。
             </Typography.Paragraph>
-            <Space.Compact style={{ width: '100%' }}>
-              <Input
-                style={{ flex: 1 }}
-                placeholder="输入工作区路径，如 /path/to/project"
-                value={workspacePath}
-                onChange={(e) => setWorkspacePath(e.target.value)}
-                onPressEnter={handleBindWorkspace}
-              />
-              <Button
-                icon={<FolderOpenOutlined />}
-                onClick={() => setDirectoryPickerVisible(true)}
-              >
-                浏览
-              </Button>
-            </Space.Compact>
+            {uniqueWorkspaces.length > 0 && (
+              <div style={{ marginBottom: 16 }}>
+                <Typography.Text strong>选择已有工作区：</Typography.Text>
+                <Select
+                  style={{ width: '100%', marginTop: 8 }}
+                  placeholder="选择工作区"
+                  options={uniqueWorkspaces.map((ws) => ({
+                    value: ws.path,
+                    label: ws.alias || ws.path.split(/[\/\\]/).pop() || ws.path,
+                  }))}
+                  onChange={handleSelectExistingWorkspace}
+                />
+              </div>
+            )}
+            <div>
+              <Typography.Text strong>{uniqueWorkspaces.length > 0 ? '或输入/浏览工作区路径：' : '输入工作区路径：'}</Typography.Text>
+              <Space.Compact style={{ width: '100%', marginTop: 8 }}>
+                <Input
+                  style={{ flex: 1 }}
+                  placeholder="输入工作区路径，如 /path/to/project"
+                  value={workspacePath}
+                  onChange={(e) => setWorkspacePath(e.target.value)}
+                  onPressEnter={handleBindWorkspace}
+                />
+                <Button
+                  icon={<FolderOpenOutlined />}
+                  onClick={() => setDirectoryPickerVisible(true)}
+                >
+                  浏览
+                </Button>
+              </Space.Compact>
+            </div>
           </div>
         )}
       </Modal>
@@ -2491,7 +2973,7 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
           }}
         />
         
-        {/* File Selector */}
+        {/* File Selector (legacy, for Tab-triggered path completion) */}
         {sessionId && (
           <FileSelector
             visible={fileSelectorVisible}
@@ -2506,7 +2988,41 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
           />
         )}
 
+        {/* @ Mention Selector (unified agents + files) */}
+        <MentionSelector
+          visible={mentionSelectorVisible}
+          searchQuery={mentionSearchQuery}
+          sessionId={sessionId}
+          workspacePath={workspace?.path}
+          onSelectAgent={handleMentionAgentSelect}
+          onSelectFile={handleMentionFileSelect}
+          onCancel={() => {
+            setMentionSelectorVisible(false);
+            setMentionSearchQuery('');
+          }}
+        />
+
         <Space.Compact style={{ width: '100%' }} direction="vertical">
+          {/* Target Agent Tag */}
+          {targetAgent && (
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px 2px',
+              background: tokenColors.colorBgLayout, borderRadius: '8px 8px 0 0',
+              border: `1px solid ${tokenColors.colorBorderSecondary}`, borderBottom: 'none',
+            }}>
+              <Tag
+                color="blue"
+                closable
+                onClose={() => setTargetAgent(null)}
+                style={{ margin: 0, fontSize: 13, padding: '2px 8px' }}
+              >
+                 @{targetAgent}
+              </Tag>
+              <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                直接执行此 Agent（跳过主 Agent 路由）
+              </Typography.Text>
+            </div>
+          )}
           {/* Pasted Images Preview */}
           {pastedImages.length > 0 && (
             <div style={{ 
@@ -2539,7 +3055,7 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
             onChange={handleInputChange}
             onKeyDown={handleKeyPress}
             onPaste={handlePaste}
-            placeholder={isInitializing ? "CLI初始化中，请稍候..." : pastedImages.length > 0 ? "添加说明文字（可选）... (Ctrl+V 粘贴截图)" : "输入消息... (/ 引用提示词, @ 引用文件, Ctrl+V 粘贴截图, Shift+Enter 换行)"}
+            placeholder={isInitializing ? "CLI初始化中，请稍候..." : pastedImages.length > 0 ? "添加说明文字（可选）... (Ctrl+V 粘贴截图)" : "输入消息... (/ 引用提示词, @ 选择Agent或文件, Ctrl+V 粘贴截图, Shift+Enter 换行)"}
             autoSize={{ minRows: 1, maxRows: 10 }}
             disabled={loading || isInitializing}
             style={{ resize: 'none', borderRadius: pastedImages.length > 0 ? '0 0 0 6px' : undefined }}
@@ -2607,6 +3123,7 @@ export const ChatPage: React.FC<ChatPageProps> = ({ sessionId: initialSessionId,
             models={models}
             streamingTokens={streamingTokens}
             backendEstimatedTokens={backendEstimatedTokens}
+            sessionId={sessionId}
             style={{ marginTop: 2 }}
           />
         )}

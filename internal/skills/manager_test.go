@@ -93,8 +93,9 @@ func TestSkillTool_HandlerPath(t *testing.T) {
 func TestBuildToolScript(t *testing.T) {
 	script := `function myFunc(args) { return args.name; }`
 	args := map[string]any{"name": "test"}
+	config := map[string]any{"base_url": "https://example.com"}
 
-	result := buildToolScript(script, "myFunc", args)
+	result := buildToolScript(script, "myFunc", args, config)
 
 	if result == "" {
 		t.Error("expected non-empty script")
@@ -102,6 +103,10 @@ func TestBuildToolScript(t *testing.T) {
 	// Check that it contains the function call
 	if !contains(result, "myFunc(args)") {
 		t.Error("expected script to contain function call")
+	}
+	// Check that it contains SKILL_CONFIG
+	if !contains(result, "SKILL_CONFIG") {
+		t.Error("expected script to contain SKILL_CONFIG")
 	}
 }
 
@@ -619,27 +624,27 @@ func TestManager_RescanPreservesActiveState(t *testing.T) {
 	if err := mgr.ScanDirectory("testdata"); err != nil {
 		t.Fatalf("Initial scan failed: %v", err)
 	}
-	
+
 	// Activate a test skill
 	if err := mgr.Activate("example-skill", nil); err != nil {
 		t.Fatalf("Failed to activate skill: %v", err)
 	}
-	
+
 	// Verify it's active
 	if !mgr.IsActive("example-skill") {
 		t.Fatal("Skill should be active after activation")
 	}
-	
+
 	// Rescan the directory (simulating reload)
 	if err := mgr.ScanDirectory("testdata"); err != nil {
 		t.Fatalf("Rescan failed: %v", err)
 	}
-	
+
 	// Verify skill is still marked as active
 	if !mgr.IsActive("example-skill") {
 		t.Fatal("Skill should still be active after rescan")
 	}
-	
+
 	// Trying to activate again should return ErrSkillAlreadyActive
 	err := mgr.Activate("example-skill", nil)
 	if err != ErrSkillAlreadyActive {

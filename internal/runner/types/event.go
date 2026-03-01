@@ -34,6 +34,12 @@ const (
 	EventTypePauseTimeout
 	// EventTypePauseResumed indicates execution has resumed after a pause.
 	EventTypePauseResumed
+	// EventTypeApprovalRequest indicates a tool call requires user approval.
+	EventTypeApprovalRequest
+	// EventTypeApprovalResolved indicates an approval request has been resolved.
+	EventTypeApprovalResolved
+	// EventTypePDAProgress indicates PDA step execution progress.
+	EventTypePDAProgress
 )
 
 // Usage represents token usage information.
@@ -58,6 +64,29 @@ type ToolResultEvent struct {
 	Output     string `json:"output"`
 	IsError    bool   `json:"is_error,omitempty"`
 	DurationMs int64  `json:"duration_ms,omitempty"`
+}
+
+// PDAProgressEvent represents PDA step execution progress.
+type PDAProgressEvent struct {
+	AgentName     string           `json:"agent_name"`
+	StepIndex     int              `json:"step_index"`
+	TotalSteps    int              `json:"total_steps"`
+	StepLabel     string           `json:"step_label"`
+	StepType      string           `json:"step_type"`
+	Phase         string           `json:"phase"` // "started", "completed", "failed"
+	StackDepth    int              `json:"stack_depth"`
+	ExecutedSteps []string         `json:"executed_steps,omitempty"`
+	TotalTokens   int              `json:"total_tokens,omitempty"`
+	Model         string           `json:"model,omitempty"`
+	ParentSteps   []ParentStepInfo `json:"parent_steps,omitempty"`
+}
+
+// ParentStepInfo describes a parent frame's step progress in the PDA call stack.
+type ParentStepInfo struct {
+	AgentName  string `json:"agent_name"`
+	StepIndex  int    `json:"step_index"`
+	TotalSteps int    `json:"total_steps"`
+	StepLabel  string `json:"step_label"`
 }
 
 // PauseEventData contains pause-specific information.
@@ -89,6 +118,7 @@ type Event struct {
 	TruncatedReason  string               `json:"truncated_reason,omitempty"`
 	PendingToolCalls int                  `json:"pending_tool_calls,omitempty"`
 	PauseData        *PauseEventData      `json:"pause_data,omitempty"`
+	PDAProgress      *PDAProgressEvent    `json:"pda_progress,omitempty"`
 
 	// Multi-agent delegate identity
 	AgentName  string `json:"agent_name,omitempty"`

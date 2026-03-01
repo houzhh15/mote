@@ -14,16 +14,17 @@ import (
 
 // BuilderOptions 用于构建 Orchestrator 的选项
 type BuilderOptions struct {
-	Sessions       *scheduler.SessionManager
-	Registry       *tools.Registry
-	Config         Config
-	Compactor      *compaction.Compactor
-	SystemPrompt   *prompt.SystemPromptBuilder
-	SkillManager   *skills.Manager
-	HookManager    *hooks.Manager
-	MCPManager     *client.Manager
-	ContextManager *internalContext.Manager
-	ToolExecutor   ToolExecutorFunc
+	Sessions          *scheduler.SessionManager
+	Registry          *tools.Registry
+	Config            Config
+	Compactor         *compaction.Compactor
+	SystemPrompt      *prompt.SystemPromptBuilder
+	SkillManager      *skills.Manager
+	HookManager       *hooks.Manager
+	MCPManager        *client.Manager
+	ContextManager    *internalContext.Manager
+	ToolExecutor      ToolExecutorFunc
+	WorkspaceResolver func(sessionID string) string // Resolves workspace path for a session
 }
 
 // OrchestratorBuilder 构建器用于创建 Orchestrator
@@ -62,6 +63,9 @@ func (b *OrchestratorBuilder) Build(prov provider.Provider) Orchestrator {
 	}
 	if b.opts.ToolExecutor != nil {
 		base.SetToolExecutor(b.opts.ToolExecutor)
+	}
+	if b.opts.WorkspaceResolver != nil {
+		base.SetWorkspaceResolver(b.opts.WorkspaceResolver)
 	}
 
 	// 根据 provider 类型选择合适的 orchestrator

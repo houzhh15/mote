@@ -22,6 +22,11 @@ type RunRequest struct {
 	Attachments   []provider.Attachment
 	Provider      provider.Provider
 	CachedSession *scheduler.CachedSession
+
+	// InjectedMessages 当非 nil 时，在 orchestrator 循环中跳过 session 历史加载，
+	// 直接使用这些消息作为 LLM 上下文。用于 PDA 引擎的帧级上下文隔离。
+	// 调用方负责将 UserInput 追加到末尾；orchestrator 不会再次添加。
+	InjectedMessages []provider.Message
 }
 
 // Config 控制循环行为

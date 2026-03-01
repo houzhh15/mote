@@ -34,6 +34,8 @@ import type {
   UpdateResult,
   AgentConfig,
   DelegationRecord,
+  PDACheckpointInfo,
+  SessionContextResponse,
 } from '../types';
 
 import type {
@@ -123,6 +125,7 @@ export interface APIAdapter {
   getSessions(): Promise<Session[]>;
   getSession?(sessionId: string): Promise<Session>;
   getSessionMessages(sessionId: string): Promise<MessagesResponse>;
+  getSessionContext?(sessionId: string): Promise<SessionContextResponse>;
   createSession(title?: string, scenario?: string): Promise<Session>;
   updateSession?(sessionId: string, updates: { title?: string }): Promise<Session>;
   deleteSession(sessionId: string): Promise<void>;
@@ -332,6 +335,11 @@ export interface APIAdapter {
   openSkillsDir?(target: 'user' | 'workspace'): Promise<void>;
   
   /**
+   * Delete a skill (deactivate, unregister, remove files)
+   */
+  deleteSkill?(skillId: string): Promise<void>;
+
+  /**
    * Create a new skill template
    */
   createSkill?(name: string, target: 'user' | 'workspace'): Promise<{ path: string }>;
@@ -366,6 +374,11 @@ export interface APIAdapter {
    * List files in a workspace
    */
   listWorkspaceFiles?(sessionId: string, path?: string): Promise<WorkspaceFile[]>;
+
+  /**
+   * Open a directory in the system file manager (Finder/Explorer)
+   */
+  openWorkspaceDir?(path: string): Promise<void>;
 
   /**
    * Browse system directories for the directory picker.
@@ -451,6 +464,11 @@ export interface APIAdapter {
   deleteAgent?(name: string): Promise<void>;
   
   /**
+   * Reload agents from agents.yaml and agents/ directory
+   */
+  reloadAgents?(): Promise<{ status: string; count: number }>;
+  
+  /**
    * Get delegation records for a session
    */
   getSessionDelegations?(sessionId: string): Promise<DelegationRecord[]>;
@@ -470,6 +488,21 @@ export interface APIAdapter {
    */
   batchDeleteDelegations?(ids: string[]): Promise<{ deleted: number; total: number }>;
   
+  /**
+   * Validate agent CFG step configuration
+   */
+  validateAgentCFG?(name: string, steps: import('../types').Step[]): Promise<import('../types').ValidationResult[]>;
+
+  /**
+   * Save agent draft (work-in-progress step configuration)
+   */
+  saveAgentDraft?(name: string, draft: { steps: import('../types').Step[] }): Promise<void>;
+
+  /**
+   * Discard agent draft
+   */
+  discardAgentDraft?(name: string): Promise<void>;
+
   // ============== Security Policy Service (M08B) ==============
   /**
    * Get the full policy configuration
@@ -500,6 +533,25 @@ export interface APIAdapter {
    * Respond to a pending approval request
    */
   respondApproval?(id: string, approved: boolean, reason?: string, modifiedArguments?: string): Promise<{ success: boolean }>;
+
+  // ============== PDA Checkpoint Control ==============
+  /**
+   * Get PDA checkpoint status for a session
+   */
+  getPDAStatus?(sessionId: string): Promise<PDACheckpointInfo>;
+
+  /**
+   * Resume PDA execution from checkpoint (SSE streaming)
+   * @param sessionId Session ID with checkpoint
+   * @param onEvent Callback for each stream event (same format as chat)
+   * @param signal Optional AbortSignal to cancel
+   */
+  resumePDA?(sessionId: string, onEvent: (event: StreamEvent) => void, signal?: AbortSignal): Promise<void>;
+
+  /**
+   * Clear PDA checkpoint for a session
+   */
+  clearPDACheckpoint?(sessionId: string): Promise<void>;
   
   /**
    * Check if running in GUI mode (Wails)
@@ -515,6 +567,7 @@ export const createNoopAdapter = (): APIAdapter => ({
   chat: async () => {},
   getSessions: async () => [],
   getSessionMessages: async () => ({ messages: [], estimated_tokens: 0 }),
+  getSessionContext: async () => ({ session_id: '', model: '', context_window: 0, segments: [], compression: { has_compression: false }, total_messages: 0, total_chars: 0, total_tokens: 0, effective_count: 0, effective_chars: 0, effective_tokens: 0, budgeted_count: 0, budgeted_chars: 0, budgeted_tokens: 0 }),
   createSession: async () => ({ id: '', title: '', created_at: '', updated_at: '' }),
   deleteSession: async () => {},
   getMemories: async () => ({ memories: [], total: 0, limit: 100, offset: 0 }),
@@ -557,6 +610,7 @@ export const createNoopAdapter = (): APIAdapter => ({
   reloadSkills: async () => {},
   checkSkillUpdates: async () => ({ updates: [], total: 0, updated_at: new Date().toISOString() }),
   updateSkill: async () => ({ success: false, skill_id: '', old_version: '', new_version: '', error: 'Not implemented' }),
+  deleteSkill: async () => {},
   openSkillsDir: async () => {},
   createSkill: async () => ({ path: '' }),
   // Tools
@@ -567,6 +621,7 @@ export const createNoopAdapter = (): APIAdapter => ({
   bindWorkspace: async () => ({ path: '' }),
   unbindWorkspace: async () => {},
   listWorkspaceFiles: async () => [],
+  openWorkspaceDir: async () => {},
   // Prompts
   getPrompts: async () => [],
   getMCPPrompts: async () => [],
@@ -584,6 +639,7 @@ export const createNoopAdapter = (): APIAdapter => ({
   addAgent: async () => ({ name: '', agent: {} }),
   updateAgent: async () => ({ name: '', agent: {} }),
   deleteAgent: async () => {},
+  reloadAgents: async () => ({ status: 'ok', count: 0 }),
   getSessionDelegations: async () => [],
   getDelegations: async () => [],
   getDelegation: async () => ({ id: '', parent_session_id: '', child_session_id: '', agent_name: '', depth: 0, chain: '[]', prompt: '', status: 'completed' as const, started_at: '', result_length: 0, tokens_used: 0 }),
@@ -596,5 +652,9 @@ export const createNoopAdapter = (): APIAdapter => ({
   getApprovals: async () => ({ pending: [], count: 0 }),
   respondApproval: async () => ({ success: true }),
   cancelChat: async () => {},
+  // PDA Checkpoint Control
+  getPDAStatus: async () => ({ has_checkpoint: false }),
+  resumePDA: async () => {},
+  clearPDACheckpoint: async () => {},
   isGUIMode: () => false,
 });

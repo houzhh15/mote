@@ -9,6 +9,8 @@ bin/
 *.dylib
 mote
 mote-*
+# Re-include skill directories (matched by mote-* above)
+!internal/cli/defaults/skills/mote-*/
 
 # Hidden directories
 .*
@@ -66,3 +68,17 @@ logs/
 
 # Build artifacts
 *.bun-build
+
+# Vite timestamp files
+vite.config.ts.timestamp-*.mjs
+
+# Temporary docs/images (not needed in repo)
+docs/
+*.png
+REFACTOR_PLAN_RUNNER.md
+REFACTOR_PROGRESS.md
+WAILS_GUI_WEB_UI_REUSE.md
+AGENT_TECH_SOLUTION.md
+CHANGELOG_ACP_FIX.md
+clawdbot_memory_article.md
+错误管理调查.md

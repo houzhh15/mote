@@ -255,3 +255,72 @@ func TestRouter_HandleUpdateConfig_InvalidProvider(t *testing.T) {
 		t.Errorf("Expected status %d, got %d", http.StatusBadRequest, rr.Code)
 	}
 }
+
+func TestPersistProviderDefaultModel(t *testing.T) {
+	// Reset viper for each subtest
+	tests := []struct {
+		name          string
+		modelID       string
+		wantCopilot   string
+		wantProvider  string // viper key to check
+		wantProvModel string // expected model value (without prefix)
+	}{
+		{
+			name:          "ollama model",
+			modelID:       "ollama:gpt-oss:20b",
+			wantCopilot:   "ollama:gpt-oss:20b",
+			wantProvider:  "ollama.model",
+			wantProvModel: "gpt-oss:20b",
+		},
+		{
+			name:          "minimax model",
+			modelID:       "minimax:MiniMax-M2.5",
+			wantCopilot:   "minimax:MiniMax-M2.5",
+			wantProvider:  "minimax.model",
+			wantProvModel: "MiniMax-M2.5",
+		},
+		{
+			name:          "glm model",
+			modelID:       "glm:glm-4-flash",
+			wantCopilot:   "glm:glm-4-flash",
+			wantProvider:  "glm.model",
+			wantProvModel: "glm-4-flash",
+		},
+		{
+			name:          "vllm model",
+			modelID:       "vllm:qwen2.5-72b",
+			wantCopilot:   "vllm:qwen2.5-72b",
+			wantProvider:  "vllm.model",
+			wantProvModel: "qwen2.5-72b",
+		},
+		{
+			name:        "copilot model (no prefix)",
+			modelID:     "claude-sonnet-4.5",
+			wantCopilot: "claude-sonnet-4.5",
+			// No provider-specific key for copilot models
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Use a temp config file for isolation
+			tmpDir := t.TempDir()
+			cfgFile := filepath.Join(tmpDir, "config.yaml")
+			os.WriteFile(cfgFile, []byte("copilot:\n  model: \"\"\n"), 0644)
+			viper.Reset()
+			viper.SetConfigFile(cfgFile)
+			viper.ReadInConfig()
+
+			persistProviderDefaultModel(tt.modelID)
+
+			if got := viper.GetString("copilot.model"); got != tt.wantCopilot {
+				t.Errorf("copilot.model = %q, want %q", got, tt.wantCopilot)
+			}
+			if tt.wantProvider != "" {
+				if got := viper.GetString(tt.wantProvider); got != tt.wantProvModel {
+					t.Errorf("%s = %q, want %q", tt.wantProvider, got, tt.wantProvModel)
+				}
+			}
+		})
+	}
+}

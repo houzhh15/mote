@@ -26,7 +26,9 @@ import (
 
 	"mote/internal/provider"
 	"mote/internal/runner/delegate"
+	cfg "mote/internal/runner/delegate/cfg"
 	"mote/internal/runner/orchestrator"
+	"mote/internal/runner/types"
 	"mote/internal/scheduler"
 	"mote/internal/skills"
 	"mote/internal/tools"
@@ -61,6 +63,9 @@ type Runner struct {
 
 	// M08B+: Compiled custom scrub rules (from policy config)
 	compiledScrubRules []CompiledScrubRule
+
+	// Multi-agent direct delegation
+	delegateFactory *delegate.SubRunnerFactory
 
 	// M08B+: Block message template and circuit breaker
 	blockMessageTemplate    string
@@ -132,16 +137,35 @@ func (r *Runner) SetProviderPool(pool *provider.Pool, defaultModel string) {
 }
 
 // SetMultiProviderPool sets the multi-provider pool for Ollama + Copilot support.
-func (r *Runner) SetMultiProviderPool(pool *provider.MultiProviderPool) {
+// defaultModel is the model to use when a session doesn't specify one (e.g. "ollama:llama3.2").
+func (r *Runner) SetMultiProviderPool(pool *provider.MultiProviderPool, defaultModel string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.multiPool = pool
-	slog.Info("SetMultiProviderPool called", "pool_not_nil", pool != nil, "providers", func() []string {
+	if defaultModel != "" {
+		r.defaultModel = defaultModel
+	}
+	slog.Info("SetMultiProviderPool called", "pool_not_nil", pool != nil, "defaultModel", defaultModel, "providers", func() []string {
 		if pool != nil {
 			return pool.ListProviders()
 		}
 		return nil
 	}())
+}
+
+// UpdateDefaultModel updates the fallback model used when a session or agent
+// doesn't specify an explicit model. This propagates to the delegate factory
+// so PDA sub-agents inherit the correct model at runtime.
+func (r *Runner) UpdateDefaultModel(model string) {
+	r.mu.Lock()
+	r.defaultModel = model
+	factory := r.delegateFactory
+	r.mu.Unlock()
+
+	if factory != nil {
+		factory.SetDefaultModel(model)
+	}
+	slog.Info("Runner.UpdateDefaultModel", "model", model)
 }
 
 // ResetSession performs a full resource cleanup for a session.
@@ -436,6 +460,11 @@ func (r *Runner) InitDelegateSupport(appCfg *config.Config, db *sql.DB) (*delega
 	delegateTool := delegate.NewDelegateTool(factory, globalMaxDepth)
 	registry.Register(delegateTool)
 
+	// Store factory on runner for direct delegate support (@ mentions)
+	r.mu.Lock()
+	r.delegateFactory = factory
+	r.mu.Unlock()
+
 	numAgents := len(appCfg.Agents)
 	slog.Info("delegate: initialized multi-agent support",
 		"agents", numAgents,
@@ -719,12 +748,225 @@ func (r *Runner) handleChannelMessage(ctx context.Context, msg channel.InboundMe
 	return nil
 }
 
+// RunDirectDelegate executes a sub-agent directly, bypassing the main agent LLM.
+// This is used when the user explicitly selects a sub-agent via @ mention.
+// Events are streamed back through the returned channel, identical to Run().
+func (r *Runner) RunDirectDelegate(ctx context.Context, parentSessionID, agentName, userPrompt string) (<-chan Event, error) {
+	r.mu.RLock()
+	factory := r.delegateFactory
+	r.mu.RUnlock()
+
+	if factory == nil {
+		return nil, fmt.Errorf("delegate support not initialized")
+	}
+
+	// Look up agent config
+	appCfg := config.GetConfig()
+	if appCfg == nil {
+		return nil, fmt.Errorf("config not available")
+	}
+	agentCfg, ok := appCfg.Agents[agentName]
+	if !ok {
+		return nil, fmt.Errorf("agent %q not found", agentName)
+	}
+	if !agentCfg.IsEnabled() {
+		return nil, fmt.Errorf("agent %q is disabled", agentName)
+	}
+
+	// Build delegation context (depth 0 since this is a user-initiated direct call)
+	dc := &delegate.DelegateContext{
+		Depth:           0,
+		MaxDepth:        appCfg.Delegate.GetMaxDepth(),
+		ParentSessionID: parentSessionID,
+		AgentName:       agentName,
+		Chain:           []string{agentName},
+	}
+
+	events := make(chan Event, 100)
+
+	go func() {
+		defer close(events)
+		defer func() {
+			if rec := recover(); rec != nil {
+				slog.Error("PANIC in direct delegate goroutine", "panic", rec, "agent", agentName)
+				events <- NewErrorEvent(fmt.Errorf("internal error: %v", rec))
+			}
+		}()
+
+		// Forward sub-agent events to the channel
+		sink := delegate.ParentEventSink(func(event types.Event) {
+			events <- FromTypesEvent(event)
+		})
+
+		var result string
+		var usage types.Usage
+		var err error
+
+		// Check if agent has structured steps → use PDA engine
+		if agentCfg.HasSteps() {
+			slog.Info("direct delegate: agent has steps, using PDA engine",
+				"agent", agentName, "steps", len(agentCfg.Steps))
+			result, usage, err = factory.RunPDAWithEvents(ctx, dc, agentCfg, userPrompt, sink)
+		} else {
+			result, usage, err = factory.RunDelegateWithEvents(ctx, dc, agentCfg, userPrompt, sink)
+		}
+
+		if err != nil {
+			events <- NewErrorEvent(fmt.Errorf("agent %s: %w", agentName, err))
+			return
+		}
+
+		// Send done event with summary
+		events <- Event{
+			Type:      EventTypeDone,
+			Content:   result,
+			AgentName: agentName,
+			Usage:     &Usage{TotalTokens: usage.TotalTokens, PromptTokens: usage.PromptTokens, CompletionTokens: usage.CompletionTokens},
+		}
+	}()
+
+	return events, nil
+}
+
+// buildPDAResumeFn creates a closure that resumes PDA execution from a checkpoint.
+// This is called when pda_control("continue") is invoked. The closure runs the
+// full PDA pipeline via the SubRunnerFactory and returns the final result.
+func (r *Runner) buildPDAResumeFn(
+	factory *delegate.SubRunnerFactory,
+	cp *cfg.PDACheckpoint,
+	sessionID string,
+	events chan<- Event,
+) delegate.PDAResumeFunc {
+	return func(ctx context.Context) (string, error) {
+		agentName := cp.AgentName
+		prompt := cp.InitialPrompt
+
+		// Look up agent config
+		appCfg := config.GetConfig()
+		if appCfg == nil {
+			return "", fmt.Errorf("config not available")
+		}
+		agentCfg, ok := appCfg.Agents[agentName]
+		if !ok {
+			return "", fmt.Errorf("agent %q not found in config", agentName)
+		}
+		if !agentCfg.IsEnabled() {
+			return "", fmt.Errorf("agent %q is disabled", agentName)
+		}
+
+		// Rebuild delegate context from checkpoint
+		dc := &delegate.DelegateContext{
+			Depth:             cp.DelegateInfo.Depth,
+			MaxDepth:          cp.DelegateInfo.MaxDepth,
+			ParentSessionID:   sessionID,
+			AgentName:         agentName,
+			Chain:             cp.DelegateInfo.Chain,
+			RecursionCounters: cp.DelegateInfo.RecursionCounters,
+		}
+
+		// Forward sub-agent events to the runner events channel
+		sink := delegate.ParentEventSink(func(event types.Event) {
+			re := FromTypesEvent(event)
+			select {
+			case events <- re:
+			case <-ctx.Done():
+			}
+		})
+
+		slog.Info("pda_control: resuming PDA via factory",
+			"agent", agentName,
+			"sessionID", sessionID,
+			"interruptStep", cp.InterruptStep)
+
+		// RunPDAWithEvents will load the checkpoint from storage and resume
+		result, _, err := factory.RunPDAWithEvents(ctx, dc, agentCfg, prompt, sink)
+		return result, err
+	}
+}
+
+// ResumePDA resumes an interrupted PDA in a session from its checkpoint.
+// Returns a streaming event channel, identical to Run()/RunDirectDelegate().
+func (r *Runner) ResumePDA(ctx context.Context, sessionID string) (<-chan Event, error) {
+	r.mu.RLock()
+	factory := r.delegateFactory
+	r.mu.RUnlock()
+	if factory == nil {
+		return nil, fmt.Errorf("delegate support not initialized")
+	}
+	if r.sessions == nil || r.sessions.DB() == nil {
+		return nil, fmt.Errorf("session store not available")
+	}
+
+	cp, err := delegate.LoadPDACheckpoint(r.sessions.DB(), sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("load checkpoint: %w", err)
+	}
+	if cp == nil {
+		return nil, fmt.Errorf("no PDA checkpoint found for session %s", sessionID)
+	}
+
+	events := make(chan Event, 100)
+
+	go func() {
+		defer close(events)
+		defer func() {
+			if rec := recover(); rec != nil {
+				slog.Error("PANIC in PDA resume goroutine", "panic", rec, "sessionID", sessionID)
+				events <- NewErrorEvent(fmt.Errorf("internal error: %v", rec))
+			}
+		}()
+
+		resumeFn := r.buildPDAResumeFn(factory, cp, sessionID, events)
+		result, err := resumeFn(ctx)
+		if err != nil {
+			events <- NewErrorEvent(fmt.Errorf("PDA resume failed for agent %s: %w", cp.AgentName, err))
+			return
+		}
+
+		events <- Event{
+			Type:      EventTypeDone,
+			Content:   result,
+			AgentName: cp.AgentName,
+		}
+	}()
+
+	return events, nil
+}
+
+// ClearPDACheckpoint removes a PDA checkpoint from a session, enabling a fresh start.
+func (r *Runner) ClearPDACheckpoint(sessionID string) error {
+	if r.sessions == nil || r.sessions.DB() == nil {
+		return fmt.Errorf("session store not available")
+	}
+	return delegate.ClearPDACheckpoint(r.sessions.DB(), sessionID)
+}
+
+// GetPDACheckpointInfo returns basic info about a PDA checkpoint for a session, or nil if none exists.
+func (r *Runner) GetPDACheckpointInfo(sessionID string) map[string]any {
+	if r.sessions == nil || r.sessions.DB() == nil {
+		return nil
+	}
+	cp, err := delegate.LoadPDACheckpoint(r.sessions.DB(), sessionID)
+	if err != nil || cp == nil {
+		return nil
+	}
+	return map[string]any{
+		"agent_name":       cp.AgentName,
+		"interrupt_step":   cp.InterruptStep,
+		"interrupt_agent":  cp.InterruptAgent,
+		"interrupt_reason": cp.InterruptReason,
+		"executed_steps":   cp.ExecutedSteps,
+		"initial_prompt":   cp.InitialPrompt,
+		"created_at":       cp.CreatedAt,
+	}
+}
+
 // Run starts an agent run and returns a channel of events.
 func (r *Runner) Run(ctx context.Context, sessionID, userInput string, attachments ...provider.Attachment) (<-chan Event, error) {
 	slog.Info("Runner.Run called", "sessionID", sessionID, "hasMultiPool", r.multiPool != nil)
 
 	// Get provider - will be resolved in runLoop based on session model
-	if r.provider == nil && r.providerPool == nil {
+	if r.provider == nil && r.providerPool == nil && r.multiPool == nil {
 		return nil, ErrNoProvider
 	}
 
@@ -774,7 +1016,7 @@ func (r *Runner) CancelSession(sessionID string) {
 }
 
 func (r *Runner) RunWithModel(ctx context.Context, sessionID, userInput, model, scenario string, attachments ...provider.Attachment) (<-chan Event, error) {
-	if r.provider == nil && r.providerPool == nil {
+	if r.provider == nil && r.providerPool == nil && r.multiPool == nil {
 		return nil, ErrNoProvider
 	}
 
@@ -929,16 +1171,52 @@ func (r *Runner) runLoopCoreWithOrchestrator(ctx context.Context, cached *schedu
 	}
 
 	// 创建 Orchestrator builder
+	// Check for PDA checkpoint and inject pda_control tool if one exists
+	registry := r.registry
+	systemPromptExtra := ""
+	if r.sessions != nil && r.sessions.DB() != nil {
+		if cp, err := delegate.LoadPDACheckpoint(r.sessions.DB(), sessionID); err == nil && cp != nil {
+			slog.Info("runLoopCore: PDA checkpoint detected, injecting pda_control tool",
+				"agent", cp.AgentName,
+				"interruptStep", cp.InterruptStep,
+				"sessionID", sessionID)
+			registry = r.registry.Clone()
+
+			// Build a resume function that actually executes the PDA pipeline
+			var resumeFn delegate.PDAResumeFunc
+			r.mu.RLock()
+			factory := r.delegateFactory
+			r.mu.RUnlock()
+			if factory != nil {
+				resumeFn = r.buildPDAResumeFn(factory, cp, sessionID, events)
+			}
+
+			pdaTool := delegate.NewPDAControlTool(delegate.PDAControlToolOptions{
+				Store:      r.sessions.DB(),
+				SessionID:  sessionID,
+				Checkpoint: cp,
+				ResumeFn:   resumeFn,
+			})
+			if regErr := registry.Register(pdaTool); regErr != nil {
+				slog.Warn("runLoopCore: failed to register pda_control tool", "error", regErr)
+			} else {
+				systemPromptExtra = delegate.PDAResumeHint(cp)
+			}
+		}
+	}
+
+	effectiveSystemPrompt := r.config.SystemPrompt + systemPromptExtra
+
 	orchBuilder := orchestrator.NewBuilder(orchestrator.BuilderOptions{
 		Sessions: r.sessions,
-		Registry: r.registry,
+		Registry: registry,
 		Config: orchestrator.Config{
 			MaxIterations: r.config.MaxIterations,
 			MaxTokens:     r.config.MaxTokens,
 			Temperature:   r.config.Temperature,
 			StreamOutput:  true,
 			Timeout:       r.config.Timeout,
-			SystemPrompt:  r.config.SystemPrompt, // Static fallback for when SystemPromptBuilder is nil
+			SystemPrompt:  effectiveSystemPrompt, // Static fallback + checkpoint hint
 		},
 		Compactor:      r.compactor,
 		SystemPrompt:   r.systemPrompt,
@@ -946,10 +1224,13 @@ func (r *Runner) runLoopCoreWithOrchestrator(ctx context.Context, cached *schedu
 		HookManager:    r.hookManager,
 		MCPManager:     r.mcpManager,
 		ContextManager: r.contextManager,
-		// Inject full tool executor from Runner (includes policy, hooks, heartbeat, truncation)
+		// Inject full tool executor from Runner (includes policy, hooks, heartbeat, truncation).
+		// Use the local `registry` (which may be a clone with pda_control) for tool lookup,
+		// falling back to r.registry for everything else handled by executeToolsWithSession.
 		ToolExecutor: func(ctx context.Context, toolCalls []provider.ToolCall, sessionID string) ([]provider.Message, int) {
-			return r.executeToolsWithSession(ctx, toolCalls, events, sessionID, "")
+			return r.executeToolsWithSession(ctx, toolCalls, events, sessionID, "", registry)
 		},
+		WorkspaceResolver: r.workspaceResolver,
 	})
 
 	// 构建合适的 orchestrator（根据 provider 类型）
@@ -1003,7 +1284,14 @@ func (r *Runner) runLoopCoreWithOrchestrator(ctx context.Context, cached *schedu
 // executeToolsWithSession executes tool calls with session context for policy checks.
 // It sends heartbeat events every 15 seconds during long-running tool executions to keep the connection alive.
 // Returns the tool result messages and the count of tool executions that returned errors.
-func (r *Runner) executeToolsWithSession(ctx context.Context, toolCalls []provider.ToolCall, events chan<- Event, sessionID, agentID string) ([]provider.Message, int) {
+// registryOverride, if non-nil, is tried first for tool lookup (used for session-scoped tools like pda_control).
+func (r *Runner) executeToolsWithSession(ctx context.Context, toolCalls []provider.ToolCall, events chan<- Event, sessionID, agentID string, registryOverride ...*tools.Registry) ([]provider.Message, int) {
+	// Determine the effective registry for tool execution
+	effectiveRegistry := r.registry
+	if len(registryOverride) > 0 && registryOverride[0] != nil {
+		effectiveRegistry = registryOverride[0]
+	}
+
 	var results []provider.Message
 	errorCount := 0
 
@@ -1218,7 +1506,7 @@ func (r *Runner) executeToolsWithSession(ctx context.Context, toolCalls []provid
 
 		// Execute tool
 		start := time.Now()
-		result, err := r.registry.Execute(ctx, toolName, argsMap)
+		result, err := effectiveRegistry.Execute(ctx, toolName, argsMap)
 		duration := time.Since(start)
 
 		var output string

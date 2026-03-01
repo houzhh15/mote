@@ -3,6 +3,7 @@ package builtin
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,11 +15,12 @@ import (
 
 // HTTPArgs defines the parameters for the http tool.
 type HTTPArgs struct {
-	URL     string            `json:"url" jsonschema:"description=The URL to send the request to,required"`
-	Method  string            `json:"method" jsonschema:"description=HTTP method (GET POST PUT DELETE PATCH HEAD OPTIONS). Default: GET"`
-	Headers map[string]string `json:"headers" jsonschema:"description=HTTP headers to include in the request"`
-	Body    string            `json:"body" jsonschema:"description=Request body (for POST PUT PATCH)"`
-	Timeout int               `json:"timeout" jsonschema:"description=Request timeout in seconds (default: 30)"`
+	URL                string            `json:"url" jsonschema:"description=The URL to send the request to,required"`
+	Method             string            `json:"method" jsonschema:"description=HTTP method (GET POST PUT DELETE PATCH HEAD OPTIONS). Default: GET"`
+	Headers            map[string]string `json:"headers" jsonschema:"description=HTTP headers to include in the request"`
+	Body               string            `json:"body" jsonschema:"description=Request body (for POST PUT PATCH)"`
+	Timeout            int               `json:"timeout" jsonschema:"description=Request timeout in seconds (default: 30)"`
+	InsecureSkipVerify bool              `json:"insecure_skip_verify" jsonschema:"description=Skip TLS certificate verification for self-signed certificates (like curl -k). Default: false"`
 }
 
 // HTTPTool makes HTTP requests.
@@ -64,6 +66,12 @@ func (t *HTTPTool) Execute(ctx context.Context, args map[string]any) (tools.Tool
 		timeout = int(v)
 	}
 
+	// Check insecure_skip_verify
+	insecure := false
+	if v, ok := args["insecure_skip_verify"].(bool); ok {
+		insecure = v
+	}
+
 	body, _ := args["body"].(string)
 
 	headers := make(map[string]string)
@@ -106,8 +114,13 @@ func (t *HTTPTool) Execute(ctx context.Context, args map[string]any) (tools.Tool
 	// Get or create client
 	client := t.Client
 	if client == nil {
+		transport := http.DefaultTransport.(*http.Transport).Clone()
+		if insecure {
+			transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // user-requested for self-signed certs
+		}
 		client = &http.Client{
-			Timeout: time.Duration(timeout) * time.Second,
+			Timeout:   time.Duration(timeout) * time.Second,
+			Transport: transport,
 		}
 	}
 

@@ -22,6 +22,8 @@ export function HideWindow():Promise<void>;
 
 export function Logout():Promise<void>;
 
+export function PDAResumeStream(arg1:string):Promise<void>;
+
 export function PollDeviceLogin(arg1:string):Promise<main.AuthResult>;
 
 export function Quit():Promise<void>;

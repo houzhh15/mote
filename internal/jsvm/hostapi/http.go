@@ -2,6 +2,7 @@ package hostapi
 
 import (
 	"bytes"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -74,6 +75,7 @@ func doHTTPRequest(vm *goja.Runtime, hctx *Context, method string, call goja.Fun
 	// Parse options
 	var headers map[string]string
 	var timeout time.Duration = 30 * time.Second
+	var insecure bool
 
 	optIdx := 1
 	if method == "POST" || method == "PUT" {
@@ -91,6 +93,9 @@ func doHTTPRequest(vm *goja.Runtime, hctx *Context, method string, call goja.Fun
 				}
 				if t, ok := opts["timeout"].(float64); ok {
 					timeout = time.Duration(t) * time.Millisecond
+				}
+				if v, ok := opts["insecure"].(bool); ok {
+					insecure = v
 				}
 			}
 		}
@@ -111,7 +116,11 @@ func doHTTPRequest(vm *goja.Runtime, hctx *Context, method string, call goja.Fun
 	}
 
 	// Execute request
-	client := &http.Client{Timeout: timeout}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	if insecure {
+		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // user-requested for self-signed certs
+	}
+	client := &http.Client{Timeout: timeout, Transport: transport}
 	resp, err := client.Do(req)
 	if err != nil {
 		panic(vm.NewTypeError(fmt.Sprintf("request failed: %v", err)))

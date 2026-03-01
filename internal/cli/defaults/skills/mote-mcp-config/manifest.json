@@ -1,0 +1,13 @@
+{
+  "id": "mote-mcp-config",
+  "name": "Mote MCP Configuration",
+  "version": "1.1.0",
+  "description": "Configure and manage MCP (Model Context Protocol) servers in Mote. Use this skill when the user asks to set up, configure, or manage MCP servers.",
+  "author": "Mote",
+  "prompts": [
+    {
+      "name": "mcp-usage",
+      "file": "prompts/usage.md"
+    }
+  ]
+}

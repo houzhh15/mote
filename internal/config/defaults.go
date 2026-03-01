@@ -71,6 +71,10 @@ func SetDefaults() {
 	viper.SetDefault("minimax.model", "MiniMax-M2.5")
 	viper.SetDefault("minimax.max_tokens", 16384)
 
+	// vLLM 配置
+	viper.SetDefault("vllm.endpoint", "http://localhost:8000")
+	viper.SetDefault("vllm.max_tokens", 4096)
+
 	// Storage 配置
 	viper.SetDefault("storage.driver", "sqlite")
 

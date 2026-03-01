@@ -50,7 +50,7 @@ func (m *MultiProviderPool) AddProvider(name string, pool *Pool, modelIDs []stri
 
 	m.pools[name] = pool
 
-	// Register models with provider prefix for Ollama and MiniMax
+	// Register models with provider prefix for Ollama, MiniMax, and vLLM
 	for _, modelID := range modelIDs {
 		var finalID string
 		switch name {
@@ -58,6 +58,8 @@ func (m *MultiProviderPool) AddProvider(name string, pool *Pool, modelIDs []stri
 			finalID = "ollama:" + modelID
 		case "minimax":
 			finalID = "minimax:" + modelID
+		case "vllm":
+			finalID = "vllm:" + modelID
 		default:
 			finalID = modelID
 		}
@@ -80,6 +82,8 @@ func (m *MultiProviderPool) GetProvider(modelID string) (Provider, string, error
 			providerName = "ollama"
 		} else if strings.HasPrefix(modelID, "minimax:") {
 			providerName = "minimax"
+		} else if strings.HasPrefix(modelID, "vllm:") {
+			providerName = "vllm"
 		} else {
 			// No prefix — try copilot providers first, then fall back to
 			// the first registered provider so we don't fail when only
@@ -106,12 +110,14 @@ func (m *MultiProviderPool) GetProvider(modelID string) (Provider, string, error
 		return nil, "", fmt.Errorf("provider %q not registered", providerName)
 	}
 
-	// Extract original model ID for prefixed providers (Ollama, MiniMax)
+	// Extract original model ID for prefixed providers (Ollama, MiniMax, vLLM)
 	originalID := modelID
 	if providerName == "ollama" && strings.HasPrefix(modelID, "ollama:") {
 		originalID = strings.TrimPrefix(modelID, "ollama:")
 	} else if providerName == "minimax" && strings.HasPrefix(modelID, "minimax:") {
 		originalID = strings.TrimPrefix(modelID, "minimax:")
+	} else if providerName == "vllm" && strings.HasPrefix(modelID, "vllm:") {
+		originalID = strings.TrimPrefix(modelID, "vllm:")
 	}
 
 	provider, err := pool.Get(originalID)
@@ -164,6 +170,8 @@ func (m *MultiProviderPool) ListAllModels() []ModelInfo {
 			originalID = strings.TrimPrefix(modelID, "ollama:")
 		} else if providerName == "minimax" && strings.HasPrefix(modelID, "minimax:") {
 			originalID = strings.TrimPrefix(modelID, "minimax:")
+		} else if providerName == "vllm" && strings.HasPrefix(modelID, "vllm:") {
+			originalID = strings.TrimPrefix(modelID, "vllm:")
 		}
 		models = append(models, ModelInfo{
 			ID:          modelID,
@@ -230,6 +238,8 @@ func (m *MultiProviderPool) GetAnyProvider(providerName string) Provider {
 					originalID = strings.TrimPrefix(modelID, "ollama:")
 				} else if providerName == "minimax" && strings.HasPrefix(modelID, "minimax:") {
 					originalID = strings.TrimPrefix(modelID, "minimax:")
+				} else if providerName == "vllm" && strings.HasPrefix(modelID, "vllm:") {
+					originalID = strings.TrimPrefix(modelID, "vllm:")
 				}
 				// Need to release the read lock before calling Get
 				m.mu.RUnlock()
@@ -302,6 +312,8 @@ func (m *MultiProviderPool) RefreshModels(providerName string, modelIDs []string
 			finalID = "ollama:" + modelID
 		case "minimax":
 			finalID = "minimax:" + modelID
+		case "vllm":
+			finalID = "vllm:" + modelID
 		default:
 			finalID = modelID
 		}
@@ -367,6 +379,8 @@ func (m *MultiProviderPool) UpdateProvider(name string, pool *Pool, modelIDs []s
 			finalID = "ollama:" + modelID
 		case "minimax":
 			finalID = "minimax:" + modelID
+		case "vllm":
+			finalID = "vllm:" + modelID
 		default:
 			finalID = modelID
 		}
@@ -402,4 +416,18 @@ func (m *MultiProviderPool) ModelCountByProvider(providerName string) int {
 		}
 	}
 	return count
+}
+
+// ListModelsForProvider returns all model IDs (with prefix) for a specific provider.
+func (m *MultiProviderPool) ListModelsForProvider(providerName string) []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var models []string
+	for modelID, pName := range m.models {
+		if pName == providerName {
+			models = append(models, modelID)
+		}
+	}
+	return models
 }

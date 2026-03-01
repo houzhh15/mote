@@ -42,6 +42,10 @@ export function Logout() {
   return window['go']['main']['App']['Logout']();
 }
 
+export function PDAResumeStream(arg1) {
+  return window['go']['main']['App']['PDAResumeStream'](arg1);
+}
+
 export function PollDeviceLogin(arg1) {
   return window['go']['main']['App']['PollDeviceLogin'](arg1);
 }

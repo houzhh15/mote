@@ -14,8 +14,8 @@ var (
 	skillIDPattern = regexp.MustCompile(`^[a-z0-9-]+$`)
 	// semverPattern validates semantic version strings.
 	semverPattern = regexp.MustCompile(`^\d+\.\d+\.\d+(-[a-zA-Z0-9.-]+)?(\+[a-zA-Z0-9.-]+)?$`)
-	// handlerPattern validates tool handler format: filename.js#functionName
-	handlerPattern = regexp.MustCompile(`^[\w.-]+\.js#\w+$`)
+	// handlerPattern validates tool/hook handler format: relative/path.js#functionName
+	handlerPattern = regexp.MustCompile(`^[\w./-]+\.js#\w+$`)
 )
 
 // ParseManifest parses a manifest.json file and returns a Skill.
@@ -106,10 +106,36 @@ func validateToolDef(tool *ToolDef, index int) error {
 	if tool.Handler == "" {
 		return fmt.Errorf("%w: tools[%d] missing required field 'handler'", ErrManifestInvalid, index)
 	}
-	if !handlerPattern.MatchString(tool.Handler) {
-		return fmt.Errorf("%w: tools[%d] handler must match format 'filename.js#functionName', got '%s'",
-			ErrToolHandlerInvalid, index, tool.Handler)
+	if err := validateHandler(tool.Handler); err != nil {
+		return fmt.Errorf("%w: tools[%d] %v", ErrToolHandlerInvalid, index, err)
 	}
+	return nil
+}
+
+func validateHandler(handler string) error {
+	if !handlerPattern.MatchString(handler) {
+		return fmt.Errorf("handler must match format 'relative/path.js#functionName', got '%s'", handler)
+	}
+
+	filename, _, err := ParseHandler(handler)
+	if err != nil {
+		return fmt.Errorf("%w", err)
+	}
+
+	if filepath.IsAbs(filename) {
+		return fmt.Errorf("handler path must be relative, got '%s'", filename)
+	}
+
+	for _, segment := range strings.Split(filename, "/") {
+		if segment == ".." {
+			return fmt.Errorf("handler path must not contain '..', got '%s'", filename)
+		}
+	}
+
+	if strings.HasPrefix(filename, "./") {
+		return fmt.Errorf("handler path must not start with './', got '%s'", filename)
+	}
+
 	return nil
 }
 
@@ -132,9 +158,8 @@ func validateHookDef(hook *HookDef, index int) error {
 	if hook.Handler == "" {
 		return fmt.Errorf("%w: hooks[%d] missing required field 'handler'", ErrManifestInvalid, index)
 	}
-	if !handlerPattern.MatchString(hook.Handler) {
-		return fmt.Errorf("%w: hooks[%d] handler must match format 'filename.js#functionName', got '%s'",
-			ErrToolHandlerInvalid, index, hook.Handler)
+	if err := validateHandler(hook.Handler); err != nil {
+		return fmt.Errorf("%w: hooks[%d] %v", ErrToolHandlerInvalid, index, err)
 	}
 	return nil
 }

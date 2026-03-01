@@ -194,6 +194,43 @@ func (r *Router) HandleDeactivateSkill(w http.ResponseWriter, req *http.Request)
 	})
 }
 
+// HandleDeleteSkill deletes a skill completely (deactivates, unregisters, removes files).
+// Builtin skills cannot be deleted.
+func (r *Router) HandleDeleteSkill(w http.ResponseWriter, req *http.Request) {
+	if r.skillManager == nil {
+		http.Error(w, "skill manager not initialized", http.StatusServiceUnavailable)
+		return
+	}
+
+	vars := mux.Vars(req)
+	skillID := vars["id"]
+
+	// By default, also remove the skill directory from disk
+	removeFiles := true
+	if req.URL.Query().Get("remove_files") == "false" {
+		removeFiles = false
+	}
+
+	if err := r.skillManager.DeleteSkill(skillID, removeFiles); err != nil {
+		if err == skills.ErrSkillNotFound {
+			http.Error(w, "skill not found", http.StatusNotFound)
+			return
+		}
+		if err == skills.ErrBuiltinSkillProtected {
+			http.Error(w, "builtin skills cannot be deleted", http.StatusForbidden)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"status":  "ok",
+		"message": "skill deleted",
+	})
+}
+
 // HandleGetSkillConfig returns skill configuration.
 func (r *Router) HandleGetSkillConfig(w http.ResponseWriter, req *http.Request) {
 	if r.skillManager == nil {

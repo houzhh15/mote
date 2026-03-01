@@ -84,7 +84,7 @@ export const PromptsPage = forwardRef<PromptsPageRef, PromptsPageProps>(({ hideT
     try {
       await api.createPrompt?.({
         name: newPromptName.trim(),
-        content: newPromptContent.trim(),
+        content: newPromptContent,
         enabled: true,
       });
       message.success('提示词已创建');
@@ -132,7 +132,7 @@ export const PromptsPage = forwardRef<PromptsPageRef, PromptsPageProps>(({ hideT
       return;
     }
     try {
-      await api.updatePrompt?.(selectedPrompt.id, { content: editContent.trim() });
+      await api.updatePrompt?.(selectedPrompt.id, { content: editContent });
       message.success('提示词已更新');
       setEditModalVisible(false);
       setSelectedPrompt(null);

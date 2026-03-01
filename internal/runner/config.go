@@ -38,7 +38,7 @@ func DefaultConfig() Config {
 		MaxIterations: 1000,
 		MaxTokens:     32000,
 		MaxMessages:   100,
-		Timeout:       10 * time.Minute,
+		Timeout:       0, // No global timeout by default; agents control their own timeouts
 		StreamOutput:  true,
 		Temperature:   0.7,
 	}

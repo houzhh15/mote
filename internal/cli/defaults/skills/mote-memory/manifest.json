@@ -1,0 +1,179 @@
+{
+  "id": "mote-memory",
+  "name": "Mote Memory Management",
+  "version": "1.1.0",
+  "description": "Search, add, and manage agent memories. Use this skill to store important information, retrieve context, or manage the agent's knowledge base.",
+  "author": "mote",
+  "tools": [
+    {
+      "name": "mote_memory_search",
+      "description": "Search for memories using semantic similarity. Returns relevant memories based on the query.",
+      "handler": "tools.js#memorySearch",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "The search query to find relevant memories"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Maximum number of results to return (default: 10)"
+          },
+          "threshold": {
+            "type": "number",
+            "description": "Minimum similarity threshold between 0 and 1 (default: 0)"
+          },
+          "categories": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Filter by categories: preference, fact, decision, entity, other"
+          },
+          "min_importance": {
+            "type": "number",
+            "description": "Minimum importance threshold (0.0 to 1.0)"
+          }
+        },
+        "required": ["query"]
+      }
+    },
+    {
+      "name": "mote_memory_add",
+      "description": "Add a new memory entry to the agent's memory store. Use this to save important information for later retrieval.",
+      "handler": "tools.js#memoryAdd",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "content": {
+            "type": "string",
+            "description": "The content to store as a memory"
+          },
+          "source": {
+            "type": "string",
+            "description": "The source of the memory (manual, conversation, document, tool). Default: manual"
+          },
+          "category": {
+            "type": "string",
+            "description": "Category: preference, fact, decision, entity, other. Auto-detected if not provided."
+          },
+          "importance": {
+            "type": "number",
+            "description": "Importance score (0.0 to 1.0). Default: 0.7"
+          }
+        },
+        "required": ["content"]
+      }
+    },
+    {
+      "name": "mote_memory_list",
+      "description": "List recent memories from the agent's memory store",
+      "handler": "tools.js#memoryList",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "description": "Maximum number of memories to return (default: 20)"
+          }
+        }
+      }
+    },
+    {
+      "name": "mote_memory_get",
+      "description": "Get a specific memory entry by ID. Use this after search to retrieve the full content of a memory.",
+      "handler": "tools.js#memoryGet",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The ID of the memory to retrieve"
+          }
+        },
+        "required": ["id"]
+      }
+    },
+    {
+      "name": "mote_memory_delete",
+      "description": "Delete a specific memory by ID",
+      "handler": "tools.js#memoryDelete",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The ID of the memory to delete"
+          }
+        },
+        "required": ["id"]
+      }
+    },
+    {
+      "name": "mote_memory_sync",
+      "description": "Synchronize memories with external markdown storage. This ensures memories are persisted and backed up.",
+      "handler": "tools.js#memorySync",
+      "parameters": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "mote_memory_daily",
+      "description": "Get or add to the daily memory log. Use GET mode to view today's log, or POST mode to append a new entry.",
+      "handler": "tools.js#memoryDaily",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "content": {
+            "type": "string",
+            "description": "Content to append to daily log (if provided, will POST; otherwise will GET)"
+          }
+        }
+      }
+    },
+    {
+      "name": "mote_memory_export",
+      "description": "Export all memories in a portable format (JSON). Useful for backup or migration.",
+      "handler": "tools.js#memoryExport",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "format": {
+            "type": "string",
+            "description": "Export format: json (default) or markdown"
+          }
+        }
+      }
+    },
+    {
+      "name": "mote_memory_import",
+      "description": "Import memories from a JSON payload. Useful for restoring backups or migrating data.",
+      "handler": "tools.js#memoryImport",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "string",
+            "description": "JSON string containing memories to import"
+          }
+        },
+        "required": ["data"]
+      }
+    },
+    {
+      "name": "mote_memory_stats",
+      "description": "Get memory statistics including total count, counts by category, counts by capture method, and today's auto-capture/recall counts.",
+      "handler": "tools.js#memoryStats",
+      "parameters": {
+        "type": "object",
+        "properties": {}
+      }
+    }
+  ],
+  "prompts": [
+    {
+      "name": "memory-usage",
+      "file": "prompts/usage.md"
+    }
+  ]
+}

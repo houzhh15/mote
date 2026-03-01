@@ -180,6 +180,23 @@ func TestChatStreamEvent_Types(t *testing.T) {
 				Error: "something went wrong",
 			},
 		},
+		{
+			name: "pda_progress type",
+			event: ChatStreamEvent{
+				Type: "pda_progress",
+				PDAProgress: &PDAProgressSSEEvent{
+					AgentName:     "researcher",
+					StepIndex:     1,
+					TotalSteps:    4,
+					StepLabel:     "Analyze data",
+					StepType:      "delegate",
+					Phase:         "started",
+					StackDepth:    0,
+					ExecutedSteps: []string{"step-0"},
+					TotalTokens:   800,
+				},
+			},
+		},
 	}
 
 	for _, tt := range tests {

@@ -1,0 +1,13 @@
+{
+  "id": "mote-agents",
+  "name": "Mote Multi-Agent Delegation",
+  "version": "1.2.0",
+  "description": "Best practices for multi-agent delegation in Mote. Enable this skill to get guidance on when and how to use sub-agents effectively.",
+  "author": "Mote",
+  "prompts": [
+    {
+      "name": "delegate-guide",
+      "file": "prompts/delegate-guide.md"
+    }
+  ]
+}

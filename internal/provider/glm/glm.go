@@ -61,7 +61,7 @@ func NewGLMProvider(cfg Config) provider.Provider {
 
 	return &GLMProvider{
 		apiKey:    cfg.APIKey,
-		endpoint:  cfg.Endpoint,
+		endpoint:  strings.TrimRight(strings.TrimSpace(cfg.Endpoint), "/"),
 		model:     cfg.Model,
 		maxTokens: cfg.MaxTokens,
 		httpClient: &http.Client{

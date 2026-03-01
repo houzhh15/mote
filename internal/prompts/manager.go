@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/google/uuid"
 	"gopkg.in/yaml.v3"
@@ -41,18 +42,18 @@ const (
 
 // Prompt represents a prompt entry.
 type Prompt struct {
-	ID          string            `json:"id"`
-	Name        string            `json:"name"`
-	Description string            `json:"description,omitempty"`
-	Type        PromptType        `json:"type"`
-	Content     string            `json:"content"`
-	Arguments   []PromptArgument  `json:"arguments,omitempty"`
-	Priority    int               `json:"priority"`
-	Enabled     bool              `json:"enabled"`
-	Source      PromptSource      `json:"source"`
-	FilePath    string            `json:"file_path,omitempty"` // If loaded from file
-	CreatedAt   time.Time         `json:"created_at"`
-	UpdatedAt   time.Time         `json:"updated_at"`
+	ID          string           `json:"id"`
+	Name        string           `json:"name"`
+	Description string           `json:"description,omitempty"`
+	Type        PromptType       `json:"type"`
+	Content     string           `json:"content"`
+	Arguments   []PromptArgument `json:"arguments,omitempty"`
+	Priority    int              `json:"priority"`
+	Enabled     bool             `json:"enabled"`
+	Source      PromptSource     `json:"source"`
+	FilePath    string           `json:"file_path,omitempty"` // If loaded from file
+	CreatedAt   time.Time        `json:"created_at"`
+	UpdatedAt   time.Time        `json:"updated_at"`
 }
 
 // PromptFrontmatter represents the YAML frontmatter in a markdown prompt file.
@@ -78,10 +79,10 @@ type PromptConfig struct {
 
 // Manager manages prompts.
 type Manager struct {
-	mu              sync.RWMutex
-	prompts         map[string]*Prompt
-	promptsDirs     []string // Directories to load prompts from
-	enableAutoSave  bool     // Auto-save new prompts to file
+	mu             sync.RWMutex
+	prompts        map[string]*Prompt
+	promptsDirs    []string // Directories to load prompts from
+	enableAutoSave bool     // Auto-save new prompts to file
 }
 
 // ManagerConfig holds configuration for the prompt manager.
@@ -106,12 +107,12 @@ func NewManagerWithConfig(cfg ManagerConfig) *Manager {
 		promptsDirs:    cfg.PromptsDirs,
 		enableAutoSave: cfg.EnableAutoSave,
 	}
-	
+
 	// Load prompts from all configured directories
 	for _, dir := range cfg.PromptsDirs {
 		_ = m.LoadFromDirectory(dir)
 	}
-	
+
 	return m
 }
 
@@ -155,12 +156,12 @@ func (m *Manager) AddPrompt(cfg PromptConfig) (*Prompt, error) {
 	}
 
 	m.prompts[prompt.ID] = prompt
-	
+
 	// Auto-save to file if enabled
 	if m.enableAutoSave && len(m.promptsDirs) > 0 {
 		_ = m.savePromptToFile(prompt, m.promptsDirs[0])
 	}
-	
+
 	return prompt, nil
 }
 
@@ -275,6 +276,14 @@ func (m *Manager) UpdatePrompt(id, content string) error {
 
 	prompt.Content = content
 	prompt.UpdatedAt = time.Now()
+
+	// Persist to file if the prompt was loaded from a file
+	if prompt.FilePath != "" {
+		if err := m.writePromptFile(prompt); err != nil {
+			return fmt.Errorf("failed to persist prompt to file: %w", err)
+		}
+	}
+
 	return nil
 }
 
@@ -354,7 +363,7 @@ func (m *Manager) loadPromptFromFile(filePath string) error {
 	if promptType == "" {
 		promptType = PromptTypeSystem
 	}
-	
+
 	enabled := true
 	if frontmatter.Enabled != nil {
 		enabled = *frontmatter.Enabled
@@ -420,23 +429,18 @@ func parseFrontmatter(data string) (*PromptFrontmatter, string, error) {
 		return nil, "", fmt.Errorf("failed to parse YAML frontmatter: %w", err)
 	}
 
-	// Content is everything after frontmatter
-	content := strings.TrimSpace(parts[1])
-	
+	// Content is everything after frontmatter.
+	// Use TrimRight to only strip trailing whitespace (newlines),
+	// preserving all meaningful content characters.
+	content := strings.TrimRight(parts[1], " \t\n\r")
+	// Also trim leading whitespace (the blank line after ---)
+	content = strings.TrimLeft(content, " \t\n\r")
+
 	return &fm, content, nil
 }
 
-// savePromptToFile saves a prompt to a markdown file.
-func (m *Manager) savePromptToFile(prompt *Prompt, dir string) error {
-	// Ensure directory exists
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("failed to create directory %s: %w", dir, err)
-	}
-
-	// Generate filename from name
-	filename := sanitizeFilename(prompt.Name) + ".md"
-	filePath := filepath.Join(dir, filename)
-
+// writePromptFile writes a prompt to its FilePath as a markdown file with YAML frontmatter.
+func (m *Manager) writePromptFile(prompt *Prompt) error {
 	// Build frontmatter
 	fm := PromptFrontmatter{
 		Name:        prompt.Name,
@@ -452,42 +456,60 @@ func (m *Manager) savePromptToFile(prompt *Prompt, dir string) error {
 		return fmt.Errorf("failed to marshal frontmatter: %w", err)
 	}
 
-	// Build markdown content
-	content := fmt.Sprintf("---\n%s---\n\n%s", string(fmData), prompt.Content)
+	// Build markdown content with trailing newline for POSIX compliance
+	content := fmt.Sprintf("---\n%s---\n\n%s\n", string(fmData), prompt.Content)
 
 	// Write file
-	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
-		return fmt.Errorf("failed to write file %s: %w", filePath, err)
+	if err := os.WriteFile(prompt.FilePath, []byte(content), 0644); err != nil {
+		return fmt.Errorf("failed to write file %s: %w", prompt.FilePath, err)
 	}
-
-	// Update prompt file path
-	prompt.FilePath = filePath
-	prompt.Source = PromptSourceFile
 
 	return nil
 }
 
+// savePromptToFile saves a prompt to a new markdown file in the given directory.
+func (m *Manager) savePromptToFile(prompt *Prompt, dir string) error {
+	// Ensure directory exists
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("failed to create directory %s: %w", dir, err)
+	}
+
+	// Generate filename from name
+	filename := sanitizeFilename(prompt.Name) + ".md"
+	prompt.FilePath = filepath.Join(dir, filename)
+	prompt.Source = PromptSourceFile
+
+	return m.writePromptFile(prompt)
+}
+
 // sanitizeFilename converts a prompt name to a safe filename.
+// Supports Unicode characters (Chinese, Japanese, etc.) while removing
+// dangerous characters like path separators and control characters.
 func sanitizeFilename(name string) string {
-	// Replace spaces and special characters
-	name = strings.ToLower(name)
+	// Replace spaces with dashes
 	name = strings.ReplaceAll(name, " ", "-")
-	
-	// Remove non-alphanumeric characters except dash and underscore
+
+	// Keep Unicode letters, digits, dash and underscore; remove everything else
 	var result strings.Builder
 	for _, r := range name {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '-' || r == '_' {
 			result.WriteRune(r)
 		}
 	}
-	
-	return result.String()
+
+	s := result.String()
+	if s == "" {
+		// Fallback: use a UUID fragment when the name produces an empty string
+		s = uuid.New().String()[:8]
+	}
+
+	return s
 }
 
 // ReloadFromFiles reloads all prompts from configured directories.
 func (m *Manager) ReloadFromFiles() error {
 	m.mu.Lock()
-	
+
 	// Remove file-based prompts
 	for id, p := range m.prompts {
 		if p.Source != PromptSourceMemory {

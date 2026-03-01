@@ -173,6 +173,44 @@ func TestParseManifestBytes_InvalidHandlerFormat(t *testing.T) {
 	}
 }
 
+func TestParseManifestBytes_ValidHandlerWithSubdirectory(t *testing.T) {
+	manifest := `{
+		"id": "test-skill",
+		"name": "Test Skill",
+		"version": "1.0.0",
+		"tools": [
+			{
+				"name": "test_tool",
+				"handler": "scripts/tools.js#run"
+			}
+		]
+	}`
+
+	_, err := ParseManifestBytes([]byte(manifest))
+	if err != nil {
+		t.Fatalf("unexpected error for valid subdirectory handler: %v", err)
+	}
+}
+
+func TestParseManifestBytes_HandlerPathTraversalRejected(t *testing.T) {
+	manifest := `{
+		"id": "test-skill",
+		"name": "Test Skill",
+		"version": "1.0.0",
+		"tools": [
+			{
+				"name": "test_tool",
+				"handler": "../scripts/tools.js#run"
+			}
+		]
+	}`
+
+	_, err := ParseManifestBytes([]byte(manifest))
+	if err == nil {
+		t.Fatal("expected error for handler path traversal")
+	}
+}
+
 func TestParseManifestBytes_PromptMissingName(t *testing.T) {
 	manifest := `{
 		"id": "test-skill",

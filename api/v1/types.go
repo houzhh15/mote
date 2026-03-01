@@ -47,10 +47,11 @@ type ImageData struct {
 
 // ChatRequest represents a chat request.
 type ChatRequest struct {
-	SessionID string      `json:"session_id,omitempty"` // Optional, auto-created if empty
-	Message   string      `json:"message"`              // Required (can be empty if images provided)
-	Model     string      `json:"model,omitempty"`      // Optional, model to use for this request
-	Images    []ImageData `json:"images,omitempty"`     // Optional, pasted/uploaded images
+	SessionID   string      `json:"session_id,omitempty"`   // Optional, auto-created if empty
+	Message     string      `json:"message"`                // Required (can be empty if images provided)
+	Model       string      `json:"model,omitempty"`        // Optional, model to use for this request
+	Images      []ImageData `json:"images,omitempty"`       // Optional, pasted/uploaded images
+	TargetAgent string      `json:"target_agent,omitempty"` // Optional, directly route to this sub-agent (skip main LLM)
 }
 
 // ChatResponse represents a chat response.
@@ -75,6 +76,7 @@ type ChatStreamEvent struct {
 	PendingToolCalls int                       `json:"pending_tool_calls,omitempty"` // For truncated type
 	ApprovalRequest  *ApprovalRequestSSEEvent  `json:"approval_request,omitempty"`   // For approval_request type
 	ApprovalResolved *ApprovalResolvedSSEEvent `json:"approval_resolved,omitempty"`  // For approval_resolved type
+	PDAProgress      *PDAProgressSSEEvent      `json:"pda_progress,omitempty"`       // For pda_progress type
 
 	// Multi-agent delegate identity (set when event comes from a sub-agent)
 	AgentName  string `json:"agent_name,omitempty"`
@@ -96,6 +98,29 @@ type ApprovalResolvedSSEEvent struct {
 	ID        string `json:"id"`
 	Approved  bool   `json:"approved"`
 	DecidedAt string `json:"decided_at"`
+}
+
+// PDAProgressSSEEvent represents PDA step progress sent via SSE.
+type PDAProgressSSEEvent struct {
+	AgentName     string             `json:"agent_name"`
+	StepIndex     int                `json:"step_index"`
+	TotalSteps    int                `json:"total_steps"`
+	StepLabel     string             `json:"step_label"`
+	StepType      string             `json:"step_type"`
+	Phase         string             `json:"phase"`
+	StackDepth    int                `json:"stack_depth"`
+	ExecutedSteps []string           `json:"executed_steps,omitempty"`
+	TotalTokens   int                `json:"total_tokens,omitempty"`
+	Model         string             `json:"model,omitempty"`
+	ParentSteps   []PDAParentStepSSE `json:"parent_steps,omitempty"`
+}
+
+// PDAParentStepSSE describes a parent frame's step progress.
+type PDAParentStepSSE struct {
+	AgentName  string `json:"agent_name"`
+	StepIndex  int    `json:"step_index"`
+	TotalSteps int    `json:"total_steps"`
+	StepLabel  string `json:"step_label"`
 }
 
 // ToolCallUpdateEvent represents a tool call progress update in streaming.
@@ -245,16 +270,18 @@ type MemoryStatsResponse struct {
 
 // SessionSummary represents session summary info.
 type SessionSummary struct {
-	ID             string    `json:"id"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
-	MessageCount   int       `json:"message_count"`
-	Title          string    `json:"title,omitempty"`           // Session title/name
-	Preview        string    `json:"preview,omitempty"`         // Message preview
-	Model          string    `json:"model,omitempty"`           // Model used for this session
-	Scenario       string    `json:"scenario,omitempty"`        // Scenario: chat/cron/channel
-	Source         string    `json:"source,omitempty"`          // Source: chat/cron/delegate (derived from ID prefix)
-	SelectedSkills []string  `json:"selected_skills,omitempty"` // Selected skill IDs (nil=all)
+	ID               string    `json:"id"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
+	MessageCount     int       `json:"message_count"`
+	Title            string    `json:"title,omitempty"`              // Session title/name
+	Preview          string    `json:"preview,omitempty"`            // Message preview
+	Model            string    `json:"model,omitempty"`              // Model used for this session
+	Scenario         string    `json:"scenario,omitempty"`           // Scenario: chat/cron/channel
+	Source           string    `json:"source,omitempty"`             // Source: chat/cron/delegate (derived from ID prefix)
+	SelectedSkills   []string  `json:"selected_skills,omitempty"`    // Selected skill IDs (nil=all)
+	HasPDACheckpoint bool      `json:"has_pda_checkpoint,omitempty"` // True if session has a saved PDA checkpoint
+	IsPDA            bool      `json:"is_pda,omitempty"`             // True if session was ever a PDA session
 }
 
 // BatchDeleteSessionsRequest is the request body for batch session deletion.
@@ -364,6 +391,52 @@ type MessagesListResponse struct {
 	EstimatedTokens int       `json:"estimated_tokens"` // Backend-computed token estimate (same heuristic as compaction)
 }
 
+// ContextSegment represents a single segment of the LLM context window.
+type ContextSegment struct {
+	Type            string `json:"type"`                      // "compressed_summary", "kept_message", "history_message", "compressed_history"
+	Role            string `json:"role,omitempty"`            // provider role (system, user, assistant, tool)
+	Index           int    `json:"index"`                     // position in the final message array
+	CharCount       int    `json:"char_count"`                // byte length of content
+	EstimatedTokens int    `json:"estimated_tokens"`          // heuristic token count
+	ContentPreview  string `json:"content_preview,omitempty"` // first N chars preview
+	HasToolCalls    bool   `json:"has_tool_calls,omitempty"`  // whether this message contains tool calls
+	ToolCallCount   int    `json:"tool_call_count,omitempty"` // number of tool calls
+	InContext       bool   `json:"in_context"`                // true if part of effective context (BuildContext output)
+	Budgeted        bool   `json:"budgeted"`                  // true if this segment survives BudgetMessages
+}
+
+// CompressionInfo provides information about the compressed context state.
+type CompressionInfo struct {
+	HasCompression bool   `json:"has_compression"`           // true if a compressed context exists
+	Version        int    `json:"version,omitempty"`         // compression version number
+	Summary        string `json:"summary,omitempty"`         // the compression summary text
+	KeptMessages   int    `json:"kept_messages,omitempty"`   // number of kept messages
+	TotalTokens    int    `json:"total_tokens,omitempty"`    // tokens in compressed context
+	OriginalTokens int    `json:"original_tokens,omitempty"` // tokens before compression
+}
+
+// SessionContextResponse represents the full context analysis for a session.
+// Three tiers of counting:
+//   - Total: all DB messages (full history)
+//   - Effective: what BuildContext assembles (summary + kept + new messages)
+//   - Budgeted: after BudgetMessages truncation (what LLM actually receives)
+type SessionContextResponse struct {
+	SessionID       string           `json:"session_id"`
+	Model           string           `json:"model"`
+	ContextWindow   int              `json:"context_window"` // model's context window (tokens), 0 if unknown
+	Segments        []ContextSegment `json:"segments"`
+	Compression     CompressionInfo  `json:"compression"`
+	TotalMessages   int              `json:"total_messages"`   // count of all DB messages
+	TotalChars      int              `json:"total_chars"`      // chars of all segments (history + effective)
+	TotalTokens     int              `json:"total_tokens"`     // tokens of all segments
+	EffectiveCount  int              `json:"effective_count"`  // segments in effective context (BuildContext)
+	EffectiveChars  int              `json:"effective_chars"`  // chars in effective context
+	EffectiveTokens int              `json:"effective_tokens"` // tokens in effective context
+	BudgetedCount   int              `json:"budgeted_count"`   // segments after BudgetMessages
+	BudgetedChars   int              `json:"budgeted_chars"`   // chars after BudgetMessages
+	BudgetedTokens  int              `json:"budgeted_tokens"`  // tokens after BudgetMessages (headline number)
+}
+
 // =============================================================================
 // Config API Models
 // =============================================================================
@@ -375,6 +448,7 @@ type ConfigResponse struct {
 	Ollama   OllamaConfigView   `json:"ollama"`
 	Minimax  MinimaxConfigView  `json:"minimax"`
 	GLM      GLMConfigView      `json:"glm"`
+	VLLM     VLLMConfigView     `json:"vllm"`
 	Memory   MemoryConfigView   `json:"memory"`
 	Cron     CronConfigView     `json:"cron"`
 	MCP      MCPConfigView      `json:"mcp"`
@@ -423,6 +497,14 @@ type GLMConfigView struct {
 	MaxTokens int    `json:"max_tokens,omitempty"`
 }
 
+// VLLMConfigView represents vLLM provider configuration for API.
+type VLLMConfigView struct {
+	APIKey    string `json:"api_key,omitempty"`
+	Endpoint  string `json:"endpoint,omitempty"`
+	Model     string `json:"model,omitempty"`
+	MaxTokens int    `json:"max_tokens,omitempty"`
+}
+
 // MemoryConfigView represents memory configuration for API.
 type MemoryConfigView struct {
 	Enabled bool `json:"enabled"`
@@ -446,6 +528,7 @@ type UpdateConfigRequest struct {
 	Ollama   *OllamaConfigView   `json:"ollama,omitempty"`
 	Minimax  *MinimaxConfigView  `json:"minimax,omitempty"`
 	GLM      *GLMConfigView      `json:"glm,omitempty"`
+	VLLM     *VLLMConfigView     `json:"vllm,omitempty"`
 	Memory   *MemoryConfigView   `json:"memory,omitempty"`
 	Cron     *CronConfigView     `json:"cron,omitempty"`
 }
@@ -550,6 +633,7 @@ type CronJob struct {
 	Prompt         string     `json:"prompt"`
 	Enabled        bool       `json:"enabled"`
 	Model          string     `json:"model,omitempty"`           // Model for this cron job
+	AgentID        string     `json:"agent_id,omitempty"`        // Direct delegate to sub-agent
 	SessionID      string     `json:"session_id,omitempty"`      // Associated session ID
 	WorkspacePath  string     `json:"workspace_path,omitempty"`  // Workspace directory path
 	WorkspaceAlias string     `json:"workspace_alias,omitempty"` // Workspace display alias
@@ -566,13 +650,14 @@ type CronJobsListResponse struct {
 
 // CreateCronJobRequest represents a request to create a cron job.
 type CreateCronJobRequest struct {
-	Name           string `json:"name"`              // Required
-	Schedule       string `json:"schedule"`          // Required, cron expression
-	Type           string `json:"type,omitempty"`    // Optional: prompt (default), tool, script
-	Prompt         string `json:"prompt,omitempty"`  // For prompt type
-	Payload        string `json:"payload,omitempty"` // Generic payload (JSON), alternative to prompt
-	Model          string `json:"model,omitempty"`   // Model for this cron job
-	Enabled        bool   `json:"enabled"`           // Default true
+	Name           string `json:"name"`               // Required
+	Schedule       string `json:"schedule"`           // Required, cron expression
+	Type           string `json:"type,omitempty"`     // Optional: prompt (default), tool, script
+	Prompt         string `json:"prompt,omitempty"`   // For prompt type
+	Payload        string `json:"payload,omitempty"`  // Generic payload (JSON), alternative to prompt
+	Model          string `json:"model,omitempty"`    // Model for this cron job
+	AgentID        string `json:"agent_id,omitempty"` // Direct delegate to sub-agent
+	Enabled        bool   `json:"enabled"`            // Default true
 	Description    string `json:"description,omitempty"`
 	WorkspacePath  string `json:"workspace_path,omitempty"`  // Workspace directory path
 	WorkspaceAlias string `json:"workspace_alias,omitempty"` // Workspace display alias
@@ -583,6 +668,7 @@ type UpdateCronJobRequest struct {
 	Schedule       *string `json:"schedule,omitempty"`
 	Prompt         *string `json:"prompt,omitempty"`
 	Model          *string `json:"model,omitempty"`
+	AgentID        *string `json:"agent_id,omitempty"`
 	Enabled        *bool   `json:"enabled,omitempty"`
 	Description    *string `json:"description,omitempty"`
 	WorkspacePath  *string `json:"workspace_path,omitempty"`

@@ -40,6 +40,7 @@ import type {
   VersionCheckResult,
   UpdateOptions,
   UpdateResult,
+  SessionContextResponse,
 } from '../types';
 
 // Extend window with Wails runtime
@@ -87,6 +88,10 @@ interface WailsApp {
   // Events are emitted as "chat:stream" with JSON event data
   // Accepts full ChatRequest JSON string (message, session_id, images, etc.)
   ChatStream(requestJSON: string): Promise<void>;
+
+  // Resume PDA checkpoint and stream events via Wails event system
+  // Events are emitted as "chat:stream:{sessionID}" (same as ChatStream)
+  PDAResumeStream(sessionID: string): Promise<void>;
   
   // Cancel a running chat stream for a session
   CancelChat(sessionID: string): Promise<void>;
@@ -253,6 +258,13 @@ export function createWailsAdapter(app: WailsApp): APIAdapter {
       return { messages: data.messages || [], estimated_tokens: data.estimated_tokens || 0 };
     },
 
+    getSessionContext: async (sessionId: string): Promise<SessionContextResponse> => {
+      return callAPI<SessionContextResponse>(
+        'GET',
+        `/api/v1/sessions/${sessionId}/context`
+      );
+    },
+
     createSession: async (title?: string, scenario?: string): Promise<Session> => {
       return callAPI<Session>('POST', '/api/v1/sessions', { title: title || '', scenario: scenario || 'chat' });
     },
@@ -403,6 +415,10 @@ export function createWailsAdapter(app: WailsApp): APIAdapter {
 
     reloadSkills: async (): Promise<void> => {
       await callAPI('POST', '/api/v1/skills/reload');
+    },
+
+    deleteSkill: async (skillId: string): Promise<void> => {
+      await callAPI('DELETE', `/api/v1/skills/${skillId}`);
     },
 
     openSkillsDir: async (target: 'user' | 'workspace'): Promise<void> => {
@@ -584,6 +600,10 @@ export function createWailsAdapter(app: WailsApp): APIAdapter {
       return data.files || [];
     },
 
+    openWorkspaceDir: async (path: string): Promise<void> => {
+      await callAPI('POST', '/api/v1/workspaces/open', { path });
+    },
+
     browseDirectory: async (path?: string): Promise<BrowseDirectoryResult> => {
       const url = path
         ? `/api/v1/browse-directory?path=${encodeURIComponent(path)}`
@@ -718,6 +738,10 @@ export function createWailsAdapter(app: WailsApp): APIAdapter {
       await callAPI('DELETE', `/api/v1/agents/${encodeURIComponent(name)}`);
     },
 
+    reloadAgents: async () => {
+      return callAPI<{ status: string; count: number }>('POST', '/api/v1/agents/reload');
+    },
+
     getSessionDelegations: async (sessionId: string) => {
       return callAPI<import('../types').DelegationRecord[]>('GET', `/api/v1/sessions/${encodeURIComponent(sessionId)}/delegations`);
     },
@@ -758,6 +782,41 @@ export function createWailsAdapter(app: WailsApp): APIAdapter {
 
     respondApproval: async (id: string, approved: boolean, reason?: string, modifiedArguments?: string) => {
       return callAPI<{ success: boolean }>('POST', `/api/v1/approvals/${encodeURIComponent(id)}/respond`, { approved, reason, modified_arguments: modifiedArguments });
+    },
+
+    // ============== PDA Checkpoint Control ==============
+    getPDAStatus: async (sessionId: string) => {
+      return callAPI<import('../types').PDACheckpointInfo>('POST', `/api/v1/sessions/${encodeURIComponent(sessionId)}/pda`, { action: 'status' });
+    },
+
+    clearPDACheckpoint: async (sessionId: string) => {
+      await callAPI('POST', `/api/v1/sessions/${encodeURIComponent(sessionId)}/pda`, { action: 'restart' });
+    },
+
+    resumePDA: async (sessionId: string, onEvent: (event: StreamEvent) => void, signal?: AbortSignal): Promise<void> => {
+      const eventName = `chat:stream:${sessionId}`;
+
+      const cleanup = window.runtime?.EventsOn(eventName, (...data: unknown[]) => {
+        if (signal?.aborted) return;
+        try {
+          const eventData = data[0] as string;
+          const event = JSON.parse(eventData) as StreamEvent;
+          onEvent(event);
+        } catch {
+          // Ignore parse errors
+        }
+      });
+
+      try {
+        if (signal?.aborted) return;
+        await app.PDAResumeStream(sessionId);
+      } finally {
+        if (cleanup) {
+          cleanup();
+        } else if (window.runtime?.EventsOff) {
+          window.runtime.EventsOff(eventName);
+        }
+      }
     },
 
     // ============== Mode Detection ==============

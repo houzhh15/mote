@@ -3,6 +3,7 @@ package ollama
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"io"
 
 	"mote/internal/provider"
@@ -37,6 +38,16 @@ func ProcessStream(r io.ReadCloser) <-chan provider.ChatEvent {
 					Error: err,
 				}
 				continue
+			}
+
+			// Check for inline error (Ollama may return {"error":"..."} in stream body)
+			if resp.Error != "" {
+				logger.Error().Str("error", resp.Error).Msg("Ollama stream returned inline error")
+				events <- provider.ChatEvent{
+					Type:  provider.EventTypeError,
+					Error: fmt.Errorf("ollama error: %s", resp.Error),
+				}
+				return
 			}
 
 			// Process content delta

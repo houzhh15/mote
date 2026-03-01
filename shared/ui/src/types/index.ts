@@ -78,6 +78,8 @@ export interface Session {
   scenario?: string;  // Session scenario (chat, cron, channel)
   source?: string;  // Source: chat/cron/delegate (derived from ID prefix)
   selected_skills?: string[];  // Selected skill IDs (undefined/null = all)
+  has_pda_checkpoint?: boolean;  // True if session has a saved PDA checkpoint
+  is_pda?: boolean;  // True if session was ever a PDA session (persists after completion)
   created_at: string;
   updated_at: string;
   message_count?: number;
@@ -102,6 +104,46 @@ export interface Message {
 export interface MessagesResponse {
   messages: Message[];
   estimated_tokens: number;  // Backend-computed token estimate
+}
+
+// Context analysis types (from GET /sessions/{id}/context)
+export interface ContextSegment {
+  type: 'compressed_summary' | 'kept_message' | 'history_message' | 'compressed_history';
+  role?: string;
+  index: number;
+  char_count: number;
+  estimated_tokens: number;
+  content_preview?: string;
+  has_tool_calls?: boolean;
+  tool_call_count?: number;
+  in_context: boolean;
+  budgeted: boolean;
+}
+
+export interface CompressionInfo {
+  has_compression: boolean;
+  version?: number;
+  summary?: string;
+  kept_messages?: number;
+  total_tokens?: number;
+  original_tokens?: number;
+}
+
+export interface SessionContextResponse {
+  session_id: string;
+  model: string;
+  context_window: number;
+  segments: ContextSegment[];
+  compression: CompressionInfo;
+  total_messages: number;
+  total_chars: number;
+  total_tokens: number;
+  effective_count: number;
+  effective_chars: number;
+  effective_tokens: number;
+  budgeted_count: number;
+  budgeted_chars: number;
+  budgeted_tokens: number;
 }
 
 export interface Memory {
@@ -132,6 +174,7 @@ export interface CronJob {
   schedule: string;
   prompt: string;
   model?: string;       // Model for this cron job
+  agent_id?: string;    // Direct delegate to sub-agent
   session_id?: string;  // Associated session ID
   workspace_path?: string;   // Workspace directory path for this cron job
   workspace_alias?: string;  // Workspace alias name
@@ -191,6 +234,12 @@ export interface Config {
     model?: string;      // Default GLM model
     max_tokens?: number; // Max output tokens
   };
+  vllm?: {
+    api_key?: string;    // Optional API key (if vLLM started with --api-key)
+    endpoint?: string;   // vLLM API endpoint (default: http://localhost:8000)
+    model?: string;      // Model name (auto-detected if empty)
+    max_tokens?: number; // Max output tokens
+  };
   memory?: {
     enabled?: boolean;
     auto_capture?: boolean;
@@ -226,6 +275,12 @@ export interface UpdateConfigRequest {
     model?: string;
     max_tokens?: number;
   };
+  vllm?: {
+    api_key?: string;
+    endpoint?: string;
+    model?: string;
+    max_tokens?: number;
+  };
 }
 
 export interface APIError {
@@ -244,6 +299,7 @@ export interface ChatRequest {
   message: string;
   stream?: boolean;
   images?: ImageAttachment[];  // Pasted/uploaded images
+  target_agent?: string;       // Direct delegate to specific sub-agent (skip main LLM)
 }
 
 export interface ChatResponse {
@@ -276,8 +332,43 @@ export interface ApprovalResolvedSSEEvent {
   decided_at: string;
 }
 
+// PDA checkpoint information from the backend
+export interface PDACheckpointInfo {
+  has_checkpoint: boolean;
+  agent_name?: string;
+  interrupt_step?: number;
+  interrupt_agent?: string;
+  interrupt_reason?: string;
+  executed_steps?: string[];
+  initial_prompt?: string;
+  created_at?: string;
+}
+
+// PDA progress event for step execution tracking
+export interface PDAProgressSSEEvent {
+  agent_name: string;
+  step_index: number;
+  total_steps: number;
+  step_label: string;
+  step_type: string;
+  phase: 'started' | 'completed' | 'failed';
+  stack_depth: number;
+  executed_steps?: string[];
+  total_tokens?: number;
+  model?: string;
+  parent_steps?: PDAParentStepInfo[];
+}
+
+// Parent frame step info in PDA stack
+export interface PDAParentStepInfo {
+  agent_name: string;
+  step_index: number;
+  total_steps: number;
+  step_label: string;
+}
+
 export interface StreamEvent {
-  type: 'content' | 'tool_call' | 'tool_call_update' | 'tool_result' | 'thinking' | 'error' | 'done' | 'truncated' | 'heartbeat' | 'pause' | 'pause_timeout' | 'pause_resumed' | 'approval_request' | 'approval_resolved';
+  type: 'content' | 'tool_call' | 'tool_call_update' | 'tool_result' | 'thinking' | 'error' | 'done' | 'truncated' | 'heartbeat' | 'pause' | 'pause_timeout' | 'pause_resumed' | 'approval_request' | 'approval_resolved' | 'pda_progress';
   delta?: string;  // Content delta from backend
   content?: string;  // Also support content for compatibility
   thinking?: string;  // Thinking/reasoning content (temporary display)
@@ -319,6 +410,8 @@ export interface StreamEvent {
   // Multi-agent delegation
   agent_name?: string;   // Name of the sub-agent producing this event
   agent_depth?: number;  // Nesting depth (0 = main agent)
+  // PDA progress
+  pda_progress?: PDAProgressSSEEvent;
 }
 
 // ================================================================
@@ -549,17 +642,50 @@ export interface ReconfigureSessionResponse {
 // Multi-Agent Delegate Types
 // ================================================================
 
+// PDA (Pushdown-Automaton) Orchestration Step Types
+export type StepType = 'prompt' | 'agent_ref' | 'route';
+
+export interface Step {
+  type: StepType;
+  label?: string;
+  content?: string;   // for 'prompt' steps; also task description for 'agent_ref' and 'route' steps
+  agent?: string;     // for 'agent_ref' steps
+  prompt?: string;    // for 'route' steps (LLM routing prompt)
+  branches?: Record<string, string>; // for 'route' steps: match → target_agent
+}
+
+export interface ValidationResult {
+  level: 'error' | 'warning';
+  code: string;
+  message: string;
+  agent_name: string;
+  step_index: number;
+}
+
+/** Lightweight agent descriptor for dropdowns / selectors */
+export interface AgentOption {
+  name: string;
+  tags?: string[];
+}
+
 export interface AgentConfig {
   enabled?: boolean;
+  stealth?: boolean;      // 隐身：不注入到系统提示词
+  entry_point?: boolean;  // 入口：在 @ 引用中优先展示
   description?: string;
   provider?: string;
   model?: string;
   system_prompt?: string;
   tools?: string[];
+  tags?: string[];
   max_depth?: number;
   timeout?: string;
   max_iterations?: number;
   temperature?: number;
+  // PDA structured orchestration
+  steps?: Step[];
+  max_recursion?: number;
+  draft?: { steps?: Step[]; saved_at: string };
 }
 
 export interface DelegationRecord {
@@ -576,4 +702,8 @@ export interface DelegationRecord {
   result_length: number;
   tokens_used: number;
   error_message?: string;
+  // PDA tracking
+  mode?: 'legacy' | 'structured';
+  executed_steps?: string[];
+  pda_stack_depth?: number;
 }

@@ -13,8 +13,10 @@ import { useInputHistory } from '../hooks';
 import { PromptSelector } from '../components/PromptSelector';
 import { FileSelector } from '../components/FileSelector';
 import type { FileSelectorMode } from '../components/FileSelector';
+import { MentionSelector } from '../components/MentionSelector';
 import { DirectoryPicker } from '../components/DirectoryPicker';
 import { OllamaIcon } from '../components/OllamaIcon';
+import { VllmIcon } from '../components/VllmIcon';
 import type { Model, Workspace, Skill, ImageAttachment } from '../types';
 
 const { TextArea } = Input;
@@ -56,6 +58,13 @@ export const NewChatPage: React.FC<NewChatPageProps> = ({
   const [fileSearchQuery, setFileSearchQuery] = useState('');
   const [fileSelectorMode, setFileSelectorMode] = useState<FileSelectorMode>('context');
   const [tabTriggerPos, setTabTriggerPos] = useState<number | null>(null);
+
+  // @ mention selector state
+  const [mentionSelectorVisible, setMentionSelectorVisible] = useState(false);
+  const [mentionSearchQuery, setMentionSearchQuery] = useState('');
+
+  // Direct delegate target agent
+  const [targetAgent, setTargetAgent] = useState<string | null>(null);
   const inputRef = useRef<any>(null);
   const { token: tokenColors } = theme.useToken();
 
@@ -108,6 +117,9 @@ export const NewChatPage: React.FC<NewChatPageProps> = ({
   const getModelIcon = (model: Model) => {
     if (model.provider === 'ollama') {
       return <OllamaIcon size={12} style={{ marginRight: 8 }} />;
+    }
+    if (model.provider === 'vllm') {
+      return <VllmIcon size={12} style={{ marginRight: 8 }} />;
     }
     if (model.provider === 'minimax') {
       return <MinimaxIcon size={12} style={{ marginRight: 8 }} />;
@@ -240,6 +252,12 @@ export const NewChatPage: React.FC<NewChatPageProps> = ({
         sessionStorage.setItem(`mote_pending_images_${sessionId}`, JSON.stringify(currentImages));
       }
 
+      // Store target agent if selected
+      if (targetAgent) {
+        sessionStorage.setItem(`mote_pending_target_agent_${sessionId}`, targetAgent);
+        setTargetAgent(null);
+      }
+
       // 6. 跳转到 ChatPage
       onNavigateToChat?.(sessionId);
     } catch (error) {
@@ -278,9 +296,13 @@ export const NewChatPage: React.FC<NewChatPageProps> = ({
         setFileSelectorVisible(false);
         setFileSearchQuery('');
       }
+      if (mentionSelectorVisible) {
+        setMentionSelectorVisible(false);
+        setMentionSearchQuery('');
+      }
     }
     // Tab key path completion (only when workspace is bound)
-    if (e.key === 'Tab' && !e.shiftKey && !promptSelectorVisible && !fileSelectorVisible && selectedWorkspace) {
+    if (e.key === 'Tab' && !e.shiftKey && !promptSelectorVisible && !fileSelectorVisible && !mentionSelectorVisible && selectedWorkspace) {
       const value = inputValue;
       const cursorPos = e.currentTarget.selectionStart;
       const beforeCursor = value.substring(0, cursorPos);
@@ -312,19 +334,24 @@ export const NewChatPage: React.FC<NewChatPageProps> = ({
       setPromptSearchQuery('');
     }
 
-    // ===== Detect @ for file selector (only when workspace is bound) =====
-    if (selectedWorkspace && value.endsWith('@')) {
+    // ===== Detect @ for mention selector =====
+    if (value.endsWith('@')) {
       const beforeAt = value.slice(0, -1);
       if (beforeAt === '' || beforeAt.endsWith(' ') || beforeAt.endsWith('\n')) {
-        setFileSelectorVisible(true);
-        setFileSearchQuery('');
-        setFileSelectorMode('context');
-        setPromptSelectorVisible(false); // Mutually exclusive
+        setMentionSelectorVisible(true);
+        setMentionSearchQuery('');
+        setFileSelectorVisible(false);
+        setPromptSelectorVisible(false);
         return;
       }
     }
 
     const lastAtIndex = value.lastIndexOf('@');
+    if (lastAtIndex !== -1 && mentionSelectorVisible) {
+      setMentionSearchQuery(value.slice(lastAtIndex + 1));
+    }
+
+    // Legacy file selector (for Tab-triggered path completion)
     if (lastAtIndex !== -1 && fileSelectorVisible) {
       setFileSearchQuery(value.slice(lastAtIndex + 1));
     }
@@ -337,7 +364,28 @@ export const NewChatPage: React.FC<NewChatPageProps> = ({
     setPromptSearchQuery('');
   };
 
-  // 处理文件选择
+  // 处理@选择器 - Agent选择
+  const handleMentionAgentSelect = (agentName: string) => {
+    // Remove @query from input
+    const lastAtIndex = inputValue.lastIndexOf('@');
+    if (lastAtIndex !== -1) {
+      setInputValue(inputValue.substring(0, lastAtIndex));
+    }
+    setTargetAgent(agentName);
+    setMentionSelectorVisible(false);
+    setMentionSearchQuery('');
+  };
+
+  // 处理@选择器 - File选择
+  const handleMentionFileSelect = (filepath: string) => {
+    const lastAtIndex = inputValue.lastIndexOf('@');
+    const before = inputValue.substring(0, lastAtIndex);
+    setInputValue(`${before}@${filepath} `);
+    setMentionSelectorVisible(false);
+    setMentionSearchQuery('');
+  };
+
+  // 处理文件选择 (legacy Tab completion)
   const handleFileSelect = (filepath: string, _mode: FileSelectorMode) => {
     if (fileSelectorMode === 'path-only' && tabTriggerPos !== null) {
       // Tab completion: replace path fragment
@@ -441,7 +489,7 @@ export const NewChatPage: React.FC<NewChatPageProps> = ({
               onPaste={handlePaste}
               placeholder={pastedImages.length > 0 
                 ? "添加说明文字（可选）... (Ctrl+V 粘贴截图)" 
-                : `输入消息开始对话... (/ 提示词${selectedWorkspace ? ', @ 引用文件' : ''}, Ctrl+V 粘贴截图)`}
+                : `输入消息开始对话... (/ 提示词, @ 选择Agent或文件, Ctrl+V 粘贴截图)`}
               autoSize={{ minRows: 3, maxRows: 8 }}
               style={{
                 ...styles.textArea,
@@ -450,6 +498,19 @@ export const NewChatPage: React.FC<NewChatPageProps> = ({
               disabled={loading}
               className="mote-input"
             />
+            {/* Target agent tag */}
+            {targetAgent && (
+              <div style={{ padding: '4px 8px', display: 'flex', alignItems: 'center', gap: 4 }}>
+                <Tag
+                  color="blue"
+                  closable
+                  onClose={() => setTargetAgent(null)}
+                  style={{ margin: 0 }}
+                >
+                  直达: {targetAgent}
+                </Tag>
+              </div>
+            )}
             <PromptSelector
               visible={promptSelectorVisible}
               searchQuery={promptSearchQuery}
@@ -459,6 +520,18 @@ export const NewChatPage: React.FC<NewChatPageProps> = ({
               onCancel={() => {
                 setPromptSelectorVisible(false);
                 setPromptSearchQuery('');
+              }}
+            />
+            <MentionSelector
+              visible={mentionSelectorVisible}
+              searchQuery={mentionSearchQuery}
+              sessionId={undefined}
+              workspacePath={selectedWorkspace?.path}
+              onSelectAgent={handleMentionAgentSelect}
+              onSelectFile={handleMentionFileSelect}
+              onCancel={() => {
+                setMentionSelectorVisible(false);
+                setMentionSearchQuery('');
               }}
             />
             {selectedWorkspace && (
@@ -553,7 +626,7 @@ export const NewChatPage: React.FC<NewChatPageProps> = ({
                     display: 'inline-block',
                     maxWidth: '100%'
                   }}>
-                    {selectedWorkspace.name || selectedWorkspace.path.split('/').pop()}
+                    {selectedWorkspace.name || selectedWorkspace.path.split(/[\/\\]/).pop()}
                   </span>
                 </Button>
               ) : (
@@ -639,7 +712,7 @@ export const NewChatPage: React.FC<NewChatPageProps> = ({
                   placeholder="选择工作区"
                   options={uniqueWorkspaces.map((ws) => ({
                     value: ws.path,
-                    label: ws.alias || ws.path.split('/').pop() || ws.path,
+                    label: ws.alias || ws.path.split(/[\/\\]/).pop() || ws.path,
                   }))}
                   onChange={handleSelectWorkspace}
                 />

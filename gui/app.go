@@ -228,7 +228,7 @@ func (a *App) initializeMote(configDir, configPath string) error {
 		},
 		"ollama": map[string]any{
 			"endpoint":   "http://localhost:11434",
-			"model":      "llama3.2",
+			"model":      "",
 			"timeout":    "5m",
 			"keep_alive": "5m",
 		},
@@ -566,6 +566,89 @@ func (a *App) ChatStream(requestJSON string) error {
 		}
 		if err != nil {
 			return fmt.Errorf("error reading stream: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// PDAResumeStream resumes PDA execution for a session and streams events via Wails events.
+// Events are emitted with the name "chat:stream:{sessionID}" containing JSON event data.
+// This reuses the same event channel as ChatStream so frontend ChatManager can process
+// resume flow identically to normal chat streaming.
+func (a *App) PDAResumeStream(sessionID string) error {
+	if strings.TrimSpace(sessionID) == "" {
+		return fmt.Errorf("sessionID is required")
+	}
+
+	apiURL := fmt.Sprintf("http://localhost:%d/api/v1/sessions/%s/pda", a.serverPort, url.PathEscape(sessionID))
+	bodyJSON := `{"action":"continue"}`
+
+	streamCtx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
+
+	if prev, loaded := a.chatCancels.LoadAndDelete(sessionID); loaded {
+		prev.(context.CancelFunc)()
+	}
+	a.chatCancels.Store(sessionID, cancel)
+	defer a.chatCancels.Delete(sessionID)
+
+	req, err := http.NewRequestWithContext(streamCtx, "POST", apiURL, strings.NewReader(bodyJSON))
+	if err != nil {
+		return fmt.Errorf("failed to create PDA resume request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to send PDA resume request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("PDA resume request failed: %s", string(body))
+	}
+
+	eventName := fmt.Sprintf("chat:stream:%s", sessionID)
+	reader := resp.Body
+	buffer := make([]byte, 0, 4096)
+	chunk := make([]byte, 1024)
+
+	for {
+		n, readErr := reader.Read(chunk)
+		if n > 0 {
+			buffer = append(buffer, chunk[:n]...)
+
+			for {
+				idx := -1
+				for i := 0; i < len(buffer)-1; i++ {
+					if buffer[i] == '\n' && buffer[i+1] == '\n' {
+						idx = i
+						break
+					}
+				}
+				if idx == -1 {
+					break
+				}
+
+				line := string(buffer[:idx])
+				buffer = buffer[idx+2:]
+
+				if strings.HasPrefix(line, "data: ") {
+					eventData := line[6:]
+					runtime.EventsEmit(a.ctx, eventName, eventData)
+				}
+			}
+		}
+
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
+			return fmt.Errorf("error reading PDA resume stream: %w", readErr)
 		}
 	}
 

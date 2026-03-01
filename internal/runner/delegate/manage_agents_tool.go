@@ -40,7 +40,7 @@ func (t *ManageAgentsTool) Parameters() map[string]any {
 			},
 			"config": map[string]any{
 				"type":        "object",
-				"description": "Agent configuration (required for create/update). Fields: description, provider, model, system_prompt, tools, max_depth, timeout, max_iterations, temperature, enabled",
+				"description": "Agent configuration (required for create/update). Fields: description, provider, model, system_prompt, tools, max_depth, timeout, max_iterations, max_tokens, temperature, enabled, steps, max_recursion",
 				"properties": map[string]any{
 					"enabled": map[string]any{
 						"type":        "boolean",
@@ -69,7 +69,7 @@ func (t *ManageAgentsTool) Parameters() map[string]any {
 					},
 					"max_depth": map[string]any{
 						"type":        "integer",
-						"description": "Maximum delegation depth for this agent (default: 3)",
+						"description": "How many more levels this agent can delegate downward. 0 = inherit global limit. 1 = leaf agent (cannot delegate). 2 = can delegate 2 more levels, etc.",
 					},
 					"timeout": map[string]any{
 						"type":        "string",
@@ -79,9 +79,52 @@ func (t *ManageAgentsTool) Parameters() map[string]any {
 						"type":        "integer",
 						"description": "Maximum iterations for the agent",
 					},
+					"max_tokens": map[string]any{
+						"type":        "integer",
+						"description": "Maximum output tokens. 0 inherits from main runner.",
+					},
 					"temperature": map[string]any{
 						"type":        "number",
 						"description": "Temperature for the agent (0.0-2.0)",
+					},
+					"steps": map[string]any{
+						"type":        "array",
+						"description": "PDA structured orchestration steps. When set, the agent runs as a PDA state machine instead of a single LLM call. Each step has: type (prompt/agent_ref/route), label, and type-specific fields.",
+						"items": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"type": map[string]any{
+									"type":        "string",
+									"enum":        []string{"prompt", "agent_ref", "route"},
+									"description": "Step type: 'prompt' (LLM executes a prompt), 'agent_ref' (delegate to another agent), 'route' (LLM picks a branch)",
+								},
+								"label": map[string]any{
+									"type":        "string",
+									"description": "Human-readable step label for UI display",
+								},
+								"content": map[string]any{
+									"type":        "string",
+									"description": "For 'prompt' type: the prompt text to send to the LLM",
+								},
+								"agent": map[string]any{
+									"type":        "string",
+									"description": "For 'agent_ref' type: name of the target agent to invoke",
+								},
+								"prompt": map[string]any{
+									"type":        "string",
+									"description": "For 'route' type: the routing prompt that the LLM evaluates",
+								},
+								"branches": map[string]any{
+									"type":        "object",
+									"description": "For 'route' type: mapping of LLM output keyword → target agent name",
+								},
+							},
+							"required": []string{"type"},
+						},
+					},
+					"max_recursion": map[string]any{
+						"type":        "integer",
+						"description": "Maximum recursion depth for PDA execution (when steps include self-referencing routes). Default: 0 (no recursion).",
 					},
 				},
 			},
@@ -158,7 +201,11 @@ func (t *ManageAgentsTool) listAgents() (tools.ToolResult, error) {
 		if model == "" {
 			model = "(default)"
 		}
-		sb.WriteString(fmt.Sprintf("- **%s** [%s] — %s (model: %s)\n", name, status, desc, model))
+		mode := "standard"
+		if ac.HasSteps() {
+			mode = fmt.Sprintf("PDA (%d steps)", len(ac.Steps))
+		}
+		sb.WriteString(fmt.Sprintf("- **%s** [%s] — %s (model: %s, mode: %s)\n", name, status, desc, model, mode))
 	}
 	return tools.NewSuccessResult(sb.String()), nil
 }

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -27,10 +28,11 @@ var (
 
 // OllamaProvider implements the Provider interface for Ollama.
 type OllamaProvider struct {
-	endpoint   string
-	model      string
-	httpClient *http.Client
-	keepAlive  string
+	endpoint     string
+	model        string
+	httpClient   *http.Client
+	streamClient *http.Client // no overall timeout — http.Client.Timeout kills long SSE streams
+	keepAlive    string
 
 	// Cached model list
 	modelsCache []string
@@ -43,9 +45,9 @@ func NewOllamaProvider(cfg Config) provider.Provider {
 	if cfg.Endpoint == "" {
 		cfg.Endpoint = DefaultEndpoint
 	}
-	if cfg.Model == "" {
-		cfg.Model = DefaultModel
-	}
+	cfg.Endpoint = strings.TrimRight(strings.TrimSpace(cfg.Endpoint), "/")
+	// Model can be empty — will use req.Model from each chat request.
+	// No hardcoded fallback; provider reports it in Models() for auto-detection.
 	if cfg.Timeout == 0 {
 		cfg.Timeout = DefaultTimeout
 	}
@@ -59,7 +61,21 @@ func NewOllamaProvider(cfg Config) provider.Provider {
 		httpClient: &http.Client{
 			Timeout: cfg.Timeout,
 		},
-		keepAlive: cfg.KeepAlive,
+		// streamClient has NO overall timeout — http.Client.Timeout includes
+		// response body read time, which kills long-running NDJSON streams.
+		// Instead, use Transport-level timeouts for connection/TLS only.
+		streamClient: &http.Client{
+			Transport: &http.Transport{
+				DialContext: (&net.Dialer{
+					Timeout:   30 * time.Second,
+					KeepAlive: 30 * time.Second,
+				}).DialContext,
+				TLSHandshakeTimeout:   15 * time.Second,
+				ResponseHeaderTimeout: cfg.Timeout, // wait for model loading
+				IdleConnTimeout:       90 * time.Second,
+			},
+		},
+		keepAlive:    cfg.KeepAlive,
 	}
 }
 
@@ -107,7 +123,7 @@ func (p *OllamaProvider) Chat(ctx context.Context, req provider.ChatRequest) (*p
 	// Debug: log the model being used
 	logger.Debug().Str("model", ollamaReq.Model).Str("req_model", req.Model).Msg("Ollama Chat request")
 
-	// Send request
+	// Send request (with one retry for model-not-found, to handle Ollama model reload)
 	resp, err := p.doRequest(ctx, "/api/chat", ollamaReq)
 	if err != nil {
 		return nil, err
@@ -123,7 +139,62 @@ func (p *OllamaProvider) Chat(ctx context.Context, req provider.ChatRequest) (*p
 	// Check for error response
 	if resp.StatusCode != http.StatusOK {
 		logger.Error().Int("status", resp.StatusCode).Str("body", string(body)).Msg("Ollama error response")
-		return nil, p.handleErrorResponse(resp.StatusCode, body)
+		apiErr := p.handleErrorResponse(resp.StatusCode, body)
+
+		// Auto-retry without tools if model doesn't support them
+		var provErr *provider.ProviderError
+		if errors.As(apiErr, &provErr) && provErr.Code == provider.ErrCodeToolsNotSupported {
+			logger.Info().Str("model", ollamaReq.Model).Msg("Model does not support tools, retrying without tools")
+			noToolsReq := req
+			noToolsReq.Tools = nil
+			ollamaReq = p.buildRequest(noToolsReq, false)
+			resp2, err2 := p.doRequest(ctx, "/api/chat", ollamaReq)
+			if err2 != nil {
+				return nil, err2
+			}
+			defer resp2.Body.Close()
+			body2, err2 := io.ReadAll(resp2.Body)
+			if err2 != nil {
+				return nil, fmt.Errorf("failed to read response: %w", err2)
+			}
+			if resp2.StatusCode != http.StatusOK {
+				return nil, p.handleErrorResponse(resp2.StatusCode, body2)
+			}
+			var ollamaResp ollamaResponse
+			if err := json.Unmarshal(body2, &ollamaResp); err != nil {
+				return nil, ErrInvalidResponse
+			}
+			return p.convertResponse(&ollamaResp), nil
+		}
+
+		// Auto-retry once for model-not-found (Ollama may be reloading the model)
+		if resp.StatusCode == http.StatusNotFound {
+			logger.Info().Str("model", ollamaReq.Model).Msg("Ollama model not found, retrying after 3s delay")
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(3 * time.Second):
+			}
+			resp2, err2 := p.doRequest(ctx, "/api/chat", ollamaReq)
+			if err2 != nil {
+				return nil, apiErr // return original error for clarity
+			}
+			defer resp2.Body.Close()
+			body2, err2 := io.ReadAll(resp2.Body)
+			if err2 != nil {
+				return nil, apiErr
+			}
+			if resp2.StatusCode != http.StatusOK {
+				return nil, p.handleErrorResponse(resp2.StatusCode, body2)
+			}
+			var ollamaResp ollamaResponse
+			if err := json.Unmarshal(body2, &ollamaResp); err != nil {
+				return nil, ErrInvalidResponse
+			}
+			return p.convertResponse(&ollamaResp), nil
+		}
+
+		return nil, apiErr
 	}
 
 	// Parse response
@@ -142,8 +213,10 @@ func (p *OllamaProvider) Stream(ctx context.Context, req provider.ChatRequest) (
 	// Build Ollama request with streaming enabled
 	ollamaReq := p.buildRequest(req, true)
 
-	// Send request
-	resp, err := p.doRequest(ctx, "/api/chat", ollamaReq)
+	// Use streamClient (no overall timeout) for streaming requests.
+	// http.Client.Timeout includes response body read time and would kill
+	// long-running NDJSON streams.
+	resp, err := p.doStreamRequest(ctx, "/api/chat", ollamaReq)
 	if err != nil {
 		return nil, err
 	}
@@ -152,7 +225,48 @@ func (p *OllamaProvider) Stream(ctx context.Context, req provider.ChatRequest) (
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return nil, p.handleErrorResponse(resp.StatusCode, body)
+		apiErr := p.handleErrorResponse(resp.StatusCode, body)
+
+		// Auto-retry without tools if model doesn't support them
+		var provErr *provider.ProviderError
+		if errors.As(apiErr, &provErr) && provErr.Code == provider.ErrCodeToolsNotSupported {
+			logger.Info().Str("model", ollamaReq.Model).Msg("Model does not support tools, retrying stream without tools")
+			noToolsReq := req
+			noToolsReq.Tools = nil
+			ollamaReq = p.buildRequest(noToolsReq, true)
+			resp2, err2 := p.doStreamRequest(ctx, "/api/chat", ollamaReq)
+			if err2 != nil {
+				return nil, err2
+			}
+			if resp2.StatusCode != http.StatusOK {
+				body2, _ := io.ReadAll(resp2.Body)
+				resp2.Body.Close()
+				return nil, p.handleErrorResponse(resp2.StatusCode, body2)
+			}
+			return ProcessStream(resp2.Body), nil
+		}
+
+		// Auto-retry once for model-not-found (Ollama may be reloading the model)
+		if resp.StatusCode == http.StatusNotFound {
+			logger.Info().Str("model", ollamaReq.Model).Msg("Ollama Stream model not found, retrying after 3s delay")
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(3 * time.Second):
+			}
+			resp2, err2 := p.doStreamRequest(ctx, "/api/chat", ollamaReq)
+			if err2 != nil {
+				return nil, apiErr
+			}
+			if resp2.StatusCode != http.StatusOK {
+				body2, _ := io.ReadAll(resp2.Body)
+				resp2.Body.Close()
+				return nil, p.handleErrorResponse(resp2.StatusCode, body2)
+			}
+			return ProcessStream(resp2.Body), nil
+		}
+
+		return nil, apiErr
 	}
 
 	// Process stream
@@ -327,16 +441,67 @@ func (p *OllamaProvider) doRequest(ctx context.Context, path string, body interf
 	return resp, nil
 }
 
+// doStreamRequest sends an HTTP request using the stream client (no overall timeout).
+// This is necessary because http.Client.Timeout includes response body read time,
+// which would kill long-running NDJSON streams from Ollama.
+func (p *OllamaProvider) doStreamRequest(ctx context.Context, path string, body interface{}) (*http.Response, error) {
+	url := p.endpoint + path
+
+	var reqBody io.Reader
+	if body != nil {
+		data, err := json.Marshal(body)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal request: %w", err)
+		}
+		reqBody = bytes.NewReader(data)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := p.streamClient.Do(req)
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, ErrRequestTimeout
+		}
+		return nil, fmt.Errorf("%w: %v", ErrConnectionFailed, err)
+	}
+
+	return resp, nil
+}
+
 // handleErrorResponse converts an error response to an appropriate error.
 func (p *OllamaProvider) handleErrorResponse(statusCode int, body []byte) error {
 	var errResp ollamaErrorResponse
 	if err := json.Unmarshal(body, &errResp); err == nil && errResp.Error != "" {
 		// Check for specific error messages
 		if statusCode == http.StatusNotFound {
-			return fmt.Errorf("%w: %s", ErrModelNotFound, errResp.Error)
+			return &provider.ProviderError{
+				Code:      provider.ErrCodeModelNotFound,
+				Message:   fmt.Sprintf("Ollama 模型未找到: %s。请确认模型已通过 `ollama pull` 下载，且 Ollama 服务正在运行", errResp.Error),
+				Provider:  "ollama",
+				Retryable: true,
+			}
 		}
-		// Check for context window exceeded
 		lowerErr := strings.ToLower(errResp.Error)
+
+		// Check for tools not supported
+		if strings.Contains(lowerErr, "does not support tools") ||
+			strings.Contains(lowerErr, "tool use is not supported") ||
+			strings.Contains(lowerErr, "tools are not supported") {
+			return &provider.ProviderError{
+				Code:      provider.ErrCodeToolsNotSupported,
+				Message:   fmt.Sprintf("Ollama 模型不支持工具调用: %s", errResp.Error),
+				Provider:  "ollama",
+				Retryable: true, // retryable without tools
+			}
+		}
+
+		// Check for context window exceeded
 		if strings.Contains(lowerErr, "context length") ||
 			strings.Contains(lowerErr, "too many tokens") ||
 			strings.Contains(lowerErr, "maximum context") {
@@ -347,16 +512,36 @@ func (p *OllamaProvider) handleErrorResponse(statusCode int, body []byte) error 
 				Retryable: true,
 			}
 		}
-		return fmt.Errorf("ollama error: %s", errResp.Error)
+		return &provider.ProviderError{
+			Code:      provider.ErrCodeUnknown,
+			Message:   fmt.Sprintf("Ollama 错误: %s", errResp.Error),
+			Provider:  "ollama",
+			Retryable: false,
+		}
 	}
 
 	switch statusCode {
 	case http.StatusNotFound:
-		return ErrModelNotFound
+		return &provider.ProviderError{
+			Code:      provider.ErrCodeModelNotFound,
+			Message:   "Ollama 模型未找到，请确认模型已下载且服务正在运行",
+			Provider:  "ollama",
+			Retryable: true,
+		}
 	case http.StatusServiceUnavailable:
-		return ErrConnectionFailed
+		return &provider.ProviderError{
+			Code:      provider.ErrCodeServiceUnavailable,
+			Message:   "Ollama 服务不可用",
+			Provider:  "ollama",
+			Retryable: true,
+		}
 	default:
-		return fmt.Errorf("ollama returned status %d: %s", statusCode, string(body))
+		return &provider.ProviderError{
+			Code:      provider.ErrCodeUnknown,
+			Message:   fmt.Sprintf("Ollama 返回状态码 %d: %s", statusCode, string(body)),
+			Provider:  "ollama",
+			Retryable: false,
+		}
 	}
 }
 

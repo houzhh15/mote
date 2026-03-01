@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"fmt"
 
 	"mote/internal/config"
 	"mote/pkg/logger"
@@ -85,6 +86,14 @@ for building and running AI agents.`,
 			log := logger.Get()
 			cliCtx := NewCLIContext(cfg, configPath, log, storagePath, globalFlags.Verbose, globalFlags.Quiet)
 			cmd.SetContext(context.WithValue(cmd.Context(), contextKey{}, cliCtx))
+
+			// Ensure default prompts exist (copy missing ones from embedded defaults)
+			configDir, err := config.DefaultConfigDir()
+			if err == nil {
+				if copyErr := copyDefaultPrompts(configDir, false); copyErr != nil {
+					fmt.Fprintf(cmd.ErrOrStderr(), "Warning: failed to ensure default prompts: %v\n", copyErr)
+				}
+			}
 
 			return nil
 		},

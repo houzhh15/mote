@@ -23,6 +23,12 @@ type CancellableRunner interface {
 	CancelSession(sessionID string)
 }
 
+// AgentRunner is an optional interface that runners can implement
+// to support direct delegation to a specific sub-agent (bypassing the main LLM).
+type AgentRunner interface {
+	RunAgent(ctx context.Context, sessionID, agentName, prompt string) (string, error)
+}
+
 // ToolRegistry provides access to registered tools.
 type ToolRegistry interface {
 	Execute(ctx context.Context, name string, args map[string]interface{}) (interface{}, error)
@@ -226,6 +232,16 @@ func (e *Executor) executePrompt(ctx context.Context, job *Job) (string, error) 
 
 	if payload.Prompt == "" {
 		return "", NonRetryable(fmt.Errorf("prompt is required"))
+	}
+
+	// If AgentID is specified, route directly to that sub-agent
+	if payload.AgentID != "" {
+		agentRunner, ok := e.runner.(AgentRunner)
+		if !ok {
+			return "", NonRetryable(fmt.Errorf("runner does not support direct agent execution"))
+		}
+		sessionID := deriveCronSessionID(job.Name)
+		return agentRunner.RunAgent(ctx, sessionID, payload.AgentID, payload.Prompt)
 	}
 
 	// Pass derived session ID and per-job model to runner for workspace-aware execution

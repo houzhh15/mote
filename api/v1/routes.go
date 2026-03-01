@@ -214,9 +214,11 @@ func (r *Router) RegisterRoutes(router *mux.Router) {
 	v1.HandleFunc("/sessions/{id}", r.HandleUpdateSession).Methods(http.MethodPut)
 	v1.HandleFunc("/sessions/{id}", r.HandleDeleteSession).Methods(http.MethodDelete)
 	v1.HandleFunc("/sessions/{id}/messages", r.HandleGetMessages).Methods(http.MethodGet)
+	v1.HandleFunc("/sessions/{id}/context", r.HandleGetSessionContext).Methods(http.MethodGet)
 	v1.HandleFunc("/sessions/{id}/model", r.HandleUpdateSessionModel).Methods(http.MethodPut)
 	v1.HandleFunc("/sessions/{id}/skills", r.HandleUpdateSessionSkills).Methods(http.MethodPut)
 	v1.HandleFunc("/sessions/{id}/reconfigure", r.HandleReconfigureSession).Methods(http.MethodPost)
+	v1.HandleFunc("/sessions/{id}/pda", r.HandlePDAControl).Methods(http.MethodPost)
 
 	// Tools
 	v1.HandleFunc("/tools", r.HandleListTools).Methods(http.MethodGet)
@@ -304,6 +306,7 @@ func (r *Router) RegisterRoutes(router *mux.Router) {
 	// Workspace
 	v1.HandleFunc("/workspaces", r.HandleListWorkspaces).Methods(http.MethodGet)
 	v1.HandleFunc("/workspaces", r.HandleBindWorkspace).Methods(http.MethodPost)
+	v1.HandleFunc("/workspaces/open", r.HandleOpenWorkspaceDir).Methods(http.MethodPost)
 	v1.HandleFunc("/workspaces/{sessionId}", r.HandleGetWorkspace).Methods(http.MethodGet)
 	v1.HandleFunc("/workspaces/{sessionId}", r.HandleUnbindWorkspace).Methods(http.MethodDelete)
 	v1.HandleFunc("/workspaces/{sessionId}/files", r.HandleListWorkspaceFiles).Methods(http.MethodGet)
@@ -316,6 +319,7 @@ func (r *Router) RegisterRoutes(router *mux.Router) {
 	v1.HandleFunc("/skills/reload", r.HandleReloadSkills).Methods(http.MethodPost)
 	v1.HandleFunc("/skills/check-updates", r.HandleCheckSkillUpdates).Methods(http.MethodPost)
 	v1.HandleFunc("/skills/{id}", r.HandleGetSkill).Methods(http.MethodGet)
+	v1.HandleFunc("/skills/{id}", r.HandleDeleteSkill).Methods(http.MethodDelete)
 	v1.HandleFunc("/skills/{id}/activate", r.HandleActivateSkill).Methods(http.MethodPost)
 	v1.HandleFunc("/skills/{id}/deactivate", r.HandleDeactivateSkill).Methods(http.MethodPost)
 	v1.HandleFunc("/skills/{id}/config", r.HandleGetSkillConfig).Methods(http.MethodGet)
@@ -342,6 +346,11 @@ func (r *Router) RegisterRoutes(router *mux.Router) {
 	// Agents (multi-agent CRUD)
 	v1.HandleFunc("/agents", r.HandleListAgents).Methods(http.MethodGet)
 	v1.HandleFunc("/agents", r.HandleAddAgent).Methods(http.MethodPost)
+	v1.HandleFunc("/agents/reload", r.HandleReloadAgents).Methods(http.MethodPost)
+	v1.HandleFunc("/agents/validate-dir", r.HandleValidateAgentsDir).Methods(http.MethodGet)
+	v1.HandleFunc("/agents/{name}/validate-cfg", r.HandleValidateAgentCFG).Methods(http.MethodPost)
+	v1.HandleFunc("/agents/{name}/draft", r.HandleSaveAgentDraft).Methods(http.MethodPost)
+	v1.HandleFunc("/agents/{name}/draft", r.HandleDiscardAgentDraft).Methods(http.MethodDelete)
 	v1.HandleFunc("/agents/{name}", r.HandleGetAgent).Methods(http.MethodGet)
 	v1.HandleFunc("/agents/{name}", r.HandleUpdateAgent).Methods(http.MethodPut)
 	v1.HandleFunc("/agents/{name}", r.HandleDeleteAgent).Methods(http.MethodDelete)
@@ -495,7 +504,9 @@ func (r *Router) HandleListSessions(w http.ResponseWriter, req *http.Request) {
 		            WHERE session_id = s.id AND role = 'user' 
 		            ORDER BY created_at ASC LIMIT 1),
 		           ''
-		       ) as preview
+		       ) as preview,
+		       CASE WHEN s.metadata LIKE '%"pda_checkpoint"%' THEN 1 ELSE 0 END as has_pda,
+		       CASE WHEN s.metadata LIKE '%"pda_session"%' OR s.metadata LIKE '%"pda_checkpoint"%' THEN 1 ELSE 0 END as is_pda
 		FROM sessions s
 		ORDER BY s.updated_at DESC
 		LIMIT 100
@@ -511,12 +522,15 @@ func (r *Router) HandleListSessions(w http.ResponseWriter, req *http.Request) {
 		var s SessionSummary
 		var preview string
 		var selectedSkillsStr string
-		if err := rows.Scan(&s.ID, &s.CreatedAt, &s.UpdatedAt, &s.Title, &s.Model, &s.Scenario, &selectedSkillsStr, &s.MessageCount, &preview); err != nil {
+		var hasPDA, isPDA int
+		if err := rows.Scan(&s.ID, &s.CreatedAt, &s.UpdatedAt, &s.Title, &s.Model, &s.Scenario, &selectedSkillsStr, &s.MessageCount, &preview, &hasPDA, &isPDA); err != nil {
 			continue
 		}
 		if preview != "" {
 			s.Preview = preview
 		}
+		s.HasPDACheckpoint = hasPDA == 1
+		s.IsPDA = isPDA == 1
 		s.SelectedSkills = parseSkillsJSON(selectedSkillsStr)
 		s.Source = deriveSessionSource(s.ID)
 		sessions = append(sessions, s)
@@ -576,12 +590,15 @@ func (r *Router) HandleGetSession(w http.ResponseWriter, req *http.Request) {
 
 	var s SessionSummary
 	var title, model, scenario, selectedSkills sql.NullString
+	var hasPDA, isPDA int
 	err := r.db.QueryRow(`
 		SELECT id, created_at, updated_at, title, model, scenario, selected_skills,
-		       (SELECT COUNT(*) FROM messages WHERE session_id = sessions.id) as message_count
+		       (SELECT COUNT(*) FROM messages WHERE session_id = sessions.id) as message_count,
+		       CASE WHEN metadata LIKE '%"pda_checkpoint"%' THEN 1 ELSE 0 END as has_pda,
+		       CASE WHEN metadata LIKE '%"pda_session"%' OR metadata LIKE '%"pda_checkpoint"%' THEN 1 ELSE 0 END as is_pda
 		FROM sessions 
 		WHERE id = ?
-	`, id).Scan(&s.ID, &s.CreatedAt, &s.UpdatedAt, &title, &model, &scenario, &selectedSkills, &s.MessageCount)
+	`, id).Scan(&s.ID, &s.CreatedAt, &s.UpdatedAt, &title, &model, &scenario, &selectedSkills, &s.MessageCount, &hasPDA, &isPDA)
 
 	if err != nil {
 		handlers.SendError(w, http.StatusNotFound, handlers.ErrCodeNotFound, "Session not found")
@@ -600,6 +617,8 @@ func (r *Router) HandleGetSession(w http.ResponseWriter, req *http.Request) {
 	if selectedSkills.Valid {
 		s.SelectedSkills = parseSkillsJSON(selectedSkills.String)
 	}
+	s.HasPDACheckpoint = hasPDA == 1
+	s.IsPDA = isPDA == 1
 
 	handlers.SendJSON(w, http.StatusOK, s)
 }
@@ -785,23 +804,18 @@ func (r *Router) HandleGetMessages(w http.ResponseWriter, req *http.Request) {
 
 	// --- Context-usage estimation: simulate what the model actually sees ---
 	//
-	// The DB stores ALL historical messages (compaction operates in-memory
-	// only during Run() and never saves results back).  Counting all DB
-	// messages produces a token total far exceeding the context window,
-	// which is misleading.  Instead, we simulate the runtime's
-	// BudgetMessages pass: convert raw messages to provider.Message,
-	// create a temporary Compactor with the session model's adapted config,
-	// and apply BudgetMessages to get the approximate message set the
-	// model would receive.  Token estimation is then computed only on
-	// the budgeted subset.
+	// The runtime's BuildContext assembles:
+	//   - When compressed context exists: summary + kept messages + new messages
+	//   - Otherwise: all DB messages
+	// Then BudgetMessages truncates/drops to fit the context window.
+	// We replicate this flow to produce an accurate token estimate.
 
-	// 1. Convert raw DB messages → []provider.Message
-	var providerMessages []provider.Message
-	for _, rm := range rawMessages {
-		pm := provider.Message{
-			Role:    rm.Role,
-			Content: rm.Content,
-		}
+	// 1. Check for compressed context
+	compressedCtx, _ := r.db.GetLatestContext(sessionID)
+
+	// 2. Build effective message set (same logic as BuildContext)
+	toProvMsg := func(rm rawMessage) provider.Message {
+		pm := provider.Message{Role: rm.Role, Content: rm.Content}
 		if rm.ToolCallID != nil && *rm.ToolCallID != "" {
 			pm.ToolCallID = *rm.ToolCallID
 		}
@@ -824,10 +838,53 @@ func (r *Router) HandleGetMessages(w http.ResponseWriter, req *http.Request) {
 				}
 			}
 		}
-		providerMessages = append(providerMessages, pm)
+		return pm
 	}
 
-	// 2. Get session model and context window
+	var effectivePMs []provider.Message
+	if compressedCtx != nil {
+		// Compressed path: summary + kept messages + new messages
+		// (mirrors context.Manager.BuildContext)
+		if compressedCtx.Summary != "" {
+			effectivePMs = append(effectivePMs, provider.Message{
+				Role:    "assistant",
+				Content: "[Previous conversation summary]\n" + compressedCtx.Summary,
+			})
+		}
+		// Kept messages by ID, skip leading orphan tool results
+		msgByID := make(map[string]rawMessage)
+		for _, rm := range rawMessages {
+			msgByID[rm.ID] = rm
+		}
+		skippingLeadingTools := true
+		for _, kid := range compressedCtx.KeptMessageIDs {
+			if rm, ok := msgByID[kid]; ok {
+				if skippingLeadingTools && rm.Role == string(provider.RoleTool) {
+					continue
+				}
+				skippingLeadingTools = false
+				effectivePMs = append(effectivePMs, toProvMsg(rm))
+			}
+		}
+		// New messages after compression point
+		skippingLeadingTools = true
+		for _, rm := range rawMessages {
+			if rm.CreatedAt.After(compressedCtx.CreatedAt) {
+				if skippingLeadingTools && rm.Role == string(provider.RoleTool) {
+					continue
+				}
+				skippingLeadingTools = false
+				effectivePMs = append(effectivePMs, toProvMsg(rm))
+			}
+		}
+	} else {
+		// No compression: all messages
+		for _, rm := range rawMessages {
+			effectivePMs = append(effectivePMs, toProvMsg(rm))
+		}
+	}
+
+	// 3. Get session model and context window
 	contextWindow := 0
 	if session, err := r.db.GetSession(sessionID); err == nil && session.Model != "" {
 		if r.multiPool != nil {
@@ -839,16 +896,16 @@ func (r *Router) HandleGetMessages(w http.ResponseWriter, req *http.Request) {
 		}
 	}
 
-	// 3. Create a temporary compactor with adapted config and apply BudgetMessages
-	budgeted := providerMessages
+	// 4. Apply BudgetMessages on the effective set
+	budgeted := effectivePMs
 	if contextWindow > 0 {
 		cfg := compaction.DefaultConfig()
 		cfg.AdaptForModel(contextWindow)
 		tmpCompactor := compaction.NewCompactor(cfg, nil)
-		budgeted = tmpCompactor.BudgetMessages(providerMessages, 0)
+		budgeted = tmpCompactor.BudgetMessages(effectivePMs, 0)
 	}
 
-	// 4. Count tokens only on the budgeted messages
+	// 5. Count tokens only on the budgeted messages
 	tokenCounter := compaction.NewTokenCounter()
 	estimatedTokens := tokenCounter.EstimateMessages(budgeted)
 
@@ -856,6 +913,422 @@ func (r *Router) HandleGetMessages(w http.ResponseWriter, req *http.Request) {
 		Messages:        messages,
 		EstimatedTokens: estimatedTokens,
 	})
+}
+
+// HandleGetSessionContext returns a detailed context-window analysis for a session.
+// It shows ALL DB messages as segments, each classified and marked with:
+//   - type: compressed_summary, kept_message, history_message, compressed_history
+//   - in_context: true if part of effective context (what BuildContext assembles)
+//   - budgeted: true if surviving BudgetMessages (what LLM actually receives)
+//
+// Three tiers of statistics:
+//
+//	Total     = all DB messages (full history including compressed-away ones)
+//	Effective = summary + kept + new-after-compression (BuildContext output)
+//	Budgeted  = after BudgetMessages truncation
+//
+// GET /sessions/{id}/context
+func (r *Router) HandleGetSessionContext(w http.ResponseWriter, req *http.Request) {
+	if r.db == nil {
+		handlers.SendError(w, http.StatusServiceUnavailable, handlers.ErrCodeServiceUnavailable, "Database not available")
+		return
+	}
+
+	vars := mux.Vars(req)
+	sessionID := vars["id"]
+
+	// 1. Load session metadata
+	session, err := r.db.GetSession(sessionID)
+	if err != nil {
+		handlers.SendError(w, http.StatusNotFound, handlers.ErrCodeNotFound, "Session not found")
+		return
+	}
+
+	// 2. Determine context window from model
+	contextWindow := 0
+	if session.Model != "" && r.multiPool != nil {
+		if prov, _, err := r.multiPool.GetProvider(session.Model); err == nil {
+			if cwp, ok := prov.(provider.ContextWindowProvider); ok {
+				contextWindow = cwp.ContextWindow(session.Model)
+			}
+		}
+	}
+
+	// 3. Load compressed context info
+	compInfo := CompressionInfo{}
+	compressedCtx, _ := r.db.GetLatestContext(sessionID)
+	if compressedCtx != nil {
+		compInfo = CompressionInfo{
+			HasCompression: true,
+			Version:        compressedCtx.Version,
+			Summary:        compressedCtx.Summary,
+			KeptMessages:   len(compressedCtx.KeptMessageIDs),
+			TotalTokens:    compressedCtx.TotalTokens,
+			OriginalTokens: compressedCtx.OriginalTokens,
+		}
+	}
+
+	// 4. Load all raw messages from DB
+	rows, err := r.db.Query(`
+		SELECT id, role, content, tool_calls, tool_call_id, created_at
+		FROM messages
+		WHERE session_id = ?
+		ORDER BY created_at ASC
+	`, sessionID)
+	if err != nil {
+		handlers.SendError(w, http.StatusInternalServerError, handlers.ErrCodeInternalError, "Failed to query messages")
+		return
+	}
+	defer rows.Close()
+
+	type rawMsg struct {
+		ID            string
+		Role          string
+		Content       string
+		ToolCallsJSON *string
+		ToolCallID    *string
+		CreatedAt     time.Time
+	}
+	var allRawMessages []rawMsg
+	for rows.Next() {
+		var rm rawMsg
+		if err := rows.Scan(&rm.ID, &rm.Role, &rm.Content, &rm.ToolCallsJSON, &rm.ToolCallID, &rm.CreatedAt); err != nil {
+			continue
+		}
+		allRawMessages = append(allRawMessages, rm)
+	}
+	totalDBMessages := len(allRawMessages)
+
+	// Helper: convert rawMsg → provider.Message
+	toProviderMsg := func(rm rawMsg) provider.Message {
+		pm := provider.Message{Role: rm.Role, Content: rm.Content}
+		if rm.ToolCallID != nil && *rm.ToolCallID != "" {
+			pm.ToolCallID = *rm.ToolCallID
+		}
+		if rm.ToolCallsJSON != nil && *rm.ToolCallsJSON != "" {
+			var storageTCs []storage.ToolCall
+			if err := json.Unmarshal([]byte(*rm.ToolCallsJSON), &storageTCs); err == nil {
+				for _, stc := range storageTCs {
+					pm.ToolCalls = append(pm.ToolCalls, provider.ToolCall{
+						ID:        stc.ID,
+						Type:      stc.Type,
+						Arguments: stc.GetArguments(),
+						Function: &struct {
+							Name      string `json:"name"`
+							Arguments string `json:"arguments"`
+						}{
+							Name:      stc.GetName(),
+							Arguments: stc.GetArguments(),
+						},
+					})
+				}
+			}
+		}
+		return pm
+	}
+
+	tc := compaction.NewTokenCounter()
+	previewLen := 120
+	truncate := func(s string, maxLen int) string {
+		if len(s) <= maxLen {
+			return s
+		}
+		return s[:maxLen] + "..."
+	}
+
+	// Helper: compute char count and token count for a rawMsg + provider.Message
+	computeStats := func(rm rawMsg, pm provider.Message) (int, int) {
+		charCount := len(rm.Content)
+		tokens := tc.EstimateText(rm.Content) + 4 // +4 for role overhead
+		for _, toolCall := range pm.ToolCalls {
+			tokens += tc.EstimateText(toolCall.Arguments)
+			if toolCall.Function != nil {
+				tokens += tc.EstimateText(toolCall.Function.Name)
+				tokens += tc.EstimateText(toolCall.Function.Arguments)
+			}
+			charCount += len(toolCall.Arguments)
+			if toolCall.Function != nil {
+				charCount += len(toolCall.Function.Name) + len(toolCall.Function.Arguments)
+			}
+		}
+		return charCount, tokens
+	}
+
+	// 5. Classify every message and build effective set.
+	//
+	// Effective set mirrors context.Manager.BuildContext:
+	//   - When compressed context exists: kept messages (skip leading orphan tools)
+	//     + new messages after compression (skip leading orphan tools)
+	//   - Otherwise: all messages
+
+	keptSet := make(map[string]bool)
+	if compressedCtx != nil {
+		for _, kid := range compressedCtx.KeptMessageIDs {
+			keptSet[kid] = true
+		}
+	}
+
+	// Determine which allRawMessages indices are in the effective set.
+	// This exactly mirrors BuildContext's assembly order.
+	effectiveSet := make(map[int]bool)
+	var effectivePMs []provider.Message
+	var effectiveOrigIndices []int // map from effectivePMs index → allRawMessages index
+
+	if compressedCtx != nil {
+		// a) Kept messages in KeptMessageIDs order, skip leading orphan tool results
+		msgIdxByID := make(map[string]int)
+		for i, rm := range allRawMessages {
+			msgIdxByID[rm.ID] = i
+		}
+		skippingLeadingTools := true
+		for _, kid := range compressedCtx.KeptMessageIDs {
+			if idx, ok := msgIdxByID[kid]; ok {
+				rm := allRawMessages[idx]
+				if skippingLeadingTools && rm.Role == string(provider.RoleTool) {
+					continue
+				}
+				skippingLeadingTools = false
+				pm := toProviderMsg(rm)
+				effectiveSet[idx] = true
+				effectivePMs = append(effectivePMs, pm)
+				effectiveOrigIndices = append(effectiveOrigIndices, idx)
+			}
+		}
+
+		// b) New messages after compression point, skip leading orphan tool results
+		skippingLeadingTools = true
+		for i, rm := range allRawMessages {
+			if rm.CreatedAt.After(compressedCtx.CreatedAt) {
+				if skippingLeadingTools && rm.Role == string(provider.RoleTool) {
+					continue
+				}
+				skippingLeadingTools = false
+				pm := toProviderMsg(rm)
+				effectiveSet[i] = true
+				effectivePMs = append(effectivePMs, pm)
+				effectiveOrigIndices = append(effectiveOrigIndices, i)
+			}
+		}
+	} else {
+		// No compression — all messages are effective
+		for i, rm := range allRawMessages {
+			pm := toProviderMsg(rm)
+			effectiveSet[i] = true
+			effectivePMs = append(effectivePMs, pm)
+			effectiveOrigIndices = append(effectiveOrigIndices, i)
+		}
+	}
+
+	// 6. Apply BudgetMessages on the effective set only
+	budgeted := effectivePMs
+	if contextWindow > 0 {
+		cfg := compaction.DefaultConfig()
+		cfg.AdaptForModel(contextWindow)
+		tmpCompactor := compaction.NewCompactor(cfg, nil)
+		budgeted = tmpCompactor.BudgetMessages(effectivePMs, 0)
+	}
+
+	// Mark which original DB indices survived BudgetMessages.
+	//
+	// BudgetMessages may:
+	//   - truncate Content (phases 1-2-4)
+	//   - drop messages entirely (phase 3)
+	//   - INSERT a synthetic notice message ("[Earlier context dropped...]")
+	//   - reorder system messages to the front (dropOldestToBudget)
+	//
+	// Because of inserted notices & content truncation, simple two-pointer
+	// matching on Content fails. Instead we use a fingerprint approach:
+	// build fingerprints for all effective messages, then for each budgeted
+	// message (that isn't a synthetic notice), find the best match.
+	budgetedOrigSet := make(map[int]bool)
+	{
+		// Build fingerprint index: effectivePM index → (role, toolCallID, contentPrefix)
+		type fp struct {
+			role       string
+			toolCallID string
+			prefix     string
+		}
+		mkfp := func(pm provider.Message) fp {
+			prefix := pm.Content
+			if len(prefix) > 80 {
+				prefix = prefix[:80]
+			}
+			return fp{role: pm.Role, toolCallID: pm.ToolCallID, prefix: prefix}
+		}
+
+		// Build reverse map: fingerprint → list of effective indices
+		fpMap := make(map[fp][]int)
+		for ei, pm := range effectivePMs {
+			f := mkfp(pm)
+			fpMap[f] = append(fpMap[f], ei)
+		}
+		fpUsed := make(map[fp]int) // tracks how many times each fp has been consumed
+
+		for _, bpm := range budgeted {
+			// Skip synthetic notice messages injected by BudgetMessages Phase 3
+			if strings.Contains(bpm.Content, "[Earlier context dropped") {
+				continue
+			}
+
+			f := mkfp(bpm)
+			candidates := fpMap[f]
+			usedCount := fpUsed[f]
+			if usedCount < len(candidates) {
+				ei := candidates[usedCount]
+				budgetedOrigSet[effectiveOrigIndices[ei]] = true
+				fpUsed[f] = usedCount + 1
+			} else {
+				// Fingerprint didn't match (content was truncated).
+				// Fall back: match by role + toolCallID + content prefix
+				// allowing for the truncation suffix.
+				bPrefix := bpm.Content
+				if len(bPrefix) > 50 {
+					bPrefix = bPrefix[:50]
+				}
+				for ei, pm := range effectivePMs {
+					origIdx := effectiveOrigIndices[ei]
+					if budgetedOrigSet[origIdx] {
+						continue // already matched
+					}
+					if pm.Role != bpm.Role || pm.ToolCallID != bpm.ToolCallID {
+						continue
+					}
+					ePrefix := pm.Content
+					if len(ePrefix) > 50 {
+						ePrefix = ePrefix[:50]
+					}
+					if ePrefix == bPrefix {
+						budgetedOrigSet[origIdx] = true
+						break
+					}
+				}
+			}
+		}
+	}
+
+	// 7. Build segments — ALL messages, each fully classified
+	var segments []ContextSegment
+	var totalChars, totalTokens int
+	var effectiveChars, effectiveTokens int
+
+	// a) Compressed summary as a virtual segment (always first, always in_context & budgeted)
+	if compressedCtx != nil && compressedCtx.Summary != "" {
+		summaryChars := len(compressedCtx.Summary)
+		summaryTokens := tc.EstimateText(compressedCtx.Summary) + 4
+		segments = append(segments, ContextSegment{
+			Type:            "compressed_summary",
+			Role:            "assistant",
+			Index:           -1,
+			CharCount:       summaryChars,
+			EstimatedTokens: summaryTokens,
+			ContentPreview:  truncate(compressedCtx.Summary, previewLen),
+			InContext:       true,
+			Budgeted:        true,
+		})
+		totalChars += summaryChars
+		totalTokens += summaryTokens
+		effectiveChars += summaryChars
+		effectiveTokens += summaryTokens
+	}
+
+	// b) All DB messages
+	for i, rm := range allRawMessages {
+		pm := toProviderMsg(rm)
+		charCount, tokens := computeStats(rm, pm)
+
+		// Classify segment type
+		segType := "history_message"
+		if compressedCtx != nil {
+			if keptSet[rm.ID] {
+				segType = "kept_message"
+			} else if rm.CreatedAt.After(compressedCtx.CreatedAt) {
+				segType = "history_message"
+			} else {
+				segType = "compressed_history"
+			}
+		}
+
+		inContext := effectiveSet[i]
+		isBudgeted := budgetedOrigSet[i]
+
+		segments = append(segments, ContextSegment{
+			Type:            segType,
+			Role:            rm.Role,
+			Index:           i,
+			CharCount:       charCount,
+			EstimatedTokens: tokens,
+			ContentPreview:  truncate(rm.Content, previewLen),
+			HasToolCalls:    len(pm.ToolCalls) > 0,
+			ToolCallCount:   len(pm.ToolCalls),
+			InContext:       inContext,
+			Budgeted:        isBudgeted,
+		})
+
+		totalChars += charCount
+		totalTokens += tokens
+		if inContext {
+			effectiveChars += charCount
+			effectiveTokens += tokens
+		}
+	}
+
+	// 8. Compute budgeted totals directly from the budgeted slice.
+	// Do NOT derive BudgetedCount from segment matching — compute it
+	// directly from len(budgeted) which is 100% accurate.
+	budgetedTokens := tc.EstimateMessages(budgeted)
+	budgetedChars := 0
+	for _, pm := range budgeted {
+		budgetedChars += len(pm.Content)
+		for _, toolCall := range pm.ToolCalls {
+			budgetedChars += len(toolCall.Arguments)
+			if toolCall.Function != nil {
+				budgetedChars += len(toolCall.Function.Name) + len(toolCall.Function.Arguments)
+			}
+		}
+	}
+	// BudgetMessages Phase 3 may inject a notice message — don't count it
+	budgetedCount := 0
+	for _, pm := range budgeted {
+		if !strings.Contains(pm.Content, "[Earlier context dropped") {
+			budgetedCount++
+		}
+	}
+	// Summary is always sent to LLM — include in budgeted totals
+	if compressedCtx != nil && compressedCtx.Summary != "" {
+		budgetedTokens += tc.EstimateText(compressedCtx.Summary) + 4
+		budgetedChars += len(compressedCtx.Summary)
+		budgetedCount++
+	}
+
+	effectiveCount := 0
+	for _, s := range segments {
+		if s.InContext {
+			effectiveCount++
+		}
+	}
+
+	resp := SessionContextResponse{
+		SessionID:       sessionID,
+		Model:           session.Model,
+		ContextWindow:   contextWindow,
+		Segments:        segments,
+		Compression:     compInfo,
+		TotalMessages:   totalDBMessages,
+		TotalChars:      totalChars,
+		TotalTokens:     totalTokens,
+		EffectiveCount:  effectiveCount,
+		EffectiveChars:  effectiveChars,
+		EffectiveTokens: effectiveTokens,
+		BudgetedCount:   budgetedCount,
+		BudgetedChars:   budgetedChars,
+		BudgetedTokens:  budgetedTokens,
+	}
+
+	if resp.Segments == nil {
+		resp.Segments = []ContextSegment{}
+	}
+
+	handlers.SendJSON(w, http.StatusOK, resp)
 }
 
 // HandleUpdateSessionModel updates the model for a specific session.
@@ -924,6 +1397,17 @@ func (r *Router) HandleUpdateSessionModel(w http.ResponseWriter, req *http.Reque
 	if rowsAffected == 0 {
 		handlers.SendError(w, http.StatusNotFound, handlers.ErrCodeNotFound, "Session not found")
 		return
+	}
+
+	// Persist as the provider's default model in config.yaml
+	persistProviderDefaultModel(body.Model)
+	if err := viper.WriteConfig(); err != nil {
+		log.Warn().Err(err).Msg("Failed to write config file after model change")
+	}
+
+	// Propagate to runner + delegate factory so PDA sub-agents use the new model
+	if r.runner != nil {
+		r.runner.UpdateDefaultModel(body.Model)
 	}
 
 	handlers.SendJSON(w, http.StatusOK, UpdateSessionModelResponse{ID: id, Model: body.Model})
@@ -1073,6 +1557,17 @@ func (r *Router) HandleReconfigureSession(w http.ResponseWriter, req *http.Reque
 			return
 		}
 		log.Info().Str("sessionID", sessionID).Str("model", *body.Model).Msg("Session model updated in DB")
+
+		// Persist as the provider's default model in config.yaml
+		persistProviderDefaultModel(*body.Model)
+		if err := viper.WriteConfig(); err != nil {
+			log.Warn().Err(err).Msg("Failed to write config file after model change")
+		}
+
+		// Propagate to runner + delegate factory so PDA sub-agents use the new model
+		if r.runner != nil {
+			r.runner.UpdateDefaultModel(*body.Model)
+		}
 	}
 
 	if body.SelectedSkills != nil {
@@ -1250,6 +1745,12 @@ func (r *Router) HandleGetConfig(w http.ResponseWriter, req *http.Request) {
 			Model:     viper.GetString("glm.model"),
 			MaxTokens: viper.GetInt("glm.max_tokens"),
 		},
+		VLLM: VLLMConfigView{
+			APIKey:    maskAPIKey(viper.GetString("vllm.api_key")),
+			Endpoint:  viper.GetString("vllm.endpoint"),
+			Model:     viper.GetString("vllm.model"),
+			MaxTokens: viper.GetInt("vllm.max_tokens"),
+		},
 		Memory: MemoryConfigView{
 			Enabled: r.memory != nil,
 		},
@@ -1275,7 +1776,7 @@ func (r *Router) HandleUpdateConfig(w http.ResponseWriter, req *http.Request) {
 
 	// Update provider configuration
 	if body.Provider != nil {
-		validProviders := []string{"copilot", "copilot-acp", "ollama", "minimax", "glm"}
+		validProviders := []string{"copilot", "copilot-acp", "ollama", "minimax", "glm", "vllm"}
 
 		// Validate and update default provider
 		if body.Provider.Default != "" {
@@ -1287,7 +1788,7 @@ func (r *Router) HandleUpdateConfig(w http.ResponseWriter, req *http.Request) {
 				}
 			}
 			if !valid {
-				handlers.SendError(w, http.StatusBadRequest, handlers.ErrCodeInvalidRequest, "Invalid provider type. Supported: copilot, copilot-acp, ollama, minimax, glm")
+				handlers.SendError(w, http.StatusBadRequest, handlers.ErrCodeInvalidRequest, "Invalid provider type. Supported: copilot, copilot-acp, ollama, minimax, glm, vllm")
 				return
 			}
 			viper.Set("provider.default", body.Provider.Default)
@@ -1354,6 +1855,22 @@ func (r *Router) HandleUpdateConfig(w http.ResponseWriter, req *http.Request) {
 		}
 	}
 
+	// Update vLLM configuration
+	if body.VLLM != nil {
+		if body.VLLM.APIKey != "" {
+			viper.Set("vllm.api_key", body.VLLM.APIKey)
+		}
+		if body.VLLM.Endpoint != "" {
+			viper.Set("vllm.endpoint", body.VLLM.Endpoint)
+		}
+		if body.VLLM.Model != "" {
+			viper.Set("vllm.model", body.VLLM.Model)
+		}
+		if body.VLLM.MaxTokens > 0 {
+			viper.Set("vllm.max_tokens", body.VLLM.MaxTokens)
+		}
+	}
+
 	// Persist config changes to file
 	if err := viper.WriteConfig(); err != nil {
 		log.Warn().Err(err).Msg("Failed to persist config")
@@ -1396,6 +1913,12 @@ func (r *Router) HandleUpdateConfig(w http.ResponseWriter, req *http.Request) {
 			Endpoint:  viper.GetString("glm.endpoint"),
 			Model:     viper.GetString("glm.model"),
 			MaxTokens: viper.GetInt("glm.max_tokens"),
+		},
+		VLLM: VLLMConfigView{
+			APIKey:    maskAPIKey(viper.GetString("vllm.api_key")),
+			Endpoint:  viper.GetString("vllm.endpoint"),
+			Model:     viper.GetString("vllm.model"),
+			MaxTokens: viper.GetInt("vllm.max_tokens"),
 		},
 		Memory: MemoryConfigView{
 			Enabled: r.memory != nil,
@@ -1628,6 +2151,29 @@ func (r *Router) HandleListModels(w http.ResponseWriter, req *http.Request) {
 				})
 			}
 		}
+
+		// Add vLLM models if provider is available and not filtered out
+		if (providerFilter == "" || providerFilter == "vllm") && r.multiPool.HasProvider("vllm") {
+			for _, modelInfo := range r.multiPool.ListAllModels() {
+				if modelInfo.Provider != "vllm" {
+					continue
+				}
+				models = append(models, ModelView{
+					ID:             modelInfo.ID,
+					Provider:       "vllm",
+					DisplayName:    modelInfo.OriginalID,
+					Family:         "vllm",
+					IsFree:         true, // vLLM models are free (local/self-hosted)
+					Multiplier:     0,
+					ContextWindow:  4096, // Default; actual depends on model
+					MaxOutput:      4096,
+					SupportsVision: false, // TODO: Detect from model metadata
+					SupportsTools:  true,  // vLLM supports tool calling
+					Description:    "vLLM local model",
+					Available:      modelInfo.Available,
+				})
+			}
+		}
 	} else {
 		// Fallback: Only Copilot models (legacy behavior)
 		for id, info := range copilot.SupportedModels {
@@ -1671,7 +2217,9 @@ func (r *Router) HandleListModels(w http.ResponseWriter, req *http.Request) {
 		return models[i].ID < models[j].ID
 	})
 
-	// Get current model from config
+	// Get current model from config.
+	// copilot.model stores the full model ID (with provider prefix) of the
+	// last-used model, regardless of provider.
 	current := viper.GetString("copilot.model")
 	if current == "" {
 		current = copilot.DefaultModel
@@ -1759,8 +2307,13 @@ func (r *Router) HandleSetCurrentModel(w http.ResponseWriter, req *http.Request)
 		return
 	}
 
-	// Update viper config
-	viper.Set("copilot.model", request.Model)
+	// Update viper config — save to the correct provider's model field
+	persistProviderDefaultModel(request.Model)
+
+	// Propagate to runner + delegate factory so PDA sub-agents use the new model
+	if r.runner != nil {
+		r.runner.UpdateDefaultModel(request.Model)
+	}
 
 	// Persist to config file
 	if err := viper.WriteConfig(); err != nil {
@@ -2158,4 +2711,47 @@ func (r *Router) HandleDeleteAgent(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	handlers.SendJSON(w, http.StatusOK, map[string]any{"deleted": name})
+}
+
+// HandleReloadAgents reloads agents from agents.yaml and agents/ directory.
+// POST /api/v1/agents/reload
+func (r *Router) HandleReloadAgents(w http.ResponseWriter, req *http.Request) {
+	count, err := config.ReloadAgents()
+	if err != nil {
+		handlers.SendError(w, http.StatusInternalServerError, "RELOAD_FAILED", err.Error())
+		return
+	}
+	handlers.SendJSON(w, http.StatusOK, map[string]any{
+		"status": "ok",
+		"count":  count,
+	})
+}
+
+// HandleValidateAgentsDir validates all YAML files in the agents/ directory.
+// GET /api/v1/agents/validate-dir
+func (r *Router) HandleValidateAgentsDir(w http.ResponseWriter, req *http.Request) {
+	summary := config.ValidateAgentsDir()
+	handlers.SendJSON(w, http.StatusOK, summary)
+}
+
+// persistProviderDefaultModel saves the model as the default for its provider
+// in viper config. For example, "ollama:gpt-oss:20b" sets ollama.model to
+// "gpt-oss:20b". Also updates copilot.model with the full model ID for
+// backward compatibility.
+func persistProviderDefaultModel(modelID string) {
+	// Always update copilot.model as the "current global model" for backward compat
+	viper.Set("copilot.model", modelID)
+
+	// Parse provider prefix and save to provider-specific config key
+	switch {
+	case strings.HasPrefix(modelID, "ollama:"):
+		viper.Set("ollama.model", strings.TrimPrefix(modelID, "ollama:"))
+	case strings.HasPrefix(modelID, "minimax:"):
+		viper.Set("minimax.model", strings.TrimPrefix(modelID, "minimax:"))
+	case strings.HasPrefix(modelID, "glm:"):
+		viper.Set("glm.model", strings.TrimPrefix(modelID, "glm:"))
+	case strings.HasPrefix(modelID, "vllm:"):
+		viper.Set("vllm.model", strings.TrimPrefix(modelID, "vllm:"))
+	}
+	// For copilot models (no prefix), copilot.model is already set above
 }

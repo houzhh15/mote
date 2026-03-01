@@ -8,7 +8,7 @@
  */
 
 import React, { createContext, useContext, useRef, useCallback } from 'react';
-import type { ChatRequest, StreamEvent, Message, ToolCallResult, ErrorDetail, ApprovalRequestSSEEvent } from '../types';
+import type { ChatRequest, StreamEvent, Message, ToolCallResult, ErrorDetail, ApprovalRequestSSEEvent, PDAProgressSSEEvent } from '../types';
 
 export interface ChatState {
   sessionId: string;
@@ -34,6 +34,9 @@ export interface ChatState {
   activeAgentDepth?: number;  // Nesting depth (0 = main agent)
   // Approval request - tool call waiting for user approval
   approvalRequest?: ApprovalRequestSSEEvent;
+  // PDA progress tracking
+  pdaProgress?: PDAProgressSSEEvent;
+  pdaSteps?: Array<{ label: string; type: string; phase: 'pending' | 'started' | 'completed' | 'failed' }>;
 }
 
 export interface ChatManagerContextType {
@@ -214,6 +217,7 @@ export const ChatManagerProvider: React.FC<{ children: React.ReactNode }> = ({ c
     let accumulatedThinking = '';  // 累积 thinking 内容
     let accumulatedToolCalls: { [key: string]: { name: string; status?: string; arguments?: string; result?: unknown; error?: string } } = {};
     let isFinalized = false;
+    let lastContentAgentName: string | undefined = undefined; // Track agent for inline tags
 
     const handleEvent = (event: StreamEvent) => {
       if (abortController.signal.aborted) return;
@@ -226,6 +230,19 @@ export const ChatManagerProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
       const content = event.delta || event.content;
       if (event.type === 'content' && content) {
+        // Insert agent transition marker when content source changes
+        const currentAgent = event.agent_name || undefined;
+        if (currentAgent !== lastContentAgentName) {
+          if (currentAgent) {
+            // Entering or switching sub-agent output
+            const prefix = accumulatedContent.length > 0 ? '\n' : '';
+            accumulatedContent += `${prefix}<<AGENT:${currentAgent}:${event.agent_depth || 0}>>`;
+          } else if (lastContentAgentName) {
+            // Returning to main agent output
+            accumulatedContent += '\n<<AGENT_END>>';
+          }
+          lastContentAgentName = currentAgent;
+        }
         accumulatedContent += content;
         state.currentContent = accumulatedContent;
         // Mark thinking as done (don't clear text — let UI animate out)
@@ -306,10 +323,15 @@ export const ChatManagerProvider: React.FC<{ children: React.ReactNode }> = ({ c
         state.thinkingDone = false;
         state.activeAgentName = undefined;
         state.activeAgentDepth = undefined;
+        state.pdaProgress = undefined;
+        state.pdaSteps = undefined;
         // Keep tool calls visible until ChatPage processes them
         // state.currentToolCalls = {}; // Don't clear - let ChatPage handle it
 
         const toolCallsArray: ToolCallResult[] = Object.values(accumulatedToolCalls).filter(tc => tc.name);
+        
+        // Keep agent transition markers in content — they are now persisted to the
+        // session and rendered with styled agent tags in the history view.
         
         const assistantMessage: Message = {
           role: 'assistant',
@@ -382,6 +404,35 @@ export const ChatManagerProvider: React.FC<{ children: React.ReactNode }> = ({ c
         // Approval resolved (approved or rejected) — clear the popup
         state.approvalRequest = undefined;
         // approval_resolved 立即通知
+        notifySubscribers(sessionId, true);
+      } else if (event.type === 'pda_progress' && event.pda_progress) {
+        const p = event.pda_progress;
+        state.pdaProgress = p;
+        // Build / update step list on first progress event or when total_steps changes
+        if (!state.pdaSteps || state.pdaSteps.length !== p.total_steps) {
+          state.pdaSteps = Array.from({ length: p.total_steps }, (_, i) => ({
+            label: i === p.step_index ? p.step_label : `步骤 ${i + 1}`,
+            type: i === p.step_index ? p.step_type : '',
+            phase: i < p.step_index ? 'completed' as const : 'pending' as const,
+          }));
+        }
+        // Update current step
+        if (p.step_index < state.pdaSteps.length) {
+          state.pdaSteps[p.step_index] = {
+            label: p.step_label,
+            type: p.step_type,
+            phase: p.phase === 'started' ? 'started' : p.phase === 'completed' ? 'completed' : p.phase === 'failed' ? 'failed' : 'started',
+          };
+          // Mark all previous steps as completed
+          for (let i = 0; i < p.step_index; i++) {
+            if (state.pdaSteps[i].phase !== 'completed') {
+              state.pdaSteps[i].phase = 'completed';
+            }
+          }
+        }
+        // Force new array reference for React change detection
+        state.pdaSteps = [...state.pdaSteps];
+        // pda_progress 立即通知
         notifySubscribers(sessionId, true);
       }
     };

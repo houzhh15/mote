@@ -4,7 +4,7 @@
 
 import { useState, useEffect, forwardRef, useImperativeHandle } from 'react';
 import { Typography, List, Card, Tag, Spin, Empty, message, Button, Modal, Descriptions, Space, Tooltip, Input, Alert, Badge } from 'antd';
-import { ThunderboltOutlined, PlayCircleOutlined, PauseCircleOutlined, ReloadOutlined, InfoCircleOutlined, FolderOpenOutlined, PlusOutlined, UploadOutlined } from '@ant-design/icons';
+import { ThunderboltOutlined, PlayCircleOutlined, PauseCircleOutlined, ReloadOutlined, InfoCircleOutlined, FolderOpenOutlined, PlusOutlined, UploadOutlined, DeleteOutlined } from '@ant-design/icons';
 import { useAPI } from '../context/APIContext';
 import type { Skill, SkillVersionInfo } from '../types';
 
@@ -165,6 +165,32 @@ export const SkillsPage = forwardRef<SkillsPageRef, SkillsPageProps>(({ hideTool
     } finally {
       setActionLoading(null);
     }
+  };
+
+  const handleDelete = (skill: Skill) => {
+    Modal.confirm({
+      title: '确认删除',
+      content: `确定要删除技能 "${skill.name}" 吗？此操作将同时删除磁盘上的技能文件，不可恢复。`,
+      okText: '删除',
+      okType: 'danger',
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          await api.deleteSkill?.(skill.id);
+          message.success(`已删除技能: ${skill.name}`);
+          fetchSkills();
+        } catch (error) {
+          console.error('Failed to delete skill:', error);
+          message.error('删除技能失败');
+        }
+      },
+    });
+  };
+
+  // Builtin skills cannot be deleted
+  const isBuiltinSkill = (skill: Skill) => {
+    const builtinIds = ['mote-mcp-config', 'mote-self', 'mote-memory', 'mote-cron', 'mote-agents'];
+    return builtinIds.includes(skill.id);
   };
 
   const handleReload = async () => {
@@ -368,6 +394,14 @@ export const SkillsPage = forwardRef<SkillsPageRef, SkillsPageProps>(({ hideTool
                         />
                       </Tooltip>
                     ),
+                    ...(!isBuiltinSkill(skill) ? [
+                      <Tooltip title="删除" key="delete">
+                        <DeleteOutlined
+                          onClick={() => handleDelete(skill)}
+                          style={{ color: '#ff4d4f' }}
+                        />
+                      </Tooltip>
+                    ] : []),
                   ]}
                 >
                   <div style={{ flex: 1 }}>

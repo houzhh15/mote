@@ -123,6 +123,26 @@ html.dark .new-chat-page {
 /* ============================================
    Markdown Content Styles (for ReactMarkdown)
    ============================================ */
+
+/* Headings: reduce h1 to be only slightly larger than h2 */
+.markdown-content h1 {
+  font-size: 1.4em;
+  margin: 16px 0 8px;
+  font-weight: 600;
+}
+
+.markdown-content h2 {
+  font-size: 1.25em;
+  margin: 14px 0 6px;
+  font-weight: 600;
+}
+
+.markdown-content h3 {
+  font-size: 1.1em;
+  margin: 12px 0 4px;
+  font-weight: 600;
+}
+
 .markdown-content table {
   border-collapse: collapse;
   width: 100%;
@@ -210,4 +230,10 @@ html.dark .new-chat-page {
 @keyframes agentPulse {
   0%, 100% { opacity: 1; transform: scale(1); }
   50% { opacity: 0.5; transform: scale(0.85); }
+}
+
+/* PDA progress spinner animation */
+@keyframes pdaSpin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
 }

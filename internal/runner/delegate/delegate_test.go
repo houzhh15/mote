@@ -193,15 +193,20 @@ func TestDelegateTool_Execute_UnknownAgent(t *testing.T) {
 }
 
 func TestDelegateTool_Execute_MaxDepthExceeded(t *testing.T) {
-	cleanup := setupTestConfig()
-	defer cleanup()
+	// Set MaxStackDepth=5 so Depth=5 triggers the limit
+	config.SetTestConfig(&config.Config{
+		Agents:   testAgents(),
+		Delegate: config.DelegateConfig{MaxStackDepth: 5},
+	})
+	defer config.Reset()
 	tool := delegate.NewDelegateTool(nil, 3)
 
-	// Inject DelegateContext with Depth=5 (>= MaxAbsoluteDepth)
+	// Inject DelegateContext with Depth=5 (>= MaxStackDepth)
 	dc := &delegate.DelegateContext{
-		Depth:    5,
-		MaxDepth: 10,
-		Chain:    []string{"a", "b", "c", "d", "e"},
+		Depth:             5,
+		MaxDepth:          10,
+		Chain:             []string{"a", "b", "c", "d", "e"},
+		RecursionCounters: map[string]int{},
 	}
 	ctx := delegate.WithDelegateContext(context.Background(), dc)
 

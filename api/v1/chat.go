@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -76,7 +77,10 @@ func (r *Router) HandleChat(w http.ResponseWriter, req *http.Request) {
 	// Run agent and collect response
 	var events <-chan runner.Event
 	var err error
-	if chatReq.Model != "" {
+	if chatReq.TargetAgent != "" {
+		// Direct delegate: bypass main agent LLM, route directly to sub-agent
+		events, err = r.runner.RunDirectDelegate(ctx, sessionID, chatReq.TargetAgent, message)
+	} else if chatReq.Model != "" {
 		events, err = r.runner.RunWithModel(ctx, sessionID, message, chatReq.Model, "chat", attachments...)
 	} else {
 		events, err = r.runner.Run(ctx, sessionID, message, attachments...)
@@ -469,7 +473,10 @@ func (r *Router) HandleChatStream(w http.ResponseWriter, req *http.Request) {
 	// Run agent with streaming
 	var events <-chan runner.Event
 	var err error
-	if chatReq.Model != "" {
+	if chatReq.TargetAgent != "" {
+		// Direct delegate: bypass main agent LLM, route directly to sub-agent
+		events, err = r.runner.RunDirectDelegate(ctx, sessionID, chatReq.TargetAgent, message)
+	} else if chatReq.Model != "" {
 		events, err = r.runner.RunWithModel(ctx, sessionID, message, chatReq.Model, "chat", attachments...)
 	} else {
 		events, err = r.runner.Run(ctx, sessionID, message, attachments...)
@@ -549,6 +556,25 @@ func (r *Router) HandleChatStream(w http.ResponseWriter, req *http.Request) {
 				Type:  "error",
 				Error: event.ErrorMsg,
 			}
+			// Extract structured error detail from the error chain
+			if event.Error != nil {
+				var pe *provider.ProviderError
+				if errors.As(event.Error, &pe) {
+					sseEvent.ErrorDetail = &ErrorDetail{
+						Code:       string(pe.Code),
+						Message:    pe.Message,
+						Provider:   pe.Provider,
+						Retryable:  pe.Retryable,
+						RetryAfter: pe.RetryAfter,
+					}
+				} else {
+					sseEvent.ErrorDetail = &ErrorDetail{
+						Code:      string(provider.ErrCodeUnknown),
+						Message:   event.ErrorMsg,
+						Retryable: false,
+					}
+				}
+			}
 		case runner.EventTypeTruncated:
 			// Response was truncated due to max_tokens limit
 			sseEvent = ChatStreamEvent{
@@ -596,6 +622,37 @@ func (r *Router) HandleChatStream(w http.ResponseWriter, req *http.Request) {
 						ID:        event.ApprovalResolved.ID,
 						Approved:  event.ApprovalResolved.Approved,
 						DecidedAt: event.ApprovalResolved.DecidedAt,
+					},
+				}
+			} else {
+				continue
+			}
+		case runner.EventTypePDAProgress:
+			if event.PDAProgress != nil {
+				// Map parent steps
+				var parentSteps []PDAParentStepSSE
+				for _, ps := range event.PDAProgress.ParentSteps {
+					parentSteps = append(parentSteps, PDAParentStepSSE{
+						AgentName:  ps.AgentName,
+						StepIndex:  ps.StepIndex,
+						TotalSteps: ps.TotalSteps,
+						StepLabel:  ps.StepLabel,
+					})
+				}
+				sseEvent = ChatStreamEvent{
+					Type: "pda_progress",
+					PDAProgress: &PDAProgressSSEEvent{
+						AgentName:     event.PDAProgress.AgentName,
+						StepIndex:     event.PDAProgress.StepIndex,
+						TotalSteps:    event.PDAProgress.TotalSteps,
+						StepLabel:     event.PDAProgress.StepLabel,
+						StepType:      event.PDAProgress.StepType,
+						Phase:         event.PDAProgress.Phase,
+						StackDepth:    event.PDAProgress.StackDepth,
+						ExecutedSteps: event.PDAProgress.ExecutedSteps,
+						TotalTokens:   event.PDAProgress.TotalTokens,
+						Model:         event.PDAProgress.Model,
+						ParentSteps:   parentSteps,
 					},
 				}
 			} else {

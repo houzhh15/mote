@@ -2,19 +2,23 @@
 // AgentsPage - Multi-Agent Delegate management page
 // ================================================================
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Typography, Card, Tag, Spin, Empty, message, Button, Space, Modal,
-  Input, Select, InputNumber, List, Badge, Popconfirm, Tabs, Tooltip, theme, Switch, Checkbox,
+  Input, Select, InputNumber, List, Badge, Popconfirm, Tabs, Tooltip, theme, Switch, Checkbox, Radio, Alert,
 } from 'antd';
 import {
   TeamOutlined, PlusOutlined, ReloadOutlined, DeleteOutlined,
   EditOutlined, ClockCircleOutlined, CheckCircleOutlined,
   CloseCircleOutlined, LoadingOutlined, ThunderboltOutlined,
-  CrownOutlined, InfoCircleOutlined,
+  CrownOutlined, InfoCircleOutlined, SaveOutlined, BranchesOutlined,
+  FolderOutlined, TagOutlined, RightOutlined,
 } from '@ant-design/icons';
 import { useAPI } from '../context/APIContext';
-import type { AgentConfig, DelegationRecord, ModelsResponse, Model } from '../types';
+import type { AgentConfig, DelegationRecord, ModelsResponse, Model, Step, ValidationResult } from '../types';
+import { StepEditor } from '../components/StepEditor';
+import { CFGPreview } from '../components/CFGPreview';
+import OrchestrationView from './OrchestrationView';
 
 const { Text, Paragraph } = Typography;
 
@@ -132,7 +136,18 @@ const AgentCard: React.FC<AgentCardProps> = ({ name, config, onEdit, onDelete, o
           <Tag color="green">深度 {config.max_depth || 3}</Tag>
           <Tag color="orange">超时 {config.timeout || '5m'}</Tag>
           <Tag color="purple">工具: {toolLabel}</Tag>
+          {config.entry_point && <Tag color="gold">入口</Tag>}
+          {config.stealth && <Tag color="default">隐身</Tag>}
         </Space>
+        {config.tags && config.tags.length > 0 && (
+          <div style={{ marginTop: 6 }}>
+            <Space wrap size={[2, 2]}>
+              {config.tags.map(tag => (
+                <Tag key={tag} icon={<TagOutlined />} style={{ fontSize: 11, margin: 0 }}>{tag}</Tag>
+              ))}
+            </Space>
+          </div>
+        )}
       </div>
       {config.system_prompt && (
         <Text type="secondary" style={{ fontSize: 12, marginTop: 8 }} ellipsis>
@@ -152,20 +167,87 @@ interface AgentEditModalProps {
   editingName: string | null;
   config: AgentConfig;
   modelsInfo: ModelsResponse | null;
+  agents: Record<string, AgentConfig>;
   onOk: (name: string, config: AgentConfig) => void;
   onCancel: () => void;
+  /** Called when user clicks "+ 新建" inside a step editor agent_ref */
+  onCreateAgent?: () => void;
 }
 
-const AgentEditModal: React.FC<AgentEditModalProps> = ({ visible, editingName, config, modelsInfo, onOk, onCancel }) => {
+const AgentEditModal: React.FC<AgentEditModalProps> = ({ visible, editingName, config, modelsInfo, agents, onOk, onCancel, onCreateAgent }) => {
+  const api = useAPI();
   const [name, setName] = useState('');
   const [agentConfig, setAgentConfig] = useState<AgentConfig>({});
+  const [mode, setMode] = useState<'simple' | 'structured'>('simple');
+  const [steps, setSteps] = useState<Step[]>([]);
+  const [maxRecursion, setMaxRecursion] = useState(5);
+  const [validationResults, setValidationResults] = useState<ValidationResult[]>();
+  const [draftPromptDismissed, setDraftPromptDismissed] = useState(false);
+
+  const agentName = editingName || name.trim();
+  const availableAgents = useMemo(
+    () => Object.entries(agents).map(([n, cfg]) => ({ name: n, tags: cfg.tags })),
+    [agents],
+  );
+
+  // Detect self-referencing routes → show recursion config
+  const hasSelfRoute = useMemo(
+    () =>
+      steps.some(
+        s => s.type === 'route' && s.branches && Object.values(s.branches).includes(agentName),
+      ),
+    [steps, agentName],
+  );
 
   useEffect(() => {
     if (visible) {
       setName(editingName || '');
       setAgentConfig({ ...config });
+      setDraftPromptDismissed(false);
+      if (config.steps && config.steps.length > 0) {
+        setMode('structured');
+        setSteps([...config.steps]);
+        setMaxRecursion(config.max_recursion ?? 5);
+      } else {
+        setMode('simple');
+        setSteps([]);
+        setMaxRecursion(5);
+      }
+      setValidationResults(undefined);
     }
   }, [visible, editingName, config]);
+
+  const handleRestoreDraft = useCallback(() => {
+    if (config.draft?.steps) {
+      setSteps([...config.draft.steps]);
+      setMode('structured');
+      message.success('已恢复草稿');
+    }
+    setDraftPromptDismissed(true);
+  }, [config]);
+
+  const handleSaveDraft = useCallback(async () => {
+    if (!agentName) {
+      message.warning('请先输入代理名称');
+      return;
+    }
+    try {
+      await api.saveAgentDraft?.(agentName, { steps });
+      message.success('草稿已保存');
+    } catch {
+      message.error('保存草稿失败');
+    }
+  }, [api, agentName, steps]);
+
+  const handleValidate = useCallback(async () => {
+    if (!agentName) return;
+    try {
+      const results = await api.validateAgentCFG?.(agentName, steps);
+      setValidationResults(results || []);
+    } catch {
+      message.error('验证失败');
+    }
+  }, [api, agentName, steps]);
 
   const handleOk = () => {
     const n = editingName || name.trim();
@@ -173,7 +255,15 @@ const AgentEditModal: React.FC<AgentEditModalProps> = ({ visible, editingName, c
       message.warning('请输入代理名称');
       return;
     }
-    onOk(n, agentConfig);
+    const finalConfig: AgentConfig = { ...agentConfig };
+    if (mode === 'structured' && steps.length > 0) {
+      finalConfig.steps = steps;
+      finalConfig.max_recursion = hasSelfRoute ? maxRecursion : undefined;
+    } else {
+      delete finalConfig.steps;
+      delete finalConfig.max_recursion;
+    }
+    onOk(n, finalConfig);
   };
 
   const update = (field: keyof AgentConfig, value: unknown) => {
@@ -188,9 +278,37 @@ const AgentEditModal: React.FC<AgentEditModalProps> = ({ visible, editingName, c
       onCancel={onCancel}
       okText={editingName ? '保存' : '创建'}
       cancelText="取消"
-      width={560}
+      width={mode === 'structured' ? 720 : 560}
+      footer={(_, { OkBtn, CancelBtn }) => (
+        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+          <Space>
+            {mode === 'structured' && steps.length > 0 && (
+              <Button icon={<SaveOutlined />} onClick={handleSaveDraft}>保存草稿</Button>
+            )}
+          </Space>
+          <Space>
+            <CancelBtn />
+            <OkBtn />
+          </Space>
+        </div>
+      )}
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 16 }}>
+        {/* Draft restore prompt */}
+        {config.draft?.steps && !draftPromptDismissed && (
+          <Alert
+            type="info"
+            showIcon
+            message={`存在未保存的草稿（${new Date(config.draft.saved_at).toLocaleString()}）`}
+            action={
+              <Space>
+                <Button size="small" type="primary" onClick={handleRestoreDraft}>恢复</Button>
+                <Button size="small" onClick={() => setDraftPromptDismissed(true)}>忽略</Button>
+              </Space>
+            }
+          />
+        )}
+
         {!editingName && (
           <div>
             <Text strong>名称</Text>
@@ -210,6 +328,46 @@ const AgentEditModal: React.FC<AgentEditModalProps> = ({ visible, editingName, c
             onChange={e => update('description', e.target.value)}
             style={{ marginTop: 4 }}
           />
+        </div>
+        <div>
+          <Text strong>标签</Text>
+          <Select
+            mode="tags"
+            placeholder="输入标签名称回车添加，或从已有标签中选择"
+            value={agentConfig.tags || []}
+            onChange={v => update('tags', v)}
+            style={{ width: '100%', marginTop: 4 }}
+            options={Array.from(new Set(
+              Object.values(agents).flatMap(a => a.tags || [])
+            )).sort().map(t => ({ label: t, value: t }))}
+          />
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            标签用于分组管理代理，类似文件夹
+          </Text>
+        </div>
+        <div style={{ display: 'flex', gap: 24 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Switch
+              size="small"
+              checked={agentConfig.entry_point || false}
+              onChange={v => update('entry_point', v)}
+            />
+            <Text>入口</Text>
+            <Tooltip title="入口 Agent 在 @ 引用中优先显示，通常是面向用户的交互入口">
+              <InfoCircleOutlined style={{ color: '#999', fontSize: 14 }} />
+            </Tooltip>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Switch
+              size="small"
+              checked={agentConfig.stealth || false}
+              onChange={v => update('stealth', v)}
+            />
+            <Text>隐身</Text>
+            <Tooltip title="隐身 Agent 的信息不会注入到主 Agent 的系统提示词中，但仍可通过 delegate 调用">
+              <InfoCircleOutlined style={{ color: '#999', fontSize: 14 }} />
+            </Tooltip>
+          </div>
         </div>
         <div>
           <Text strong>模型</Text>
@@ -282,6 +440,68 @@ const AgentEditModal: React.FC<AgentEditModalProps> = ({ visible, editingName, c
             输入 * 表示允许全部工具，留空表示继承主代理全部工具
           </Text>
         </div>
+
+        {/* ---- Orchestration mode toggle ---- */}
+        <div style={{ borderTop: '1px solid #f0f0f0', paddingTop: 12 }}>
+          <Text strong>编排模式</Text>
+          <div style={{ marginTop: 4 }}>
+            <Radio.Group value={mode} onChange={e => setMode(e.target.value)} optionType="button" buttonStyle="solid">
+              <Radio.Button value="simple">简单模式</Radio.Button>
+              <Radio.Button value="structured">
+                <BranchesOutlined /> 结构化编排
+              </Radio.Button>
+            </Radio.Group>
+          </div>
+        </div>
+
+        {mode === 'structured' && (
+          <>
+            <Tabs
+              size="small"
+              items={[
+                {
+                  key: 'steps',
+                  label: '编排步骤',
+                  children: (
+                    <StepEditor
+                      steps={steps}
+                      onChange={setSteps}
+                      availableAgents={availableAgents}
+                      onCreateAgent={onCreateAgent}
+                    />
+                  ),
+                },
+                {
+                  key: 'preview',
+                  label: 'CFG 预览',
+                  children: (
+                    <CFGPreview
+                      steps={steps}
+                      agentName={agentName || '(未命名)'}
+                      validationResults={validationResults}
+                      onValidate={handleValidate}
+                    />
+                  ),
+                },
+              ]}
+            />
+
+            {hasSelfRoute && (
+              <div style={{ background: '#fffbe6', padding: '8px 12px', borderRadius: 6 }}>
+                <Space>
+                  <Text strong>自引用路由检测</Text>
+                  <Text type="secondary">最大递归次数</Text>
+                  <InputNumber
+                    min={1} max={100}
+                    value={maxRecursion}
+                    onChange={v => setMaxRecursion(v ?? 5)}
+                    style={{ width: 80 }}
+                  />
+                </Space>
+              </div>
+            )}
+          </>
+        )}
       </div>
     </Modal>
   );
@@ -539,8 +759,34 @@ export const AgentsPage: React.FC = () => {
 
   const { token } = theme.useToken();
   const [activeTab, setActiveTab] = useState('agents');
+  const [activeTagFolder, setActiveTagFolder] = useState<string | null>(null);
 
   const agentEntries = Object.entries(agents).sort(([a], [b]) => a.localeCompare(b));
+
+  // Compute tag-based folder groups
+  const { tagGroups, othersEntries, allTags } = useMemo(() => {
+    const groups: Record<string, [string, AgentConfig][]> = {};
+    const others: [string, AgentConfig][] = [];
+    const tagsSet = new Set<string>();
+
+    for (const [name, cfg] of agentEntries) {
+      const tags = cfg.tags;
+      if (tags && tags.length > 0) {
+        for (const tag of tags) {
+          tagsSet.add(tag);
+          if (!groups[tag]) groups[tag] = [];
+          groups[tag].push([name, cfg]);
+        }
+      } else {
+        others.push([name, cfg]);
+      }
+    }
+    return {
+      tagGroups: groups,
+      othersEntries: others,
+      allTags: Array.from(tagsSet).sort(),
+    };
+  }, [agentEntries]);
 
   const tabItems = [
     {
@@ -548,6 +794,14 @@ export const AgentsPage: React.FC = () => {
       label: (
         <span>
           <TeamOutlined /> 代理配置 ({agentEntries.length})
+        </span>
+      ),
+    },
+    {
+      key: 'orchestration',
+      label: (
+        <span>
+          <BranchesOutlined /> 编排视图
         </span>
       ),
     },
@@ -561,6 +815,24 @@ export const AgentsPage: React.FC = () => {
     },
   ];
 
+  const handleReloadAgents = useCallback(async () => {
+    setLoading(true);
+    try {
+      if (api.reloadAgents) {
+        const result = await api.reloadAgents();
+        message.success(`已重新加载 ${result.count} 个代理配置`);
+      }
+      await fetchAgents();
+      fetchRecentDelegations();
+      fetchModelsInfo();
+    } catch (error) {
+      console.error('Failed to reload agents:', error);
+      message.error('重新加载代理配置失败');
+    } finally {
+      setLoading(false);
+    }
+  }, [api, fetchAgents, fetchRecentDelegations, fetchModelsInfo]);
+
   const renderHeaderExtra = () => {
     if (activeTab === 'agents') {
       return (
@@ -573,11 +845,11 @@ export const AgentsPage: React.FC = () => {
           </Button>
           <Button
             icon={<ReloadOutlined />}
-            onClick={() => { fetchAgents(); fetchRecentDelegations(); fetchModelsInfo(); }}
+            onClick={handleReloadAgents}
             loading={loading}
             size="small" className="page-header-btn"
           >
-            刷新
+            重新加载
           </Button>
         </Space>
       );
@@ -654,7 +926,7 @@ export const AgentsPage: React.FC = () => {
               />
             </div>
 
-            {/* 子代理列表 */}
+            {/* 子代理列表 - 标签文件夹模式 */}
             {agentEntries.length === 0 ? (
               <Empty
                 description="暂未配置子代理"
@@ -664,25 +936,128 @@ export const AgentsPage: React.FC = () => {
                   创建子代理
                 </Button>
               </Empty>
+            ) : activeTagFolder !== null ? (
+              /* ---- 在标签文件夹内部 ---- */
+              <div>
+                <Button
+                  type="link"
+                  size="small"
+                  onClick={() => setActiveTagFolder(null)}
+                  style={{ marginBottom: 12, padding: 0 }}
+                >
+                  ← 返回
+                </Button>
+                <div style={{
+                  display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16,
+                  fontSize: 16, fontWeight: 600,
+                }}>
+                  <FolderOutlined />
+                  {activeTagFolder === '__others__' ? 'Others' : activeTagFolder}
+                  <Tag style={{ marginLeft: 4 }}>
+                    {activeTagFolder === '__others__'
+                      ? othersEntries.length
+                      : (tagGroups[activeTagFolder] || []).length} 个代理
+                  </Tag>
+                </div>
+                <List
+                  grid={{ gutter: 16, xs: 1, sm: 1, md: 2, lg: 2, xl: 3, xxl: 4 }}
+                  dataSource={
+                    activeTagFolder === '__others__'
+                      ? othersEntries
+                      : (tagGroups[activeTagFolder] || [])
+                  }
+                  style={{ maxWidth: '100%', overflow: 'hidden', padding: '0 8px' }}
+                  renderItem={([name, config]) => (
+                    <List.Item style={{ display: 'flex' }}>
+                      <AgentCard
+                        name={name}
+                        config={config}
+                        onEdit={handleEdit}
+                        onDelete={handleDelete}
+                        onToggleEnabled={handleToggleEnabled}
+                      />
+                    </List.Item>
+                  )}
+                />
+              </div>
+            ) : allTags.length === 0 ? (
+              /* ---- 没有任何标签时只显示 Others 文件夹 ---- */
+              <div>
+                <div
+                  onClick={() => setActiveTagFolder('__others__')}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 12, padding: '14px 18px',
+                    borderRadius: 10, cursor: 'pointer', marginBottom: 8,
+                    border: `1px solid ${token.colorBorderSecondary}`,
+                    background: token.colorBgContainer,
+                    transition: 'all 0.2s',
+                  }}
+                  onMouseEnter={e => { e.currentTarget.style.background = token.colorBgLayout; e.currentTarget.style.borderColor = token.colorPrimary; }}
+                  onMouseLeave={e => { e.currentTarget.style.background = token.colorBgContainer; e.currentTarget.style.borderColor = token.colorBorderSecondary; }}
+                >
+                  <FolderOutlined style={{ fontSize: 22, color: token.colorTextSecondary }} />
+                  <div style={{ flex: 1 }}>
+                    <Text strong style={{ fontSize: 14 }}>Others</Text>
+                    <Text type="secondary" style={{ marginLeft: 6 }}>({agentEntries.length})</Text>
+                  </div>
+                  <RightOutlined style={{ color: token.colorTextQuaternary }} />
+                </div>
+              </div>
             ) : (
-              <List
-                grid={{ gutter: 16, xs: 1, sm: 1, md: 2, lg: 2, xl: 3, xxl: 4 }}
-                dataSource={agentEntries}
-                style={{ maxWidth: '100%', overflow: 'hidden', padding: '0 8px' }}
-                renderItem={([name, config]) => (
-                  <List.Item style={{ display: 'flex' }}>
-                    <AgentCard
-                      name={name}
-                      config={config}
-                      onEdit={handleEdit}
-                      onDelete={handleDelete}
-                      onToggleEnabled={handleToggleEnabled}
-                    />
-                  </List.Item>
-                )}
-              />
+              /* ---- 有标签时显示标签文件夹 + Others ---- */
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {allTags.map(tag => {
+                  const count = tagGroups[tag]?.length || 0;
+                  return (
+                    <div
+                      key={tag}
+                      onClick={() => setActiveTagFolder(tag)}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: 12, padding: '14px 18px',
+                        borderRadius: 10, cursor: 'pointer',
+                        border: `1px solid ${token.colorBorderSecondary}`,
+                        background: token.colorBgContainer,
+                        transition: 'all 0.2s',
+                      }}
+                      onMouseEnter={e => { e.currentTarget.style.background = token.colorBgLayout; e.currentTarget.style.borderColor = token.colorPrimary; }}
+                      onMouseLeave={e => { e.currentTarget.style.background = token.colorBgContainer; e.currentTarget.style.borderColor = token.colorBorderSecondary; }}
+                    >
+                      <FolderOutlined style={{ fontSize: 22, color: '#1890ff' }} />
+                      <div style={{ flex: 1 }}>
+                        <Text strong style={{ fontSize: 14 }}>{tag}</Text>
+                        <Text type="secondary" style={{ marginLeft: 6 }}>({count})</Text>
+                      </div>
+                      <RightOutlined style={{ color: token.colorTextQuaternary }} />
+                    </div>
+                  );
+                })}
+                {/* Others 文件夹 (无标签的代理) */}
+                <div
+                  onClick={() => setActiveTagFolder('__others__')}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 12, padding: '14px 18px',
+                    borderRadius: 10, cursor: 'pointer',
+                    border: `1px solid ${token.colorBorderSecondary}`,
+                    background: token.colorBgContainer,
+                    transition: 'all 0.2s',
+                  }}
+                  onMouseEnter={e => { e.currentTarget.style.background = token.colorBgLayout; e.currentTarget.style.borderColor = token.colorPrimary; }}
+                  onMouseLeave={e => { e.currentTarget.style.background = token.colorBgContainer; e.currentTarget.style.borderColor = token.colorBorderSecondary; }}
+                >
+                  <FolderOutlined style={{ fontSize: 22, color: token.colorTextSecondary }} />
+                  <div style={{ flex: 1 }}>
+                    <Text strong style={{ fontSize: 14 }}>Others</Text>
+                    <Text type="secondary" style={{ marginLeft: 6 }}>({othersEntries.length})</Text>
+                  </div>
+                  <RightOutlined style={{ color: token.colorTextQuaternary }} />
+                </div>
+              </div>
             )}
           </Spin>
+        )}
+
+        {activeTab === 'orchestration' && (
+          <OrchestrationView agents={agents} onEditAgent={handleEdit} />
         )}
 
         {activeTab === 'history' && (
@@ -700,8 +1075,10 @@ export const AgentsPage: React.FC = () => {
         editingName={editingName}
         config={editingConfig}
         modelsInfo={modelsInfo}
+        agents={agents}
         onOk={handleModalOk}
         onCancel={() => setModalVisible(false)}
+        onCreateAgent={handleAdd}
       />
     </div>
   );

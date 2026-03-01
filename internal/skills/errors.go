@@ -33,4 +33,7 @@ var (
 
 	// ErrVersionInvalid is returned when a version string is invalid.
 	ErrVersionInvalid = errors.New("invalid version format")
+
+	// ErrBuiltinSkillProtected is returned when trying to delete a builtin skill.
+	ErrBuiltinSkillProtected = errors.New("builtin skill cannot be deleted")
 )

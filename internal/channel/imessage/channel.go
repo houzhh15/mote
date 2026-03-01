@@ -198,7 +198,10 @@ func (c *iMessageChannel) Start(ctx context.Context) error {
 						"text", notification.Message.Text,
 						"isFromMe", notification.Message.IsFromMe,
 					)
-					c.handleMessage(ctx, *notification.Message)
+					// 在新 goroutine 中处理消息，防止阻塞读取协程
+					// 如果 handler 阻塞（等待 AI 回复），回显消息会在 pipe 中缓冲
+					// 导致去重窗口过期后才被读取，从而被当成新请求处理
+					go c.handleMessage(ctx, *notification.Message)
 				}
 			} else if resp.ID != nil {
 				// 响应消息（目前只是日志记录）
@@ -254,8 +257,8 @@ func (c *iMessageChannel) handleMessage(ctx context.Context, msg WatchMessage) {
 	dedupeKey := fmt.Sprintf("%d:%s", msg.ChatID, text)
 	c.processedMu.Lock()
 	if lastTime, exists := c.processedMsgs[dedupeKey]; exists {
-		// 5秒内的重复消息跳过
-		if time.Since(lastTime) < 5*time.Second {
+		// 30秒内的重复消息跳过（窗口较大是因为 handler 可能阻塞较长时间）
+		if time.Since(lastTime) < 30*time.Second {
 			c.processedMu.Unlock()
 			slog.Debug("imsg skipping duplicate message", "guid", msg.GUID, "dedupeKey", dedupeKey)
 			return
@@ -370,6 +373,14 @@ func (c *iMessageChannel) handleMessage(ctx context.Context, msg WatchMessage) {
 // SendMessage 发送消息
 func (c *iMessageChannel) SendMessage(ctx context.Context, msg channel.OutboundMessage) error {
 	content := channel.InjectReplyPrefix(msg.Content, c.config.Reply)
+
+	// 预注册去重：将即将发送的内容加入已处理列表
+	// 这样当 imsg rpc 报告该消息的回显时，会被去重机制跳过
+	// 注意：dedupeKey 格式必须与 handleMessage 一致（chatID:text）
+	dedupeKey := fmt.Sprintf("%s:%s", msg.ChatID, strings.TrimSpace(content))
+	c.processedMu.Lock()
+	c.processedMsgs[dedupeKey] = time.Now()
+	c.processedMu.Unlock()
 
 	// imsg send --chat-id <id> --text <content>
 	cmd := c.cmdBuilder(ctx, "imsg", "send", "--chat-id", msg.ChatID, "--text", content)

@@ -6,7 +6,7 @@ import "time"
 // Default configuration values.
 const (
 	DefaultEndpoint  = "http://localhost:11434"
-	DefaultModel     = "llama3.2"
+	DefaultModel     = "" // Auto-detect from Ollama model list; no hardcoded fallback
 	DefaultTimeout   = 5 * time.Minute
 	DefaultKeepAlive = "5m"
 )
@@ -23,7 +23,7 @@ type Config struct {
 func DefaultConfig() Config {
 	return Config{
 		Endpoint:  DefaultEndpoint,
-		Model:     DefaultModel,
+		Model:     DefaultModel, // empty — will be auto-detected
 		Timeout:   DefaultTimeout,
 		KeepAlive: DefaultKeepAlive,
 	}
@@ -84,6 +84,7 @@ type ollamaResponse struct {
 	CreatedAt string        `json:"created_at"`
 	Message   ollamaMessage `json:"message"`
 	Done      bool          `json:"done"`
+	Error     string        `json:"error,omitempty"` // inline error (e.g. model not supporting tools)
 
 	// Timing information (only present when done=true)
 	TotalDuration      int64 `json:"total_duration,omitempty"`

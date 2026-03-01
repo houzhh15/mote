@@ -31,7 +31,10 @@ func setupTestDB(t *testing.T) *sql.DB {
 			completed_at TIMESTAMP,
 			result_length INTEGER DEFAULT 0,
 			tokens_used INTEGER DEFAULT 0,
-			error_message TEXT
+			error_message TEXT,
+			mode TEXT NOT NULL DEFAULT 'legacy',
+			executed_steps TEXT,
+			pda_stack_depth INTEGER NOT NULL DEFAULT 0
 		)`)
 	if err != nil {
 		t.Fatalf("failed to create table: %v", err)

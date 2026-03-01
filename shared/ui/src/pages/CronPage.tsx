@@ -4,13 +4,14 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { Typography, List, Card, Tag, Button, Space, Spin, Empty, message, Switch, Modal, Form, Input, Select, TimePicker, Radio, Checkbox, Tooltip, theme } from 'antd';
-import { PlusOutlined, DeleteOutlined, ClockCircleOutlined, EditOutlined, GithubOutlined, QuestionCircleOutlined, MessageOutlined, LoadingOutlined } from '@ant-design/icons';
+import { PlusOutlined, DeleteOutlined, ClockCircleOutlined, EditOutlined, GithubOutlined, QuestionCircleOutlined, MessageOutlined, LoadingOutlined, TeamOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { useAPI } from '../context/APIContext';
 import { OllamaIcon } from '../components/OllamaIcon';
 import { MinimaxIcon } from '../components/MinimaxIcon';
 import { GlmIcon } from '../components/GlmIcon';
-import type { CronJob, CronExecutingJob, Model } from '../types';
+import { VllmIcon } from '../components/VllmIcon';
+import type { CronJob, CronExecutingJob, Model, AgentConfig } from '../types';
 
 const { Text } = Typography;
 
@@ -115,11 +116,12 @@ const getScheduleDescription = (type: ScheduleType, time?: dayjs.Dayjs, weekdays
 // Helper function to extract provider from model ID
 // Ollama models have "ollama:" prefix (e.g., "ollama:llama3.2")
 // Copilot models don't have prefix (e.g., "gpt-4", "claude-3.5-sonnet")
-const getProviderFromModel = (model?: string): 'copilot' | 'ollama' | 'minimax' | 'glm' | null => {
+const getProviderFromModel = (model?: string): 'copilot' | 'ollama' | 'minimax' | 'glm' | 'vllm' | null => {
   if (!model) return null;
   if (model.startsWith('ollama:')) return 'ollama';
   if (model.startsWith('minimax:')) return 'minimax';
   if (model.startsWith('glm:')) return 'glm';
+  if (model.startsWith('vllm:')) return 'vllm';
   return 'copilot';
 };
 
@@ -135,6 +137,7 @@ export const CronPage: React.FC<CronPageProps> = ({ onSelectSession }) => {
   const [modalVisible, setModalVisible] = useState(false);
   const [editingJob, setEditingJob] = useState<CronJob | null>(null);
   const [models, setModels] = useState<Model[]>([]);
+  const [agents, setAgents] = useState<Record<string, AgentConfig>>({});
   const [executingJobs, setExecutingJobs] = useState<Map<string, CronExecutingJob>>(new Map());
   const [form] = Form.useForm();
   const executingPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -158,6 +161,16 @@ export const CronPage: React.FC<CronPageProps> = ({ onSelectSession }) => {
       setModels(response.models || []);
     } catch (error) {
       console.error('Failed to load models:', error);
+    }
+  };
+
+  const loadAgents = async () => {
+    if (!api.getAgents) return;
+    try {
+      const data = await api.getAgents();
+      setAgents(data || {});
+    } catch (error) {
+      console.error('Failed to load agents:', error);
     }
   };
 
@@ -225,6 +238,7 @@ export const CronPage: React.FC<CronPageProps> = ({ onSelectSession }) => {
       schedule: parsed.type === 'custom' ? job.schedule : undefined,
       prompt: job.prompt,
       model: job.model || undefined,
+      agent_id: job.agent_id || undefined,
       workspace_path: job.workspace_path || undefined,
       workspace_alias: job.workspace_alias || undefined,
     });
@@ -258,6 +272,7 @@ export const CronPage: React.FC<CronPageProps> = ({ onSelectSession }) => {
         schedule: cronSchedule,
         prompt: values.prompt as string,
         model: values.model as string | undefined,
+        agent_id: (values.agent_id as string) || undefined,
         workspace_path: (values.workspace_path as string) || undefined,
         workspace_alias: (values.workspace_alias as string) || undefined,
       };
@@ -268,6 +283,7 @@ export const CronPage: React.FC<CronPageProps> = ({ onSelectSession }) => {
           schedule: cronSchedule,
           prompt: values.prompt as string,
           model: values.model as string | undefined,
+          agent_id: (values.agent_id as string) || undefined,
           workspace_path: (values.workspace_path as string) || undefined,
           workspace_alias: (values.workspace_alias as string) || undefined,
         });
@@ -309,6 +325,7 @@ export const CronPage: React.FC<CronPageProps> = ({ onSelectSession }) => {
   useEffect(() => {
     fetchJobs();
     loadModels();
+    loadAgents();
     fetchExecuting();
     // Poll executing status every 3 seconds
     executingPollRef.current = setInterval(fetchExecuting, 3000);
@@ -360,11 +377,17 @@ export const CronPage: React.FC<CronPageProps> = ({ onSelectSession }) => {
                       )}
                       {job.model && (
                         <Tag 
-                          color={getProviderFromModel(job.model) === 'ollama' ? 'orange' : getProviderFromModel(job.model) === 'minimax' ? 'purple' : getProviderFromModel(job.model) === 'glm' ? 'cyan' : 'blue'}
+                          color={getProviderFromModel(job.model) === 'ollama' ? 'orange' : getProviderFromModel(job.model) === 'minimax' ? 'purple' : getProviderFromModel(job.model) === 'glm' ? 'cyan' : getProviderFromModel(job.model) === 'vllm' ? 'green' : 'blue'}
                           style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11 }}
                         >
-                          {getProviderFromModel(job.model) === 'ollama' ? <OllamaIcon size={10} /> : getProviderFromModel(job.model) === 'minimax' ? <MinimaxIcon size={10} /> : getProviderFromModel(job.model) === 'glm' ? <GlmIcon size={10} /> : <GithubOutlined style={{ fontSize: 10 }} />}
+                          {getProviderFromModel(job.model) === 'ollama' ? <OllamaIcon size={10} /> : getProviderFromModel(job.model) === 'minimax' ? <MinimaxIcon size={10} /> : getProviderFromModel(job.model) === 'glm' ? <GlmIcon size={10} /> : getProviderFromModel(job.model) === 'vllm' ? <VllmIcon size={10} /> : <GithubOutlined style={{ fontSize: 10 }} />}
                           {job.model}
+                        </Tag>
+                      )}
+                      {job.agent_id && (
+                        <Tag color="geekblue" style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11 }}>
+                          <TeamOutlined style={{ fontSize: 10 }} />
+                          @{job.agent_id}
                         </Tag>
                       )}
                     </div>
@@ -556,13 +579,28 @@ export const CronPage: React.FC<CronPageProps> = ({ onSelectSession }) => {
             </Form.Item>
           </Form.Item>
 
+          <Form.Item name="agent_id" label="指定 Agent" tooltip="选择后，定时任务将通过指定的 Agent 执行（包含其自定义 system prompt、工具和编排步骤）">
+            <Select placeholder="选择 Agent（可选，默认使用主 Agent）" allowClear>
+              {Object.entries(agents)
+                .filter(([, cfg]) => cfg.enabled !== false)
+                .map(([name, cfg]) => (
+                  <Select.Option key={name} value={name}>
+                    <Space>
+                      <TeamOutlined style={{ fontSize: 12 }} />
+                      {name}
+                      {cfg.description && <Text type="secondary" style={{ fontSize: 11 }}>- {cfg.description}</Text>}
+                    </Space>
+                  </Select.Option>
+                ))}
+            </Select>
+          </Form.Item>
           <Form.Item name="model" label="使用模型">
             <Select placeholder="选择模型（可选，默认使用场景模型）" allowClear>
               {providers.length <= 1 ? (
                 models.map((model) => (
                   <Select.Option key={model.id} value={model.id} disabled={model.available === false}>
                     <Space>
-                      {model.provider === 'ollama' ? <OllamaIcon size={12} /> : model.provider === 'minimax' ? <MinimaxIcon size={12} /> : model.provider === 'glm' ? <GlmIcon size={12} /> : <GithubOutlined style={{ fontSize: 12 }} />}
+                      {model.provider === 'ollama' ? <OllamaIcon size={12} /> : model.provider === 'minimax' ? <MinimaxIcon size={12} /> : model.provider === 'glm' ? <GlmIcon size={12} /> : model.provider === 'vllm' ? <VllmIcon size={12} /> : <GithubOutlined style={{ fontSize: 12 }} />}
                       {model.display_name}
                     </Space>
                   </Select.Option>
@@ -573,8 +611,8 @@ export const CronPage: React.FC<CronPageProps> = ({ onSelectSession }) => {
                     key={provider} 
                     label={
                       <Space>
-                        {provider === 'ollama' ? <OllamaIcon /> : provider === 'minimax' ? <MinimaxIcon size={14} /> : provider === 'glm' ? <GlmIcon size={14} /> : <GithubOutlined />}
-                        {provider === 'ollama' ? 'Ollama' : provider === 'minimax' ? 'MiniMax' : provider === 'glm' ? 'GLM 智谱AI' : provider === 'copilot-acp' ? 'Copilot ACP' : 'GitHub Copilot'}
+                        {provider === 'ollama' ? <OllamaIcon /> : provider === 'minimax' ? <MinimaxIcon size={14} /> : provider === 'glm' ? <GlmIcon size={14} /> : provider === 'vllm' ? <VllmIcon size={14} /> : <GithubOutlined />}
+                        {provider === 'ollama' ? 'Ollama' : provider === 'minimax' ? 'MiniMax' : provider === 'glm' ? 'GLM 智谱AI' : provider === 'vllm' ? 'vLLM' : provider === 'copilot-acp' ? 'Copilot ACP' : 'GitHub Copilot'}
                       </Space>
                     }
                   >

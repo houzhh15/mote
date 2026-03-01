@@ -35,6 +35,7 @@ import (
 	"mote/internal/provider/glm"
 	"mote/internal/provider/minimax"
 	"mote/internal/provider/ollama"
+	"mote/internal/provider/vllm"
 	"mote/internal/runner"
 	"mote/internal/scheduler"
 	"mote/internal/skills"
@@ -183,9 +184,7 @@ func (s *Server) run() {
 			if ollamaCfg.Endpoint == "" {
 				ollamaCfg.Endpoint = ollama.DefaultEndpoint
 			}
-			if ollamaCfg.Model == "" {
-				ollamaCfg.Model = ollama.DefaultModel
-			}
+			// Model may be empty — will be auto-detected from Ollama model list below
 			if s.cfg.Ollama.Timeout != "" {
 				if d, err := time.ParseDuration(s.cfg.Ollama.Timeout); err == nil {
 					ollamaCfg.Timeout = d
@@ -208,10 +207,28 @@ func (s *Server) run() {
 			ollamaPool := provider.NewPool(ollamaFactory)
 
 			// Get Ollama model list (may fail if Ollama is not running)
-			ollamaModels := []string{ollamaCfg.Model} // At minimum, use configured default
+			var ollamaModels []string
 			if ollamaProvider := ollama.NewOllamaProvider(ollamaCfg); ollamaProvider != nil {
 				if modelList := ollamaProvider.Models(); len(modelList) > 0 {
 					ollamaModels = modelList
+				}
+			}
+			// Auto-detect model if not configured
+			if ollamaCfg.Model == "" && len(ollamaModels) > 0 {
+				ollamaCfg.Model = ollamaModels[0]
+				s.logger.Info().Str("model", ollamaCfg.Model).Msg("Ollama: auto-detected default model from service")
+			}
+			// Ensure model list includes the configured model
+			if ollamaCfg.Model != "" {
+				found := false
+				for _, m := range ollamaModels {
+					if m == ollamaCfg.Model {
+						found = true
+						break
+					}
+				}
+				if !found {
+					ollamaModels = append(ollamaModels, ollamaCfg.Model)
 				}
 			}
 
@@ -325,6 +342,39 @@ func (s *Server) run() {
 					Int("models", len(glmModels)).
 					Msg("GLM provider initialized")
 			}
+
+		case "vllm":
+			// Initialize vLLM provider (local high-throughput inference, OpenAI-compatible)
+			vllmEndpoint := s.cfg.VLLM.Endpoint
+			if vllmEndpoint == "" {
+				vllmEndpoint = vllm.DefaultEndpoint
+			}
+
+			vllmMaxTokens := s.cfg.VLLM.MaxTokens
+			if vllmMaxTokens <= 0 {
+				vllmMaxTokens = vllm.DefaultMaxTokens
+			}
+
+			vllmFactory := vllm.Factory(vllmEndpoint, vllmMaxTokens, s.cfg.VLLM.APIKey)
+			vllmPool := provider.NewPool(vllmFactory)
+
+			// Discover models from vLLM server (may fail if server is not running)
+			vllmModels := vllm.ListModels(vllmEndpoint, s.cfg.VLLM.APIKey)
+			if len(vllmModels) == 0 && s.cfg.VLLM.Model != "" {
+				vllmModels = []string{s.cfg.VLLM.Model}
+			}
+
+			if len(vllmModels) == 0 {
+				s.logger.Warn().Msg("No vLLM models discovered and no default model configured, skipping vLLM provider")
+			} else if err := multiPool.AddProvider("vllm", vllmPool, vllmModels); err != nil {
+				s.logger.Warn().Err(err).Msg("Failed to add vLLM provider")
+			} else {
+				s.logger.Info().
+					Str("provider", "vllm").
+					Str("endpoint", vllmEndpoint).
+					Int("models", len(vllmModels)).
+					Msg("vLLM provider initialized")
+			}
 		}
 	}
 
@@ -371,7 +421,21 @@ func (s *Server) run() {
 			if s.cfg.Ollama.Model != "" {
 				chatModel = "ollama:" + s.cfg.Ollama.Model
 			} else {
-				chatModel = "ollama:" + ollama.DefaultModel
+				// Use first model registered in multiPool (auto-detected or configured)
+				ollamaModels := multiPool.ListModelsForProvider("ollama")
+				if len(ollamaModels) > 0 {
+					chatModel = ollamaModels[0] // already prefixed with "ollama:"
+				}
+			}
+		case "vllm":
+			if s.cfg.VLLM.Model != "" {
+				chatModel = "vllm:" + s.cfg.VLLM.Model
+			} else {
+				// Auto-detect from vLLM server
+				vllmModels := vllm.ListModels(s.cfg.VLLM.Endpoint, s.cfg.VLLM.APIKey)
+				if len(vllmModels) > 0 {
+					chatModel = "vllm:" + vllmModels[0]
+				}
 			}
 		default:
 			chatModel = copilot.ACPDefaultModel
@@ -393,7 +457,21 @@ func (s *Server) run() {
 			if s.cfg.Ollama.Model != "" {
 				chatModel = "ollama:" + s.cfg.Ollama.Model
 			} else {
-				chatModel = "ollama:" + ollama.DefaultModel
+				ollamaModels := multiPool.ListModelsForProvider("ollama")
+				if len(ollamaModels) > 0 {
+					chatModel = ollamaModels[0]
+				}
+			}
+		} else if defaultProviderName == "vllm" {
+			s.logger.Warn().Str("copilot_model", chatModel).Str("provider", defaultProviderName).
+				Msg("copilot.model ignored because default provider is vllm")
+			if s.cfg.VLLM.Model != "" {
+				chatModel = "vllm:" + s.cfg.VLLM.Model
+			} else {
+				vllmModels := vllm.ListModels(s.cfg.VLLM.Endpoint, s.cfg.VLLM.APIKey)
+				if len(vllmModels) > 0 {
+					chatModel = "vllm:" + vllmModels[0]
+				}
 			}
 		}
 	}
@@ -488,10 +566,10 @@ func (s *Server) run() {
 		MaxTokens:     maxTokens,
 		MaxMessages:   200, // Increased for complex tasks
 		StreamOutput:  true,
-		Timeout:       30 * time.Minute, // 30 minute timeout
+		Timeout:       0, // No global timeout; individual agents control their own timeouts
 	}
 	agentRunner := runner.NewRunner(defaultProvider, toolRegistry, sessionManager, runnerConfig)
-	agentRunner.SetMultiProviderPool(multiPool) // Enable multi-provider support
+	agentRunner.SetMultiProviderPool(multiPool, chatModel) // Enable multi-provider support with default model
 	agentRunner.SetHookManager(hookManager)
 	agentRunner.SetPolicyExecutor(policyExecutor)
 	agentRunner.SetApprovalManager(approvalManager)
@@ -509,10 +587,13 @@ func (s *Server) run() {
 		Timezone:  "Local",
 	}
 	// Convert agent configs to prompt AgentInfo for system prompt rendering
-	// Only include enabled agents in the system prompt
+	// Only include enabled agents that are not stealth in the system prompt
 	var agentInfos []prompt.AgentInfo
 	for name, ac := range s.cfg.Agents {
 		if !ac.IsEnabled() {
+			continue
+		}
+		if ac.Stealth {
 			continue
 		}
 		agentInfos = append(agentInfos, prompt.AgentInfo{
@@ -650,13 +731,19 @@ func (s *Server) run() {
 		})
 	}
 
-	// Wire workspace resolver to runner for PathPrefix $WORKSPACE expansion
-	agentRunner.SetWorkspaceResolver(func(sessionID string) string {
+	// Wire workspace resolver for:
+	// 1. Runner: PathPrefix $WORKSPACE expansion in policy rules
+	// 2. Delegate factory: inject workspace dir into sub-agent system prompts
+	wsResolver := func(sessionID string) string {
 		if binding, ok := workspaceManager.Get(sessionID); ok && binding != nil {
 			return binding.Path
 		}
 		return ""
-	})
+	}
+	agentRunner.SetWorkspaceResolver(wsResolver)
+	if delegateFactory != nil {
+		delegateFactory.SetWorkspaceResolver(wsResolver)
+	}
 
 	// Initialize Prompt Manager with file loading support
 	promptsDirs := []string{}
@@ -833,6 +920,10 @@ func (s *Server) ReloadProviders() error {
 			if err := s.reloadGlmProvider(); err != nil {
 				s.logger.Warn().Err(err).Msg("Failed to reload GLM provider")
 			}
+		case "vllm":
+			if err := s.reloadVLLMProvider(); err != nil {
+				s.logger.Warn().Err(err).Msg("Failed to reload vLLM provider")
+			}
 		}
 	}
 
@@ -850,9 +941,7 @@ func (s *Server) reloadOllamaProvider() error {
 	if ollamaCfg.Endpoint == "" {
 		ollamaCfg.Endpoint = ollama.DefaultEndpoint
 	}
-	if ollamaCfg.Model == "" {
-		ollamaCfg.Model = ollama.DefaultModel
-	}
+	// Model may be empty — will be auto-detected from Ollama model list below
 	if s.cfg.Ollama.Timeout != "" {
 		if d, err := time.ParseDuration(s.cfg.Ollama.Timeout); err == nil {
 			ollamaCfg.Timeout = d
@@ -875,10 +964,28 @@ func (s *Server) reloadOllamaProvider() error {
 	ollamaPool := provider.NewPool(ollamaFactory)
 
 	// Get Ollama model list
-	ollamaModels := []string{ollamaCfg.Model}
+	var ollamaModels []string
 	if ollamaProvider := ollama.NewOllamaProvider(ollamaCfg); ollamaProvider != nil {
 		if modelList := ollamaProvider.Models(); len(modelList) > 0 {
 			ollamaModels = modelList
+		}
+	}
+	// Auto-detect model if not configured
+	if ollamaCfg.Model == "" && len(ollamaModels) > 0 {
+		ollamaCfg.Model = ollamaModels[0]
+		s.logger.Info().Str("model", ollamaCfg.Model).Msg("Ollama reload: auto-detected default model from service")
+	}
+	// Ensure model list includes the configured model
+	if ollamaCfg.Model != "" {
+		found := false
+		for _, m := range ollamaModels {
+			if m == ollamaCfg.Model {
+				found = true
+				break
+			}
+		}
+		if !found {
+			ollamaModels = append(ollamaModels, ollamaCfg.Model)
 		}
 	}
 
@@ -1008,6 +1115,46 @@ func (s *Server) reloadGlmProvider() error {
 		Str("provider", "glm").
 		Int("models", len(glmModels)).
 		Msg("GLM provider reloaded")
+
+	return nil
+}
+
+// reloadVLLMProvider reinitializes the vLLM provider.
+func (s *Server) reloadVLLMProvider() error {
+	vllmEndpoint := s.cfg.VLLM.Endpoint
+	if vllmEndpoint == "" {
+		vllmEndpoint = vllm.DefaultEndpoint
+	}
+
+	vllmMaxTokens := s.cfg.VLLM.MaxTokens
+	if vllmMaxTokens <= 0 {
+		vllmMaxTokens = vllm.DefaultMaxTokens
+	}
+
+	vllmFactory := vllm.Factory(vllmEndpoint, vllmMaxTokens, s.cfg.VLLM.APIKey)
+	vllmPool := provider.NewPool(vllmFactory)
+
+	// Discover models from vLLM server
+	vllmModels := vllm.ListModels(vllmEndpoint, s.cfg.VLLM.APIKey)
+	if len(vllmModels) == 0 && s.cfg.VLLM.Model != "" {
+		vllmModels = []string{s.cfg.VLLM.Model}
+	}
+
+	if len(vllmModels) == 0 {
+		return fmt.Errorf("no vLLM models discovered and no default model configured")
+	}
+
+	if err := s.multiPool.UpdateProvider("vllm", vllmPool, vllmModels); err != nil {
+		if addErr := s.multiPool.AddProvider("vllm", vllmPool, vllmModels); addErr != nil {
+			return fmt.Errorf("failed to add vLLM provider: %w", addErr)
+		}
+	}
+
+	s.logger.Info().
+		Str("provider", "vllm").
+		Str("endpoint", vllmEndpoint).
+		Int("models", len(vllmModels)).
+		Msg("vLLM provider reloaded")
 
 	return nil
 }
@@ -1413,6 +1560,36 @@ func (a *cronRunnerAdapter) Run(ctx context.Context, prompt string, opts ...inte
 // CancelSession implements cron.CancellableRunner.
 func (a *cronRunnerAdapter) CancelSession(sessionID string) {
 	a.runner.CancelSession(sessionID)
+}
+
+// RunAgent implements cron.AgentRunner — routes directly to a sub-agent.
+func (a *cronRunnerAdapter) RunAgent(ctx context.Context, sessionID, agentName, prompt string) (string, error) {
+	events, err := a.runner.RunDirectDelegate(ctx, sessionID, agentName, prompt)
+	if err != nil {
+		return "", err
+	}
+
+	var result strings.Builder
+	for {
+		select {
+		case event, ok := <-events:
+			if !ok {
+				return result.String(), nil
+			}
+			switch event.Type {
+			case runner.EventTypeContent:
+				result.WriteString(event.Content)
+			case runner.EventTypeError:
+				if event.Error != nil {
+					return "", fmt.Errorf("agent error: %v", event.Error)
+				}
+				return "", fmt.Errorf("agent error: %s", event.ErrorMsg)
+			}
+		case <-ctx.Done():
+			a.runner.CancelSession(sessionID)
+			return "", ctx.Err()
+		}
+	}
 }
 
 // acpToolRegistryAdapter adapts tools.Registry to copilot.ToolRegistryInterface.
